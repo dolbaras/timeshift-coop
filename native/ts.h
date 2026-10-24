@@ -14,6 +14,7 @@ int ts_patch_bytes(DWORD addr, const void *expect, const void *repl, int len);
 
 /* compat.c: start-up fixes for today's PCs */
 void compat_install(void);
+void compat_on_d3d(void *d3d);   /* IDirect3D9 from Direct3DCreate9 */
 
 /* testmode.c: window, render adapter and focus handling for test instances */
 void testmode_install(void);

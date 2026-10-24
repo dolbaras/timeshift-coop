@@ -159,6 +159,51 @@ static BOOL WINAPI hook_GetKeyboardState(PBYTE keys)
     return ok;
 }
 
+/* ---- message boxes and dialogs: always logged (a start that waits on one shows nothing else) ---- */
+typedef int (WINAPI *MessageBoxA_t)(HWND, LPCSTR, LPCSTR, UINT);
+typedef int (WINAPI *MessageBoxW_t)(HWND, LPCWSTR, LPCWSTR, UINT);
+typedef INT_PTR (WINAPI *DialogBoxParamA_t)(HINSTANCE, LPCSTR, HWND, DLGPROC, LPARAM);
+typedef HWND (WINAPI *CreateDialogParamA_t)(HINSTANCE, LPCSTR, HWND, DLGPROC, LPARAM);
+static MessageBoxA_t real_MessageBoxA;
+static MessageBoxW_t real_MessageBoxW;
+static DialogBoxParamA_t real_DialogBoxParamA;
+static CreateDialogParamA_t real_CreateDialogParamA;
+
+static int WINAPI hook_MessageBoxA(HWND w, LPCSTR text, LPCSTR cap, UINT type)
+{
+    ts_log("MessageBoxA \"%s\": %s", cap ? cap : "", text ? text : "");
+    int r = real_MessageBoxA(w, text, cap, type);
+    ts_log("MessageBoxA answered %d", r);
+    return r;
+}
+
+static int WINAPI hook_MessageBoxW(HWND w, LPCWSTR text, LPCWSTR cap, UINT type)
+{
+    char t[512], c[128];
+    WideCharToMultiByte(CP_UTF8, 0, text ? text : L"", -1, t, sizeof t, NULL, NULL);
+    WideCharToMultiByte(CP_UTF8, 0, cap ? cap : L"", -1, c, sizeof c, NULL, NULL);
+    ts_log("MessageBoxW \"%s\": %s", c, t);
+    int r = real_MessageBoxW(w, text, cap, type);
+    ts_log("MessageBoxW answered %d", r);
+    return r;
+}
+
+static INT_PTR WINAPI hook_DialogBoxParamA(HINSTANCE inst, LPCSTR tmpl, HWND parent, DLGPROC proc, LPARAM lp)
+{
+    ts_log("DialogBoxParamA template %s", IS_INTRESOURCE(tmpl) ? "(id)" : tmpl);
+    if (IS_INTRESOURCE(tmpl))
+        ts_log("  id %u", (unsigned)(UINT_PTR)tmpl);
+    INT_PTR r = real_DialogBoxParamA(inst, tmpl, parent, proc, lp);
+    ts_log("DialogBoxParamA returned %ld", (long)r);
+    return r;
+}
+
+static HWND WINAPI hook_CreateDialogParamA(HINSTANCE inst, LPCSTR tmpl, HWND parent, DLGPROC proc, LPARAM lp)
+{
+    ts_log("CreateDialogParamA template %u", IS_INTRESOURCE(tmpl) ? (unsigned)(UINT_PTR)tmpl : 0);
+    return real_CreateDialogParamA(inst, tmpl, parent, proc, lp);
+}
+
 /* ---- DirectInput: no keyboard/mouse data while another window is in front ---- */
 typedef HRESULT (WINAPI *CreateDevice_DI_t)(void *, REFGUID, void **, void *);
 typedef HRESULT (WINAPI *GetDeviceState_t)(void *, DWORD, void *);
@@ -241,7 +286,7 @@ static UINT pick_adapter(IDirect3D9 *d3d, HWND focus, UINT asked)
         for (UINT i = 0; i < n; i++) {   /* (monitor not matched: stay off the owner's main GPU) */
             D3DADAPTER_IDENTIFIER9 id;
             memset(&id, 0, sizeof id);
-            if (SUCCEEDED(IDirect3D9_GetAdapterIdentifier(d3d, i, 0, &id)) && id.VendorId == 0x8086)
+            if (SUCCEEDED(IDirect3D9_GetAdapterIdentifier(d3d, i, 0, &id)) && strstr(id.Description, "Intel"))   /* (VendorId is reported as NVIDIA, compat.c) */
                 return i;
         }
     }
@@ -267,13 +312,75 @@ static HRESULT WINAPI hook_D3DCreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEV
     return hr;
 }
 
+/* What the game asks Direct3D before it creates its device: logged (the first calls of each kind),
+ * a start that stops at a capability check shows which one. */
+typedef HRESULT (WINAPI *CheckDeviceType_t)(IDirect3D9 *, UINT, D3DDEVTYPE, D3DFORMAT, D3DFORMAT, BOOL);
+typedef HRESULT (WINAPI *CheckDeviceFormat_t)(IDirect3D9 *, UINT, D3DDEVTYPE, D3DFORMAT, DWORD, D3DRESOURCETYPE, D3DFORMAT);
+typedef HRESULT (WINAPI *GetDeviceCaps_t)(IDirect3D9 *, UINT, D3DDEVTYPE, D3DCAPS9 *);
+typedef UINT (WINAPI *GetAdapterModeCount_t)(IDirect3D9 *, UINT, D3DFORMAT);
+static CheckDeviceType_t real_CheckDeviceType;
+static CheckDeviceFormat_t real_CheckDeviceFormat;
+static GetDeviceCaps_t real_GetDeviceCaps;
+static GetAdapterModeCount_t real_GetAdapterModeCount;
+static LONG n_cdt, n_cdf, n_caps, n_modes;
+
+static HRESULT WINAPI hook_CheckDeviceType(IDirect3D9 *d3d, UINT a, D3DDEVTYPE t, D3DFORMAT f, D3DFORMAT bb, BOOL win)
+{
+    HRESULT hr = real_CheckDeviceType(d3d, a, t, f, bb, win);
+    if (InterlockedIncrement(&n_cdt) <= 20)
+        ts_log("d3d CheckDeviceType adapter=%u type=%d fmt=%d bb=%d windowed=%d -> 0x%08lx", a, t, f, bb, win, (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI hook_CheckDeviceFormat(IDirect3D9 *d3d, UINT a, D3DDEVTYPE t, D3DFORMAT af, DWORD use,
+                                             D3DRESOURCETYPE rt, D3DFORMAT cf)
+{
+    HRESULT hr = real_CheckDeviceFormat(d3d, a, t, af, use, rt, cf);
+    if (FAILED(hr) && InterlockedIncrement(&n_cdf) <= 40)
+        ts_log("d3d CheckDeviceFormat adapter=%u usage=0x%lx rtype=%d fmt=0x%x -> 0x%08lx (failed)", a, use, rt, (unsigned)cf,
+               (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI hook_GetDeviceCaps(IDirect3D9 *d3d, UINT a, D3DDEVTYPE t, D3DCAPS9 *c)
+{
+    HRESULT hr = real_GetDeviceCaps(d3d, a, t, c);
+    if (InterlockedIncrement(&n_caps) <= 4)
+        ts_log("d3d GetDeviceCaps adapter=%u -> 0x%08lx vs=%08lx ps=%08lx maxtex=%lux%lu", a, (unsigned long)hr,
+               c ? c->VertexShaderVersion : 0, c ? c->PixelShaderVersion : 0, c ? c->MaxTextureWidth : 0,
+               c ? c->MaxTextureHeight : 0);
+    return hr;
+}
+
+static UINT WINAPI hook_GetAdapterModeCount(IDirect3D9 *d3d, UINT a, D3DFORMAT f)
+{
+    UINT n = real_GetAdapterModeCount(d3d, a, f);
+    if (InterlockedIncrement(&n_modes) <= 10)
+        ts_log("d3d GetAdapterModeCount adapter=%u fmt=%d -> %u", a, f, n);
+    return n;
+}
+
 static IDirect3D9 *WINAPI hook_Direct3DCreate9(UINT sdk)
 {
     IDirect3D9 *d3d = real_Direct3DCreate9(sdk);
+    ts_log("Direct3DCreate9(%u) -> %p, %u adapters", sdk, (void *)d3d, d3d ? IDirect3D9_GetAdapterCount(d3d) : 0);
+    if (d3d)
+        compat_on_d3d(d3d);
     if (d3d && (adapter_mode[0] || background)) {
         void *p = ts_patch_vtable(d3d, 16, (void *)hook_D3DCreateDevice);
         if (p)
             real_D3DCreateDevice = (D3DCreateDevice_t)p;
+    }
+    if (d3d) {   /* (always: these only log) */
+        void *p;
+        if ((p = ts_patch_vtable(d3d, 9, (void *)hook_CheckDeviceType)))
+            real_CheckDeviceType = (CheckDeviceType_t)p;
+        if ((p = ts_patch_vtable(d3d, 10, (void *)hook_CheckDeviceFormat)))
+            real_CheckDeviceFormat = (CheckDeviceFormat_t)p;
+        if ((p = ts_patch_vtable(d3d, 14, (void *)hook_GetDeviceCaps)))
+            real_GetDeviceCaps = (GetDeviceCaps_t)p;
+        if ((p = ts_patch_vtable(d3d, 6, (void *)hook_GetAdapterModeCount)))
+            real_GetAdapterModeCount = (GetAdapterModeCount_t)p;
     }
     return d3d;
 }
@@ -297,6 +404,11 @@ void testmode_install(void)
     real_GetAsyncKeyState = (GetAsyncKeyState_t)ts_patch_iat("USER32.dll", "GetAsyncKeyState", (void *)hook_GetAsyncKeyState);
     real_GetKeyboardState = (GetKeyboardState_t)ts_patch_iat("USER32.dll", "GetKeyboardState", (void *)hook_GetKeyboardState);
     real_Direct3DCreate9 = (Direct3DCreate9_t)ts_patch_iat("d3d9.dll", "Direct3DCreate9", (void *)hook_Direct3DCreate9);
+    real_MessageBoxA = (MessageBoxA_t)ts_patch_iat("USER32.dll", "MessageBoxA", (void *)hook_MessageBoxA);
+    real_MessageBoxW = (MessageBoxW_t)ts_patch_iat("USER32.dll", "MessageBoxW", (void *)hook_MessageBoxW);
+    real_DialogBoxParamA = (DialogBoxParamA_t)ts_patch_iat("USER32.dll", "DialogBoxParamA", (void *)hook_DialogBoxParamA);
+    real_CreateDialogParamA = (CreateDialogParamA_t)ts_patch_iat("USER32.dll", "CreateDialogParamA",
+                                                                 (void *)hook_CreateDialogParamA);
     if (have_pos || background || adapter_mode[0])
         ts_log("test mode: pos=%d,%d (%s) size=%dx%d (%s) background=%d adapter=%s", win_x, win_y, have_pos ? "on" : "off",
                win_w, win_h, have_size ? "on" : "off", background, adapter_mode[0] ? adapter_mode : "game's");
