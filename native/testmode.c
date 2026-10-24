@@ -204,6 +204,45 @@ static HWND WINAPI hook_CreateDialogParamA(HINSTANCE inst, LPCSTR tmpl, HWND par
     return real_CreateDialogParamA(inst, tmpl, parent, proc, lp);
 }
 
+/* ---- TS_FILELOG=1: every file the game opens or fails to open (tests) ---- */
+typedef HANDLE (WINAPI *CreateFileA_t)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+typedef HFILE (WINAPI *OpenFile_t)(LPCSTR, LPOFSTRUCT, UINT);
+static CreateFileA_t real_CreateFileA;
+static OpenFile_t real_OpenFile;
+
+static HANDLE WINAPI hook_CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa, DWORD disp,
+                                      DWORD flags, HANDLE tmpl)
+{
+    HANDLE h = real_CreateFileA(name, access, share, sa, disp, flags, tmpl);
+    DWORD err = GetLastError();
+    ts_log("file %s %s%s", h == INVALID_HANDLE_VALUE ? "FAILED" : "open", name ? name : "(null)",
+           (access & GENERIC_WRITE) ? " (write)" : "");
+    SetLastError(err);
+    return h;
+}
+
+typedef HANDLE (WINAPI *CreateFileW_t)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+static CreateFileW_t real_CreateFileW;
+
+static HANDLE WINAPI hook_CreateFileW(LPCWSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa, DWORD disp,
+                                      DWORD flags, HANDLE tmpl)
+{
+    HANDLE h = real_CreateFileW(name, access, share, sa, disp, flags, tmpl);
+    DWORD err = GetLastError();
+    char n[MAX_PATH * 2];
+    WideCharToMultiByte(CP_UTF8, 0, name ? name : L"(null)", -1, n, sizeof n, NULL, NULL);
+    ts_log("fileW %s %s%s", h == INVALID_HANDLE_VALUE ? "FAILED" : "open", n, (access & GENERIC_WRITE) ? " (write)" : "");
+    SetLastError(err);
+    return h;
+}
+
+static HFILE WINAPI hook_OpenFile(LPCSTR name, LPOFSTRUCT of, UINT style)
+{
+    HFILE h = real_OpenFile(name, of, style);
+    ts_log("OpenFile %s style=0x%x -> %d", name ? name : "(null)", style, (int)h);
+    return h;
+}
+
 /* ---- DirectInput: no keyboard/mouse data while another window is in front ---- */
 typedef HRESULT (WINAPI *CreateDevice_DI_t)(void *, REFGUID, void **, void *);
 typedef HRESULT (WINAPI *GetDeviceState_t)(void *, DWORD, void *);
@@ -404,6 +443,11 @@ void testmode_install(void)
     real_GetAsyncKeyState = (GetAsyncKeyState_t)ts_patch_iat("USER32.dll", "GetAsyncKeyState", (void *)hook_GetAsyncKeyState);
     real_GetKeyboardState = (GetKeyboardState_t)ts_patch_iat("USER32.dll", "GetKeyboardState", (void *)hook_GetKeyboardState);
     real_Direct3DCreate9 = (Direct3DCreate9_t)ts_patch_iat("d3d9.dll", "Direct3DCreate9", (void *)hook_Direct3DCreate9);
+    if (ts_env("TS_FILELOG", v, sizeof v) && v[0] == '1') {
+        real_CreateFileA = (CreateFileA_t)ts_patch_iat("KERNEL32.dll", "CreateFileA", (void *)hook_CreateFileA);
+        real_OpenFile = (OpenFile_t)ts_patch_iat("KERNEL32.dll", "OpenFile", (void *)hook_OpenFile);
+        real_CreateFileW = (CreateFileW_t)ts_patch_iat("KERNEL32.dll", "CreateFileW", (void *)hook_CreateFileW);
+    }
     real_MessageBoxA = (MessageBoxA_t)ts_patch_iat("USER32.dll", "MessageBoxA", (void *)hook_MessageBoxA);
     real_MessageBoxW = (MessageBoxW_t)ts_patch_iat("USER32.dll", "MessageBoxW", (void *)hook_MessageBoxW);
     real_DialogBoxParamA = (DialogBoxParamA_t)ts_patch_iat("USER32.dll", "DialogBoxParamA", (void *)hook_DialogBoxParamA);

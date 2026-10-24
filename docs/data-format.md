@@ -4,7 +4,8 @@ How TimeShift (Saber Interactive, 2007, Saber3D engine, PC patch 1.2) stores its
 data contains, as far as it matters for modding. Everything here was worked out from the archives and the
 executable without running the game; statements that still need a runtime test are marked **(verify)**.
 
-The extractor is `tools/s3darc.py` (Python 3, standard library only).
+The tool is `tools/s3darc.py` (Python 3, standard library only): it lists, extracts and writes the
+archives (section 7).
 
 ## 1. Files
 
@@ -284,12 +285,106 @@ Consequences:
 - Pointing `pathPS` to a folder with another last component (for example `..\PSMOD`) makes step 1 miss,
   so every `ps`-family file is read loose from that folder. The folder then has to hold the complete set
   under the right names, which the recovered names cover only partly (the unnamed members, mostly
-  texture descriptors, would be missing). **(verify** at run time which missing files are fatal.**)**
+  texture descriptors, would be missing). **(verify** at run time which missing files are fatal**)**.
 - The robust route is a new patch archive: copy the `ps` block, replace members by key (no names
   needed), and point every other entry at the base. Level scripts inside `.lg` can only be changed this
-  way (or by native hooks), since they are part of the binary scene file.
+  way (or by native hooks), since they are part of the binary scene file. Section 7 describes the
+  writer.
 
-## 7. Open questions
+## 7. Writing patches
+
+### How the engine opens archives (patch 1.2 executable)
+
+- `[Preload] arcName` is opened at start-up (`0x6d2610`); `arcNameLoc` is opened next to it. The texture
+  archive is `arcNameTex` if that key exists; otherwise it is derived from `arcName` by replacing the
+  part from its last `_` (or the end of the stem) with `_ati` or `_nv` according to the GPU vendor
+  (`0x6d2d48`-`0x6d2e03`): `patch.s3darc` -> `patch_ati.s3darc` / `patch_nv.s3darc`,
+  `coop.s3darc` -> `coop_ati.s3darc` / `coop_nv.s3darc`.
+- The archive parser (`0x9a09d0`, relocated by the 1.2 patch into the `LetsPlay` section at
+  `0x10fb3ad`) reads the version, then the base name; if the name is not empty it calls the archive
+  open function (`0x9a0250`) on it **recursively** (`0x10fb4c2`). A patch can therefore sit on
+  another patch: `coop.s3darc` -> `patch.s3darc` -> `out.s3darc` works, to any depth.
+- For each directory entry with offset `-1` the parser looks the entry up in the base **by type and
+  name** (`0x10fb669`: `base->find(type, name)`, `0x99f620`) and stores the base's index in place
+  of the crc field; the index written in the file is not used. A reference must name an entry of the
+  same type that exists in the base.
+- When an entry is read (`0x10fb08d`), an offset of `-1` forwards the read to the base archive with
+  that index, which may forward again.
+- Entries are kept per type in name-sorted tables (`0x9a0030`); within one archive a (type, name)
+  pair must be unique. Directory order does not matter.
+
+**Decision.** The mod ships its own patch archive layered over the game's patch and leaves every
+original file untouched:
+
+```
+preload/paks/coop.s3darc       base patch.s3darc: references + the mod's changed entries
+preload/paks/coop_ati.s3darc   base patch_ati.s3darc, directory only (textures and shaders unchanged)
+preload/paks/coop_nv.s3darc    base patch_nv.s3darc, directory only
+bin/steamwars.ini              [Preload] arcName = coop.s3darc   (uninstall: back to patch.s3darc)
+```
+
+The two vendor stubs are needed because the texture archive name follows `arcName`; alternatively the
+installer could set `arcNameTex`, but it would have to know the GPU vendor. `arcNameLoc` stays as it
+is.
+
+### Format details needed for writing
+
+- All zlib streams in the shipped archives (records, entries, cache block groups, the inner layer of
+  packed entries) are deflated at **level 1**; Python's `zlib.compress(data, 1)` reproduces them byte
+  for byte.
+- A cache block is rebuilt from its members sorted by key; members are added to a group until the
+  group's size exceeds 8192 bytes, then a new group starts. With this rule the `ps` block of
+  `patch.s3darc` is rebuilt byte for byte from its members.
+- A changed block member means a new copy of the whole block (1.6 MB for `ps`) in the mod's patch.
+
+### Tool
+
+```
+s3darc.py pack-patch <base archive> [<moddir>] -o <patch archive>
+```
+
+`<moddir>` uses the layout written by `extract`: `<Type>/<name>` replaces or adds a directory entry
+(`Preload/*.txt` gets its length prefix back, `Shader`, `Ragdolls` and `SceneScr` files get their inner
+zlib layer back), and `CacheBlock/<block>/<file>` replaces or adds a block member (file name = member
+name, hashed as in section 2, or the member's 16-digit hex key). Files identical to the base stay
+references. The output has the complete directory in the base's order, new entries at the end.
+
+Self-tests (no game needed):
+
+- `pack-patch patch.s3darc -o empty.s3darc` (no changes): 3193 entries, all references;
+  `verify` against `patch.s3darc` finds no difference.
+- `pack-patch out.s3darc <extracted patch.s3darc>` rebuilds `patch.s3darc`: same 3193 entries with
+  identical content (size and CRC-32 of every entry, the `ps` block included). It stores 52 entries
+  where the original stores 57 (5 of those are identical to `out.s3darc` and become references).
+- A patch with a changed `mainmenu.ui`, two changed string tables, a replaced `menu.lg`, a new block
+  member and a new preload list, chained over another mod patch, reads back identically with
+  `extract --resolve`.
+
+### Level scripts inside `.lg`
+
+`.lg` files are trees of chunks `u16 tag, u32 end`, where `end` is the absolute offset just past the
+chunk; a container has a tag-specific header and then children that run exactly to its end. Level
+objects are tag `0xF0` chunks with the name in a `0xF4` child; an object's property text, including its
+`#ssl` section, is a `0x1BA` chunk (text + NUL) inside a `0xFD` child. The parser in `s3darc.py`
+finds containers by trying header sizes until the children end exactly at the parent's end; on all
+39 levels it covers the whole file and finds the same text chunks as a byte scan.
+
+```
+s3darc.py lg-ssl list    <level.lg> [--all]          index, offset, text size, #ssl size, object
+s3darc.py lg-ssl extract <level.lg> <dir> [--all]    one .txt per object text
+s3darc.py lg-ssl replace <level.lg> <index|object> --text FILE -o <new.lg> [--grow]
+s3darc.py lg-ssl check   <level.lg>                  parse + rebuild, must be byte-identical
+```
+
+`replace` with a text no longer than the old one pads it with spaces before the NUL: the file size
+and every offset stay the same, which is always safe. A longer text needs `--grow`: every chunk end
+behind the insertion point is moved and the result must parse into the same tree. This is only as
+safe as the assumption that no other data in the file (or in the level's other files) stores absolute
+offsets into the `.lg` **(verify in game)**. Replacing a text with itself gives a byte-identical file.
+
+The edited `.lg` goes into `<moddir>/Scene/<level>.lg` for `pack-patch`.
+
+## 8. Open questions
 
 - Formats of `.lg` object records, `.tpl` templates, `.tex`, `.cdt`, `.sm`, `.data`.
 - Whether `useArc = 0` with a full loose tree (the developers' `..\DATABASE`, `..\SCENES`,

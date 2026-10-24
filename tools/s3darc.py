@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""s3darc.py - list and extract TimeShift (Saber3D engine, 2007) .s3darc archives.
+"""s3darc.py - read and write TimeShift (Saber3D engine, 2007) .s3darc archives.
 
 Usage (Python 3, standard library only):
     python -I s3darc.py list    <archive> [--blocks] [--names FILE]
     python -I s3darc.py extract <archive> <outdir> [--filter SUBSTR] [--raw]
                                 [--resolve] [--no-blocks] [--names FILE]
     python -I s3darc.py names   <archive> [<archive> ...] -o FILE
+    python -I s3darc.py pack-patch <base archive> [<moddir>] -o <patch archive> [--raw]
+    python -I s3darc.py verify  <archive> <other archive> [--blocks]
+    python -I s3darc.py lg-ssl  list|extract|replace|check <file.lg> [...]
+    (list, extract, pack-patch and verify take --search DIR to find base archives
+    that are not next to the archive)
 
     list     prints the directory (type, sizes, offset or base[index], name);
              --blocks also prints cache block members.
@@ -17,6 +22,18 @@ Usage (Python 3, standard library only):
              cache block members it can identify, for use with --names.  Run
              it on all archives together (out, patch, out_<lang>); other
              files given (e.g. the game executable) are scanned for words.
+    pack-patch  writes a patch archive over <base archive> (any archive,
+             including a patch: patches chain).  <moddir> is laid out like
+             extract's output: <Type>/<name> replaces or adds a directory entry,
+             CacheBlock/<block>/<file> replaces or adds a block member (file
+             name = member name, or its 16-hex-digit key).  Files equal to the
+             base are left as references.  Without <moddir>: a directory-only
+             patch (every entry a reference).
+    verify   compares the resolved content (size + CRC) of every entry of two
+             archives; exit status 1 if they differ.
+    lg-ssl   object texts (properties and "#ssl" scripts) in an extracted .lg:
+             list [--all] | extract <dir> [--all] | check (parse + rebuild) |
+             replace <index|object name> --text FILE -o OUT [--grow].
 
 Archive format (all integers little-endian u32 unless noted)
 -------------------------------------------------------------
@@ -160,8 +177,9 @@ def _read_record(f):
 
 
 class Archive:
-    def __init__(self, path):
+    def __init__(self, path, search=()):
         self.path = path
+        self.search = list(search)
         self.f = open(path, "rb")
         ver = _read_record(self.f)
         self.version = struct.unpack("<I", ver[:4])[0]
@@ -188,7 +206,13 @@ class Archive:
     @property
     def base(self):
         if self._base is None and self.base_name:
-            self._base = Archive(os.path.join(os.path.dirname(self.path), self.base_name))
+            for d in [os.path.dirname(self.path)] + self.search:
+                cand = os.path.join(d, self.base_name)
+                if os.path.isfile(cand):
+                    self._base = Archive(cand, self.search)
+                    break
+            else:
+                raise ValueError("base archive %s not found" % self.base_name)
         return self._base
 
     def source(self, e):
@@ -399,7 +423,7 @@ def archive_words(a):
 
 
 def cmd_list(args):
-    a = Archive(args.archive)
+    a = Archive(args.archive, args.search)
     names = load_names([args.names])
     words = archive_words(a) if args.blocks else []
     print("# %s: version %d, base %r, %d entries, %d stored here"
@@ -417,7 +441,7 @@ def cmd_list(args):
 
 
 def cmd_extract(args):
-    a = Archive(args.archive)
+    a = Archive(args.archive, args.search)
     names = load_names([args.names])
     words = archive_words(a)
     flt = args.filter.lower() if args.filter else None
@@ -467,6 +491,394 @@ def cmd_extract(args):
     print("%s: %d files, %d bytes -> %s" % (os.path.basename(a.path), n_files, n_bytes, root))
 
 
+# ---------------------------------------------------------------------------
+# Writing patch archives
+# ---------------------------------------------------------------------------
+
+ZLEVEL = 1            # the shipped archives use zlib level 1 everywhere
+BLOCK_GROUP = 8192    # a cache block group is closed once it exceeds this size
+FOLDER_TYPE = {v[0].lower(): k for k, v in TYPE_INFO.items()}
+HEX16 = re.compile(r"^[0-9a-fA-F]{16}$")
+
+
+def wrap(type_, data):
+    """Inverse of unpack(): add the length prefix / inner zlib layer."""
+    if type_ == 0:
+        return struct.pack("<I", len(data)) + data
+    if type_ in PACKED_TYPES:
+        z = zlib.compress(data, ZLEVEL)
+        return struct.pack("<II", len(data), len(z)) + b"\0\0" + z
+    return data
+
+
+def build_block(members):
+    """Build a CacheBlock from {key: bytes} the way the shipped tools do:
+    keys ascending, a group is closed once its size exceeds 8192 bytes,
+    every group deflated at level 1."""
+    groups, cur, size = [], [], 0
+    for key in sorted(members):
+        cur.append(key)
+        size += len(members[key])
+        if size > BLOCK_GROUP:
+            groups.append(cur)
+            cur, size = [], 0
+    if cur:
+        groups.append(cur)
+    head, blobs = [], []
+    for g in groups:
+        z = zlib.compress(b"".join(members[k] for k in g), ZLEVEL)
+        blobs.append(z)
+        head.append(struct.pack("<II", len(z), len(g)))
+        head.extend(struct.pack("<QI", k, len(members[k])) for k in g)
+    total = sum(len(z) for z in blobs)
+    return (struct.pack("<III", len(groups), len(members), total)
+            + b"".join(head) + b"".join(blobs))
+
+
+def _record(data):
+    z = zlib.compress(data, ZLEVEL)
+    return struct.pack("<II", len(data), len(z)) + z
+
+
+def scan_moddir(moddir, raw=False):
+    """Read a mod folder laid out like extract's output.
+    Returns ({(type, file_name): path}, {block_name: {key: path}})."""
+    files, blocks = {}, {}
+    for folder in sorted(os.listdir(moddir)):
+        fdir = os.path.join(moddir, folder)
+        if not os.path.isdir(fdir):
+            continue
+        low = folder.lower()
+        if low == "cacheblock":
+            for block in sorted(os.listdir(fdir)):
+                bdir = os.path.join(fdir, block)
+                if not os.path.isdir(bdir):
+                    continue
+                mem = blocks.setdefault(block.lower(), {})
+                for fn in sorted(os.listdir(bdir)):
+                    key = int(fn, 16) if HEX16.match(fn) else s3d_hash64(fn)
+                    mem[key] = os.path.join(bdir, fn)
+            continue
+        if low in FOLDER_TYPE:
+            t = FOLDER_TYPE[low]
+        elif re.match(r"^type\d+$", low):
+            t = int(low[4:])
+        else:
+            raise ValueError("unknown type folder %r" % folder)
+        for fn in sorted(os.listdir(fdir)):
+            path = os.path.join(fdir, fn)
+            if os.path.isfile(path):
+                files[(t, fn)] = path
+    return files, blocks
+
+
+def _resolve_name(t, fn, by_key):
+    """Map an extracted file name back to the directory name."""
+    if (t, fn.lower()) in by_key:
+        return by_key[(t, fn.lower())]
+    ext = TYPE_INFO.get(t, ("", ""))[1]
+    if ext and fn.lower().endswith(ext):
+        stem = fn[:-len(ext)]
+        if (t, stem.lower()) in by_key:
+            return by_key[(t, stem.lower())]
+        return stem
+    return fn
+
+
+def pack_patch(base_path, moddir, out_path, search=(), raw=False, log=print):
+    """Write a patch archive over base_path containing the changes in moddir.
+    Unchanged entries become references (offset -1) into the base."""
+    base = Archive(base_path, search)
+    by_key = {(e.type, e.name.lower()): e.name for e in base.entries}
+    base_idx = {(e.type, e.name.lower()): e for e in base.entries}
+    files, blocks = scan_moddir(moddir) if moddir else ({}, {})
+
+    # local content: (type, name) -> bytes producer
+    local = {}
+    for (t, fn), path in files.items():
+        name = _resolve_name(t, fn, by_key)
+        with open(path, "rb") as f:
+            data = f.read()
+        if not raw:
+            data = wrap(t, data)
+        be = base_idx.get((t, name.lower()))
+        if be is not None:
+            src, se = base.source(be)
+            if se.usize == len(data) and se.crc == zlib.crc32(data):
+                continue                       # identical to the base: keep the reference
+        local[(t, name.lower())] = (name, data)
+    for bname, mem in blocks.items():
+        be = base_idx.get((2, bname))
+        old = dict(parse_block(base.read(be))) if be is not None else {}
+        new = dict(old)
+        for key, path in mem.items():
+            with open(path, "rb") as f:
+                new[key] = f.read()
+        if new == old:
+            continue
+        changed = sum(1 for k in new if old.get(k) != new[k])
+        log("block %s: %d members changed or added" % (bname, changed))
+        local[(2, bname)] = (be.name if be is not None else bname, build_block(new))
+
+    tmp = out_path + ".tmp"
+    n_local = 0
+    with open(tmp, "wb") as out:
+        out.write(_record(struct.pack("<I", 1)))
+        bn = os.path.basename(base_path).encode("latin1")
+        out.write(_record(struct.pack("<I", len(bn)) + bn))
+        out.write(b"\0\0\0\0")                 # dir_offset, patched below
+        dir_rows = []
+        order = [(e.type, e.name.lower()) for e in base.entries]
+        order += sorted(k for k in local if k not in base_idx)
+        for i, key in enumerate(order):
+            if key in local:
+                name, data = local[key]
+                z = zlib.compress(data, ZLEVEL)
+                off = out.tell()
+                out.write(z)
+                dir_rows.append((name, key[0], off, zlib.crc32(data), len(data), len(z)))
+                n_local += 1
+            else:
+                e = base_idx[key]
+                src, se = base.source(e)
+                dir_rows.append((e.name, e.type, -1, e.index, se.usize, se.csize))
+        dir_off = out.tell()
+        d = [struct.pack("<I", len(dir_rows))]
+        for name, t, off, crc, us, cs in dir_rows:
+            nb = name.encode("latin1")
+            d.append(struct.pack("<I", len(nb)) + nb + struct.pack("<IiIII", t, off, crc, us, cs))
+        out.write(_record(b"".join(d)))
+        hdr_end = len(_record(struct.pack("<I", 1))) + len(_record(struct.pack("<I", len(bn)) + bn))
+        out.seek(hdr_end)
+        out.write(struct.pack("<I", dir_off))
+    os.replace(tmp, out_path)
+    log("%s: %d entries, %d stored, base %s" % (out_path, len(dir_rows), n_local,
+                                                 os.path.basename(base_path)))
+    return n_local
+
+
+def cmd_pack_patch(args):
+    pack_patch(args.base, args.moddir, args.output, args.search, args.raw)
+
+
+def cmd_verify(args):
+    """Compare the resolved content of two archives entry by entry."""
+    a = Archive(args.archive, args.search)
+    b = Archive(args.other, args.search)
+    ka = {(e.type, e.name.lower()): e for e in a.entries}
+    kb = {(e.type, e.name.lower()): e for e in b.entries}
+    only_a, only_b = sorted(set(ka) - set(kb)), sorted(set(kb) - set(ka))
+    diff = []
+    for k in sorted(set(ka) & set(kb)):
+        sa, ea = a.source(ka[k])
+        sb, eb = b.source(kb[k])
+        if (ea.usize, ea.crc) != (eb.usize, eb.crc):
+            diff.append(k)
+    print("entries: %d vs %d; only in first: %d; only in second: %d; different content: %d"
+          % (len(ka), len(kb), len(only_a), len(only_b), len(diff)))
+    for k in (only_a + only_b + diff)[:40]:
+        print("  ", TYPE_INFO.get(k[0], (k[0],))[0], k[1])
+    if args.blocks:
+        for k in diff:
+            if k[0] != 2:
+                continue
+            ma = dict(parse_block(a.read(ka[k])))
+            mb = dict(parse_block(b.read(kb[k])))
+            d2 = [h for h in set(ma) | set(mb) if ma.get(h) != mb.get(h)]
+            print("   block %s: %d vs %d members, %d differ" % (k[1], len(ma), len(mb), len(d2)))
+    return not (only_a or only_b or diff)
+
+
+# ---------------------------------------------------------------------------
+# .lg scene files: chunk tree and object text (properties + #ssl scripts)
+# ---------------------------------------------------------------------------
+#
+# A .lg file is a tree of chunks "u16 tag, u32 end" where end is the ABSOLUTE
+# file offset just past the chunk.  A container chunk has a tag-specific
+# header of p bytes after the 6-byte chunk header, then child chunks running
+# exactly to its end.  Level objects are tag 0xF0 chunks; their name is in a
+# 0xF4 child (NUL-terminated), their property text, including any "#ssl"
+# script section, in a 0x1BA chunk (text + NUL) inside a 0xFD child.
+
+LG_TEXT, LG_OBJECT, LG_NAME = 0x1BA, 0xF0, 0xF4
+LG_MAXP = 512
+
+
+class LgNode:
+    __slots__ = ("tag", "start", "end", "prefix", "children")
+
+    def __init__(self, tag, start, end):
+        self.tag, self.start, self.end = tag, start, end
+        self.prefix, self.children = 0, None
+
+
+def _lg_seq(d, o, end):
+    out = []
+    while o < end:
+        if o + 6 > end:
+            return None
+        tag, e = struct.unpack_from("<HI", d, o)
+        if tag == 0 or tag > 0x7FF or e < o + 6 or e > end:
+            return None
+        out.append(LgNode(tag, o, e))
+        o = e
+    return out
+
+
+def lg_parse(d):
+    """Parse the whole file into a list of top-level LgNode trees."""
+    top = _lg_seq(d, 0, len(d))
+    if top is None:
+        raise ValueError("not a chunk file")
+    stack = list(top)
+    while stack:
+        n = stack.pop()
+        if n.tag == LG_TEXT:
+            continue                            # text is always a leaf
+        pl = n.end - n.start - 6
+        for p in range(0, min(pl - 6, LG_MAXP) + 1):
+            ch = _lg_seq(d, n.start + 6 + p, n.end)
+            if ch:
+                n.prefix, n.children = p, ch
+                stack.extend(ch)
+                break
+    return top
+
+
+def lg_serialize(d, nodes, out):
+    for n in nodes:
+        if n.children is None:
+            out.append(d[n.start:n.end])
+        else:
+            out.append(d[n.start:n.start + 6 + n.prefix])
+            lg_serialize(d, n.children, out)
+
+
+def lg_texts(d, top):
+    """Yield (index, text node, object name) for every text chunk."""
+    res = []
+
+    def walk(nodes, owner):
+        for n in nodes:
+            name = owner
+            if n.tag == LG_OBJECT and n.children:
+                for c in n.children:
+                    if c.tag == LG_NAME:
+                        raw = d[c.start + 6:c.end]
+                        name = raw.split(b"\0")[0].decode("latin1")
+                        break
+            if n.tag == LG_TEXT:
+                res.append((n, owner))
+            elif n.children:
+                walk(n.children, name)
+    walk(top, None)
+    return [(i, n, nm) for i, (n, nm) in enumerate(res)]
+
+
+def _lg_select(d, top, which):
+    texts = lg_texts(d, top)
+    if which.isdigit():
+        hit = [t for t in texts if t[0] == int(which)]
+    else:
+        hit = [t for t in texts if t[2] == which and b"#ssl" in d[t[1].start:t[1].end]]
+        if not hit:
+            hit = [t for t in texts if t[2] == which]
+    if len(hit) != 1:
+        raise ValueError("%d text chunks match %r; use the index from 'lg-ssl list'"
+                         % (len(hit), which))
+    return hit[0]
+
+
+def lg_replace(d, top, node, new_text, grow=False):
+    """Return new file bytes with node's text replaced.  A text that fits is
+    padded with spaces so that no offset in the file changes; a longer text
+    needs grow=True, which shifts every chunk end behind the insertion."""
+    if b"\0" in new_text:
+        raise ValueError("text must not contain NUL bytes")
+    old_len = node.end - node.start - 7
+    if len(new_text) <= old_len:
+        body = new_text + b" " * (old_len - len(new_text))
+        return d[:node.start + 6] + body + d[node.end - 1:]
+    if not grow:
+        raise ValueError("new text is %d bytes longer than the old one; shorten it "
+                         "or use --grow" % (len(new_text) - old_len))
+    delta = len(new_text) - old_len
+    ins = node.end - 1                          # position of the NUL terminator
+    out = bytearray(d[:node.start + 6] + new_text + d[ins:])
+    stack = list(top)
+    while stack:
+        n = stack.pop()
+        if n.end > ins:
+            pos = n.start if n.start < ins else n.start + delta
+            struct.pack_into("<I", out, pos + 2, n.end + delta)
+        if n.children:
+            stack.extend(n.children)
+    out = bytes(out)
+    # the shifted file must parse into the same tree shape
+    if _lg_shape(out, lg_parse(out)) != _lg_shape(d, top):
+        raise ValueError("chunk tree changed shape after the shift; not written")
+    return out
+
+
+def _lg_shape(d, top):
+    shape, stack = [], list(top)
+    while stack:
+        n = stack.pop()
+        shape.append((n.tag, n.prefix, len(n.children or ())))
+        if n.children:
+            stack.extend(n.children)
+    return shape
+
+
+def cmd_lg_ssl(args):
+    with open(args.lg, "rb") as f:
+        d = f.read()
+    top = lg_parse(d)
+    if args.action == "check":
+        out = []
+        lg_serialize(d, top, out)
+        same = b"".join(out) == d
+        texts = lg_texts(d, top)
+        print("%s: %d bytes, %d text chunks (%d with #ssl), rebuild %s"
+              % (os.path.basename(args.lg), len(d), len(texts),
+                 sum(b"#ssl" in d[n.start:n.end] for _, n, _ in texts),
+                 "byte-identical" if same else "DIFFERENT"))
+        return same
+    if args.action == "list":
+        for i, n, nm in lg_texts(d, top):
+            text = d[n.start + 6:n.end - 1]
+            if not args.all and b"#ssl" not in text:
+                continue
+            ssl = text.split(b"#ssl", 1)[1] if b"#ssl" in text else b""
+            print("%d\t%#x\t%d\t%d\t%s" % (i, n.start, len(text), len(ssl), nm or "?"))
+        return True
+    if args.action == "extract":
+        os.makedirs(args.target, exist_ok=True)
+        n_out = 0
+        for i, n, nm in lg_texts(d, top):
+            text = d[n.start + 6:n.end - 1]
+            if not args.all and b"#ssl" not in text:
+                continue
+            safe = re.sub(r"[^A-Za-z0-9_.\-]", "_", nm or "unnamed")
+            with open(os.path.join(args.target, "%05d_%s.txt" % (i, safe)), "wb") as f:
+                f.write(text)
+            n_out += 1
+        print("%d texts -> %s" % (n_out, args.target))
+        return True
+    if args.action == "replace":
+        if not args.text or not args.output:
+            raise SystemExit("replace needs --text FILE and -o OUTPUT")
+        i, node, nm = _lg_select(d, top, args.target)
+        with open(args.text, "rb") as f:
+            new = f.read()
+        res = lg_replace(d, top, node, new, args.grow)
+        with open(args.output, "wb") as f:
+            f.write(res)
+        print("text %d (%s): %d -> %d bytes, file %d -> %d bytes -> %s"
+              % (i, nm or "?", node.end - node.start - 7, len(new), len(d), len(res), args.output))
+        return True
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -486,9 +898,36 @@ def main(argv=None):
     pn = sub.add_parser("names", help="harvest cache block member names from archives")
     pn.add_argument("archives", nargs="+")
     pn.add_argument("-o", "--output", required=True, help="names file to write")
+    pp = sub.add_parser("pack-patch", help="build a patch archive over a base archive")
+    pp.add_argument("base", help="archive the patch applies to (e.g. patch.s3darc)")
+    pp.add_argument("moddir", nargs="?", help="folder laid out like extract's output")
+    pp.add_argument("-o", "--output", required=True, help="patch archive to write")
+    pp.add_argument("--raw", action="store_true", help="files are stored bytes (no wrapping)")
+    pv = sub.add_parser("verify", help="compare the resolved content of two archives")
+    pv.add_argument("archive")
+    pv.add_argument("other")
+    pv.add_argument("--blocks", action="store_true", help="also compare cache block members")
+    pg = sub.add_parser("lg-ssl", help="object texts / #ssl scripts in a .lg scene file")
+    pg.add_argument("action", choices=["list", "extract", "replace", "check"])
+    pg.add_argument("lg", help=".lg file (extracted)")
+    pg.add_argument("target", nargs="?", help="extract: output folder; replace: index or object name")
+    pg.add_argument("--text", help="replace: file with the new text")
+    pg.add_argument("-o", "--output", help="replace: .lg file to write")
+    pg.add_argument("--grow", action="store_true",
+                    help="replace: allow a longer text (shifts chunk offsets; verify in game)")
+    pg.add_argument("--all", action="store_true", help="list/extract texts without #ssl too")
+    for sp in (pl, pe, pp, pv):
+        sp.add_argument("--search", action="append", default=[],
+                        help="extra folder to look for base archives in")
     args = p.parse_args(argv)
     try:
-        {"list": cmd_list, "extract": cmd_extract, "names": cmd_names}[args.cmd](args)
+        ok = {"list": cmd_list, "extract": cmd_extract, "names": cmd_names,
+              "pack-patch": cmd_pack_patch, "verify": cmd_verify,
+              "lg-ssl": cmd_lg_ssl}[args.cmd](args)
+        if ok is False:
+            sys.exit(1)
+    except ValueError as exc:
+        sys.exit("error: %s" % exc)
     except OSError as exc:  # output pipe closed early (e.g. "| head")
         if args.cmd != "list" or exc.errno not in (22, 32):
             raise
