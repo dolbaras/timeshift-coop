@@ -269,6 +269,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         real_FatalAppExitA = (FatalAppExitA_t)ts_patch_iat("KERNEL32.dll", "FatalAppExitA", (void *)hook_FatalAppExitA);
         compat_install();
         testmode_install();
+        console_install();
         char v[16];
         if (ts_env("TS_WATCHDOG", v, sizeof v) && (watchdog_secs = (DWORD)atoi(v)) > 0) {
             DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &main_thread,

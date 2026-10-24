@@ -16,6 +16,10 @@ int ts_patch_bytes(DWORD addr, const void *expect, const void *repl, int len);
 void compat_install(void);
 void compat_on_d3d(void *d3d);   /* IDirect3D9 from Direct3DCreate9 */
 
+/* console.c: script runtime access (test console TS_CONSOLE=<port>, script error log) */
+void console_install(void);
+const char *ts_script_run(const char *text, char *out, int size);
+
 /* testmode.c: window, render adapter and focus handling for test instances */
 void testmode_install(void);
 void testmode_wrap_dinput(void *dinput);
