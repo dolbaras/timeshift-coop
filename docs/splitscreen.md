@@ -218,6 +218,18 @@ player 1 to move, time-power effects showed in one half only, split screen with 
 | Pick-ups | by code the ammunition and health pick-ups are methods of the player that touched them (`0x441c90`, `0x4433d0`, called on the toucher), so they go to that player's own weapon set; not yet seen in a run (no pick-up reached with the test pads). The "ammo full" message goes to the shared HUD message line | `work/re/pickup.c` |
 | Deaths by damage | no tint or blur stays after a respawn: player 2 died twice and player 1 three times by enemy fire, both halves clear after each respawn | `20261025-112535` `shot151/155.png` |
 
+### Round 6 (2026-10-25, main PC; defects found in the round 5 frames, HUD, saves)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Repeated strip at the right edge | the test window's back buffer (1912x1000) is larger than the game's picture (1768x992; the composite quad and the frame texture are 1768x992, texture coordinates 0..1); the strip right of x 1768 kept an old picture, which looked like a repeated piece of the right view. The composite now clears everything outside the picture (and copies only the drawn part of the frame texture, from the quad's texture coordinates, in case they are below 1). A player's window has the picture's size, so the strip only exists in test windows | `20261025-121947` `shot131.png`: player 2's rifle and muzzle flash run into the picture's right edge and are cut there, black beyond, nothing repeated |
+| Second crosshair in player 1's half | the crosshairs are scene nodes too (templates `crs_*`, made with each player's weapons and kept in front of the player's camera): player 2's floated at player 2's head in player 1's half. The crosshair nodes are recorded at their creation per player and each view hides the other player's, as with the first-person nodes. One crosshair per half, at its centre | `20261025-121947` `shot124/128/138.png`, `20261025-124717` `shot124/138.png` |
+| Player 2's spot when nobody walked yet | spots 1.6 m behind, right, left, behind right, behind left of player 1, ahead only last. The placement (+0x210) puts the player on the floor under the spot and writes the spot back: a spot is taken when it comes back on player 1's floor level (within 0.45 m), not moved aside (0.5 m) and not inside player 1 (1 m). In `ts2_city_part02` the first one (behind) is taken: 1.6 m behind player 1 on the ground (the old spot ahead came back 1 m up, on the crate) | logs `player 2 spot behind the partner: asked .. 1.01 .., got .. 0.57 ..`; `20261025-124717` `shot100.png` (player 2 sees player 1's back; player 1 sees the courtyard) |
+| Other HUD widgets | every HUD widget class whose update reads `[0xfc8180]` (14 classes, vtables of the HUD classes `0x59e000-0x5e2000`, slot +0x34; a thunk per class) is updated for the view the next frame draws with that view's player: weapon panel, life and armour, hit arrows, time-power widgets, ... | `20261025-124717` `shot100.png` (before the rifles: player 1 unarmed, empty panel; player 2's pistol 112 in its half), `shot138.png` (210 / 180) |
+| Time-power bar | **still shared while a power runs**: player 2's time stop drains only player 2's energy (player +0x2ac: player 1 stays at 1.00 in the log), but the bar in both halves goes down and back up; the bar shows more than +0x2ac (not found yet). The power icons light up in both halves (the world's time is one) | `20261025-124717` log 12:49:20-12:49:38 and `shot128/130/132.png` |
+| Pick-ups | **not shown in a run**. By code the pick-ups are methods of the player that touched them (`0x441c90`, `0x4433d0`). Tries: an `item_arifle` spawned on player 2's spot crashed in the node creation (wrong transform; the test was removed, `20261025-122418`); `$player2.MoveTo("pistol1")` (a placed `item_arifle`) did nothing; player 2 walking towards the dropped weapons was stopped after 2 m | `20261025-122418`, `20261025-122936`, `20261025-123537` |
+| Saves | `$saves_mng.AutoSave(-1)` in split screen: Ok, `CanSave` true; `$saves_mng.LoadLastGame()`: the level reloads, no crash, split screen goes on and player 2 comes back next to player 1 (placed on its trail), **without weapons** (the save holds player 1's equipment only; player 2's weapon panel is empty, no first-person weapon, `Y` brings none). Removing and remaking player 2 after the load hung the game (`20261025-123537`), so player 2 stays unarmed; if a load gives it a new body, its recorded objects are forgotten | `20261025-122936` `shot175/195.png`, `20261025-124206` `shot183/193.png` and log (`player 2 weapon set .. total 0.0`) |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
@@ -230,12 +242,11 @@ player 1 to move, time-power effects showed in one half only, split screen with 
   (score, team, respawn) know one local player per machine. Plan: on the host, keep player 2 out of replication
   and send it to clients as a `player_mp` puppet (as remote players are), with its position from the host's
   player 2. The menu's split screen starts a single-player game, so it never meets a network session.
-- **Joining spot**: "ahead of the partner" is not checked against the level's collision; in `ts2_city_part02`
-  player 2 lands on a crate 1 m above player 1 (it stands there). A check (ray or the engine's own placement
-  test) is still to be added; on a walked trail the spot is ground player 1 stood on.
-- Other HUD widgets than the weapon panel (time-power energy, messages) still read `[0xfc8180]` in the UI update:
-  player 1's in both halves. The same per-frame swap as the weapon panel would serve them.
-- Saving and loading with player 2 are untested.
+- **Player 2 after loading a save has no weapons** (round 6). A way to give it a weapon set again (the player's
+  weapon manager init `0x4478e0` as player 2, or script `SetupWeapon` once its weapon objects exist) is next.
+- **Time-power bar** shared while a power runs (round 6); the line of sight of the joining spot is not checked
+  (only the floor level).
+- Pick-ups going to the right player: by code yes, not seen in a run.
 - The pause menu and loading screens are full screen (UI command context); cutscenes with the scene camera are
   full screen. Player 2 has no menu control (only player 1's pad and keyboard drive the menus).
 - Each view runs at half the frame rate; no frame cap yet.
@@ -243,8 +254,6 @@ player 1 to move, time-power effects showed in one half only, split screen with 
   update and the globals cannot simply be held for the render span; the swap would have to be limited to the
   frame start, the HUD update and the frame end (see the research notes), and live camera reads in the render job
   checked.
-- In the test window the back buffer (1912x1000) is larger than the game's picture (1768x992); the strip outside
-  the picture is not cleared (as without the mod).
 - HUD: in the side-by-side layout the radar is missing from both halves (it shows in top and bottom); the
   narrow canvas may place it off screen. Not looked into.
 - The player's double-tap state (input manager +0xa4/+0xa5) and the rumble of pad 2 are not handled.

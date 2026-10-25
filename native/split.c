@@ -221,6 +221,29 @@ static struct { BYTE *node; DWORD saved; } fp_hidden[2 * MAX_OWN];
 static int n_fp_hidden;
 static int fp_share;   /* TS_SPLIT_FPSHARE=1: player 2's first-person nodes share player 1's geometry (owner swaps) */
 
+/* The crosshairs are scene nodes too (templates "crs_*", made with each player's weapons, kept in front of the
+ * player's camera): in the other player's view a player's crosshair floats in front of that player's body
+ * (player 2's showed at player 2's head in player 1's half). Each view hides the other player's crosshair nodes
+ * like its first-person nodes. Recorded at their creation, with their geometry to know they still exist. */
+#define MAX_CRS 32
+static struct { BYTE *node, *geo; } crs[2][MAX_CRS];
+static int n_crs[2];
+
+static void record_crosshair(BYTE *tpl, BYTE *node)
+{
+    if (!tpl || !node || strncmp((char *)(tpl + 0x30), "crs_", 4) != 0)
+        return;
+    int who = spawning_p2 ? 1 : 0;
+    if (n_crs[who] < MAX_CRS)
+        crs[who][n_crs[who]].node = node, crs[who][n_crs[who]++].geo = *(BYTE **)(node + 0x1c0);
+}
+
+static int crosshair_alive(int who, int i)
+{
+    BYTE *n = crs[who][i].node;
+    return n && !IsBadReadPtr(n, 0x1c4) && *(BYTE **)(n + 0x1c0) == crs[who][i].geo;
+}
+
 static void *TSCALL hook_mknode(void *world, BYTE *tpl, void *xform)
 {
     BYTE *geo = tpl ? *(BYTE **)(tpl + 0xb8) : NULL;
@@ -249,6 +272,7 @@ static void *TSCALL hook_mknode(void *world, BYTE *tpl, void *xform)
         } else if (r && n_geo2 < MAX_GEO)
             geo2[n_geo2].geo = geo, geo2[n_geo2++].node2 = r;
     }
+    record_crosshair(tpl, r);
     if (spawning_p2 || (splitlog && mark))
         ts_log("split: node for template \"%s\" geometry %p in use %08lx -> %p (own geometry %p)",
                tpl ? (char *)(tpl + 0x30) : "?", (void *)geo, mark, (void *)r, r ? *(void **)(r + 0x1c0) : NULL);
@@ -291,6 +315,7 @@ static BYTE *raw2;              /* player 2's raw input block */
 static DWORD imf2_a[5], imf2_b[4];
 static int p2_failed;
 static DWORD p2_born;
+static BYTE *p2_body;   /* (player 2's body at its spawn: a load gives it a new one) */
 static LONG logged;
 
 /* the picture of each view and the composite */
@@ -476,6 +501,15 @@ static void TSCALL hook_fstart(void *r)
                 BYTE *fn = objs[i] ? *(BYTE **)(objs[i] + 0x230) : NULL;
                 if (!fn || IsBadReadPtr(fn, 8))
                     continue;
+                fp_hidden[n_fp_hidden].node = fn;
+                fp_hidden[n_fp_hidden++].saved = *(DWORD *)(fn + 4);
+                *(DWORD *)(fn + 4) |= 1;
+            }
+            int ow = view == 0 ? 1 : 0;
+            for (int i = 0; i < n_crs[ow] && n_fp_hidden < 2 * MAX_OWN; i++) {
+                if (!crosshair_alive(ow, i))
+                    continue;
+                BYTE *fn = crs[ow][i].node;
                 fp_hidden[n_fp_hidden].node = fn;
                 fp_hidden[n_fp_hidden++].saved = *(DWORD *)(fn + 4);
                 *(DWORD *)(fn + 4) |= 1;
@@ -697,13 +731,13 @@ static int make_pics(IDirect3DDevice9 *dev, const D3DSURFACE_DESC *d)
     return 1;
 }
 
-static void copy_surface(IDirect3DDevice9 *dev, IDirect3DSurface9 *from, IDirect3DTexture9 *to_tex, const RECT *to_rect,
-                         IDirect3DSurface9 *to_surf, D3DTEXTUREFILTERTYPE f, const char *what)
+static void copy_surface(IDirect3DDevice9 *dev, IDirect3DSurface9 *from, const RECT *from_rect, IDirect3DTexture9 *to_tex,
+                         const RECT *to_rect, IDirect3DSurface9 *to_surf, D3DTEXTUREFILTERTYPE f, const char *what)
 {
     IDirect3DSurface9 *s = to_surf;
     if (!s && FAILED(IDirect3DTexture9_GetSurfaceLevel(to_tex, 0, &s)))
         return;
-    HRESULT hr = IDirect3DDevice9_StretchRect(dev, from, NULL, s, to_rect, f);
+    HRESULT hr = IDirect3DDevice9_StretchRect(dev, from, from_rect, s, to_rect, f);
     if (FAILED(hr))
         complain(what, hr);
     if (!to_surf)
@@ -730,8 +764,17 @@ static void TSCALL hook_quad(void *rend, float x0, float y0, float u0, float v0,
     IDirect3DSurface9 *src = NULL;
     int ok = SUCCEEDED(IDirect3DTexture9_GetLevelDesc(tex, 0, &d)) && make_pics(dev, &d)
              && SUCCEEDED(IDirect3DTexture9_GetSurfaceLevel(tex, 0, &src));
+    /* The picture the game drew covers only the quad's texture coordinates of the frame texture (u1, v1 < 1 when
+     * the back buffer is larger than the game's picture, as in a window bigger than the chosen resolution): only
+     * that part is copied and put into the half; the rest of the texture is stale. */
+    RECT used;
+    SetRect(&used, (int)(u0 * d.Width + 0.5f), (int)(v0 * d.Height + 0.5f), (int)(u1 * d.Width + 0.5f),
+            (int)(v1 * d.Height + 0.5f));
+    if (used.left < 0 || used.top < 0 || used.right > (LONG)d.Width || used.bottom > (LONG)d.Height
+        || used.right - used.left < 16 || used.bottom - used.top < 16)
+        SetRect(&used, 0, 0, d.Width, d.Height);
     if (ok) {
-        copy_surface(dev, src, pic[k], NULL, NULL, D3DTEXF_NONE, "view picture copy failed");
+        copy_surface(dev, src, &used, pic[k], &used, NULL, D3DTEXF_NONE, "view picture copy failed");
         pic_ok[k] = 1;
         IDirect3DSurface9_Release(src);
     }
@@ -747,17 +790,33 @@ static void TSCALL hook_quad(void *rend, float x0, float y0, float u0, float v0,
         if (pic_ok[i]) {
             IDirect3DSurface9 *s = NULL;
             if (SUCCEEDED(IDirect3DTexture9_GetSurfaceLevel(pic[i], 0, &s))) {
-                HRESULT hr = IDirect3DDevice9_StretchRect(dev, s, NULL, rt, &r[i], D3DTEXF_LINEAR);
+                HRESULT hr = IDirect3DDevice9_StretchRect(dev, s, &used, rt, &r[i], D3DTEXF_LINEAR);
                 if (FAILED(hr))
                     complain("half copy failed", hr);
                 IDirect3DSurface9_Release(s);
             }
         }
+    /* A back buffer larger than the game's picture (a window bigger than the chosen resolution, as the test
+     * windows are) keeps an old picture in the strip outside it, which the halves made look like a repeated piece
+     * of the right view: it is cleared. */
+    D3DSURFACE_DESC rd;
+    if (SUCCEEDED(IDirect3DSurface9_GetDesc(rt, &rd))) {
+        RECT strip;
+        if ((int)rd.Width > w) {
+            SetRect(&strip, w, 0, rd.Width, rd.Height);
+            IDirect3DDevice9_ColorFill(dev, rt, &strip, D3DCOLOR_XRGB(0, 0, 0));
+        }
+        if ((int)rd.Height > h) {
+            SetRect(&strip, 0, h, rd.Width, rd.Height);
+            IDirect3DDevice9_ColorFill(dev, rt, &strip, D3DCOLOR_XRGB(0, 0, 0));
+        }
+    }
     IDirect3DSurface9_Release(rt);
     if (splitlog && logged < 60) {
         logged++;
-        ts_log("split: composite view %d into %ld,%ld-%ld,%ld (pool %d %ux%u fmt %d) thread %lu", k, r[k].left, r[k].top,
-               r[k].right, r[k].bottom, POOL_CUR, d.Width, d.Height, d.Format, GetCurrentThreadId());
+        ts_log("split: composite view %d into %ld,%ld-%ld,%ld (pool %d %ux%u fmt %d, used %ld,%ld-%ld,%ld uv %.3f,%.3f-%.3f,%.3f)"
+               " thread %lu", k, r[k].left, r[k].top, r[k].right, r[k].bottom, POOL_CUR, d.Width, d.Height, d.Format,
+               used.left, used.top, used.right, used.bottom, u0, v0, u1, v1, GetCurrentThreadId());
     }
 }
 
@@ -1098,6 +1157,7 @@ static void *TSCALL hook_dtor(void *pl, int flags)
     BYTE *pa = PLAYER_A, *pb = PLAYER_B;
     p2 = NULL;
     p2_removing = 0;
+    p2_body = NULL;
     p1_since = GetTickCount();   /* (a level change removes it: a new one after the delay in the next level) */
     p2_failed = 0;
     void *r = real_dtor(pl, flags);
@@ -1190,6 +1250,16 @@ static void trail_clear(void)
  * +0x210 as that player. Only spots someone stood on: the partner's trail (2 s old, 1.5 m away), else one's own
  * trail near the partner, else the partner's own spot (a fixed offset beside it could be inside a wall).
  * TS_SPLIT_P2FACE=1 (tests): player 2 2.5 m in front of player 1, facing it. */
+static void put_player(BYTE *pl, float *pos, float *dir)
+{
+    if (pl == p2) {
+        p2_enter();
+        ((place_t)(*(void ***)p2)[SLOT_PLACE])(p2, pos, dir, 1);
+        p2_leave();
+    } else
+        ((place_t)(*(void ***)pl)[SLOT_PLACE])(pl, pos, dir, 1);
+}
+
 static void place_player(BYTE *pl, BYTE *partner)
 {
     BYTE *node1 = partner ? *(BYTE **)(partner + 0x230) : NULL;
@@ -1200,7 +1270,7 @@ static void place_player(BYTE *pl, BYTE *partner)
      * partner looks into; a level starts its player facing into the playing area) */
     float fl = sqrtf(fw[0] * fw[0] + fw[2] * fw[2]);
     float ax = fl > 0.01f ? fw[0] / fl : 0, az = fl > 0.01f ? fw[2] / fl : 0;
-    float pos[3] = {pp[0] + ax * 1.5f, pp[1] + 0.3f, pp[2] + az * 1.5f};
+    float pos[3] = {pp[0], pp[1] + 0.3f, pp[2]};
     float dir[3] = {fw[0], fw[1], fw[2]};
     const char *how = "ahead of the partner";
     char v[8];
@@ -1212,12 +1282,35 @@ static void place_player(BYTE *pl, BYTE *partner)
         how = "on the partner's trail";
     else if (trail_own(pl == p2 ? 1 : 0, pp, pos))
         how = "on its own trail";
-    if (pl == p2) {
-        p2_enter();
-        ((place_t)(*(void ***)p2)[SLOT_PLACE])(p2, pos, dir, 1);
-        p2_leave();
-    } else
-        ((place_t)(*(void ***)pl)[SLOT_PLACE])(pl, pos, dir, 1);
+    else {
+        /* Nobody walked yet: spots 1.6 m behind, beside or diagonally behind the partner, ahead only last. The
+         * placement (+0x210) puts the player on the floor it finds under the spot and writes the spot back (in
+         * `ts2_city_part02` a spot ahead came back 1 m up, on a crate in the partner's face); a spot is taken
+         * when it comes back on the partner's floor level, not moved aside, and not inside the partner. */
+        static const float cand[6][2] = {{-1, 0}, {0, 1}, {0, -1}, {-0.7f, 0.7f}, {-0.7f, -0.7f}, {1, 0}};
+        static const char *cname[6] = {"behind the partner", "right of the partner", "left of the partner",
+                                       "behind right of the partner", "behind left of the partner", "ahead of the partner"};
+        float rx = -az, rz = ax;   /* (the partner's right on the ground) */
+        for (int c = 0; c < 6; c++) {
+            float want[3] = {pp[0] + (ax * cand[c][0] + rx * cand[c][1]) * 1.6f, pp[1] + 0.3f,
+                             pp[2] + (az * cand[c][0] + rz * cand[c][1]) * 1.6f};
+            memcpy(pos, want, sizeof pos);
+            put_player(pl, pos, dir);
+            float gx = pos[0] - want[0], gz = pos[2] - want[2], dx = pos[0] - pp[0], dz = pos[2] - pp[2];
+            int ok = fabsf(pos[1] - pp[1]) < 0.45f && gx * gx + gz * gz < 0.25f && dx * dx + dz * dz > 1.0f;
+            BYTE *pn = *(BYTE **)(pl + 0x230);
+            float *np = pn ? (float *)(pn + 0x68) : pos;
+            ts_log("split: player %d spot %s: asked %.2f %.2f %.2f, got %.2f %.2f %.2f (node %.2f %.2f %.2f)%s", pl == p2 ? 2 : 1,
+                   cname[c], want[0], want[1], want[2], pos[0], pos[1], pos[2], np[0], np[1], np[2], ok ? "" : " (not taken)");
+            how = cname[c];
+            if (ok)
+                break;
+        }
+        ts_log("split: player %d placed %s at %.2f %.2f %.2f (partner at %.2f %.2f %.2f)", pl == p2 ? 2 : 1, how, pos[0],
+               pos[1], pos[2], pp[0], pp[1], pp[2]);
+        return;
+    }
+    put_player(pl, pos, dir);
     ts_log("split: player %d placed %s at %.2f %.2f %.2f (partner at %.2f %.2f %.2f)", pl == p2 ? 2 : 1, how, pos[0],
            pos[1], pos[2], pp[0], pp[1], pp[2]);
 }
@@ -1288,6 +1381,7 @@ static void spawn_p2(BYTE *p1)
      * +0x34: player 1's own "player" serves as the template; a name of nothing placed gives no object) */
     spawning_p2 = 1;
     n_own2 = 0;
+    n_crs[1] = 0;
     n_geo2 = 0;
     BYTE *e = spawn_entity(NULL, "player", "player", 0);
     spawning_p2 = 0;
@@ -1319,6 +1413,7 @@ static void spawn_p2(BYTE *p1)
         ts_log("split: player 2 got no script name");
     ts_log("split: names now: player 1 \"%s\", player 2 \"%s\"", script_name(p1), script_name(e));
     place_p2(p1);
+    p2_body = body_of(e);
 }
 
 /* The menu asks whether a second pad is there (UI string CoopPad2 = "1"/"0"; the Co-op menu's "Split screen"
@@ -1373,27 +1468,71 @@ static void split_choice(void)
     }
 }
 
-/* The HUD's weapon panel (ammunition, grenades, weapon icons; update 0x5bbcd0, vtable slot at 0xda1f84) reads
- * the local player [0xfc8180] in the UI update, outside the frame's view span: both halves showed player 1's
- * numbers. Each player has its own weapon set and ammunition (below). The panel is updated for the view the
- * next frame draws (the views alternate per frame), with that view's player. */
-static void (TSCALL *real_hud_weapons)(void *, float);
-static int hudlog, hud_view1 = 1;   /* (frame_no & 1 at the panel update when the next frame draws view 1) */
+/* The HUD widgets that show the local player (weapon panel with ammunition and grenades, time-power energy and
+ * icons, life and armour, hit arrows, ...) read [0xfc8180] in their updates (widget vtable +0x34, thiscall
+ * (widget, float dt)), which the UI update runs outside the frame's view span: both halves showed player 1's.
+ * Each player has its own weapon set and ammunition. The views alternate per frame, so these widgets are updated
+ * for the view the next frame draws, with that view's player. The table: the widget classes whose update reads
+ * [0xfc8180] (vtables of the HUD classes 0x59e000-0x5e2000 found by their common base entries; slot +0x34). */
+static const DWORD hud_vt[][2] = {
+    {0xda02a0, 0x5a83d0}, {0xda09b8, 0x5ac390}, {0xda0f98, 0x5b0300}, {0xda10b8, 0x5b1a10}, {0xda1368, 0x5b2bf0},
+    {0xda1490, 0x5b4630}, {0xda17b0, 0x5b5d90}, {0xda19f0, 0x5b8610}, {0xda1b10, 0x5ba250}, {0xda1d78, 0x5bac20},
+    {0xda1f50, 0x5bbcd0}, {0xda21b0, 0x5bd8d0}, {0xda34f8, 0x5c8310}, {0xda4278, 0x5d46b0},
+};
+#define N_HUD (int)(sizeof hud_vt / sizeof hud_vt[0])
+typedef void (TSCALL *hud_upd_t)(void *, float);
+static hud_upd_t hud_real[N_HUD];
+static int hudlog, hud_view1 = 1;   /* (frame_no & 1 at a widget update when the next frame draws view 1) */
 
-static void TSCALL hook_hud_weapons(void *w, float dt)
+__attribute__((used)) void __cdecl split_hud_update(int i, void *w, float dt)
 {
     int next = (int)(frame_no & 1);
-    if (hudlog && hudlog++ < 12)
+    if (hudlog && i == 10 && hudlog++ < 6)
         ts_log("split: HUD weapon panel update: frame %u, next view %d, view span %d", frame_no, next, swapped);
-    if (stage < 3 || !p2 || swapped || as2.depth || !PLAYER_B || PLAYER_B == p2 || !split_wanted() || next != hud_view1) {
-        real_hud_weapons(w, dt);
+    int on = !(stage < 3 || !p2 || swapped || as2.depth || !PLAYER_B || PLAYER_B == p2 || !split_wanted());
+    if (!on) {
+        hud_real[i](w, dt);
         return;
     }
+    int v = next == hud_view1 ? 1 : 0;
     BYTE *pa = PLAYER_A, *pb = PLAYER_B;
-    PLAYER_A = PLAYER_B = p2;
-    real_hud_weapons(w, dt);
+    if (v == 1)
+        PLAYER_A = PLAYER_B = p2;
+    hud_real[i](w, dt);
     PLAYER_A = pa;
     PLAYER_B = pb;
+}
+
+/* One thunk per widget class: eax = its index, then the common part calls split_hud_update(i, this, dt). */
+__attribute__((naked)) static void hud_common(void)
+{
+    __asm__("push 4(%esp)\n\t"   /* dt */
+            "push %ecx\n\t"
+            "push %eax\n\t"
+            "call _split_hud_update\n\t"
+            "add $12, %esp\n\t"
+            "ret $4");
+}
+
+static int install_hud_hooks(void)
+{
+    unsigned char *t = VirtualAlloc(NULL, N_HUD * 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    int n = 0;
+    if (!t)
+        return 0;
+    for (int i = 0; i < N_HUD; i++) {
+        DWORD slot = hud_vt[i][0] + 0x34;
+        if (*(DWORD *)slot != hud_vt[i][1])
+            continue;
+        unsigned char *k = t + 16 * i;
+        k[0] = 0xb8, *(DWORD *)(k + 1) = (DWORD)i;                                  /* mov eax, i */
+        k[5] = 0xe9, *(DWORD *)(k + 6) = (DWORD)hud_common - (DWORD)(k + 10);       /* jmp hud_common */
+        void *vt = (void *)slot;
+        void *o = ts_patch_vtable(&vt, 0, k);
+        if (o)
+            hud_real[i] = (hud_upd_t)o, n++;
+    }
+    return n;
 }
 
 /* The HUD's ammunition source (0x5bbcd0): the player's vtable +0x248 gives its weapon set, whose virtual base's
@@ -1465,9 +1604,10 @@ static void split_tick(float dt)
                     ts_log("split:   player %d camera at %.2f %.2f %.2f", i + 1, c[0], c[1], c[2]);
                 }
                 if (pl)
-                    ts_log("split:   player %d body %p node +4 %08lx +8 %08lx vis %d; player node +4 %08lx +8 %08lx health %.1f",
+                    ts_log("split:   player %d body %p node +4 %08lx +8 %08lx vis %d; player node +4 %08lx +8 %08lx health %.1f time energy %.2f",
                            i + 1, (void *)b, n ? *(DWORD *)(n + 4) : 0, n ? *(DWORD *)(n + 8) : 0, node_visible(n),
-                           pn ? *(DWORD *)(pn + 4) : 0, pn ? *(DWORD *)(pn + 8) : 0, *(float *)(pl + 0x234));
+                           pn ? *(DWORD *)(pn + 4) : 0, pn ? *(DWORD *)(pn + 8) : 0, *(float *)(pl + 0x234),
+                           *(float *)(pl + 0x2ac));   /* (+0x2ac: what the HUD's time-power bar shows, 0x5b5d90) */
             }
         }
     }
@@ -1513,8 +1653,26 @@ static void split_tick(float dt)
     if (p1 && p2 && !placed && now - p1_since >= (DWORD)p2_delay * 1000
         && (walked || now - p1_since >= (DWORD)p2_delay * 1000 + 3000)) {
         placed = 1;
-        if ((int)(now - p2_born) > 2000)   /* (not the one just spawned and placed) */
+        /* Loading a save rebuilds the players' equipment from the save, which holds player 1's only: player 2
+         * comes back with a new body and without its weapons (an empty weapon, no first-person model). Removing
+         * and remaking it then hung the game (run 20261025-123537), so it stays, unarmed; its recorded objects
+         * (first-person weapons, crosshairs) are gone and forgotten, so new objects at their addresses are not
+         * taken for player 2's. */
+        BYTE *rec = ammo_rec(p2, 0, NULL);
+        int body_new = p2_body && body_of(p2) != p2_body;
+        int unarmed = !rec || (*(float *)(rec + 8) <= 0 && *(int *)(rec + 0xc) <= 0);
+        if ((int)(now - p2_born) <= 2000)
+            ;   /* (the one just spawned and placed) */
+        else {
+            if (body_new) {
+                ts_log("split: player 2 after the level load: new body%s; its old objects forgotten",
+                       unarmed ? ", no weapon (not in the save)" : "");
+                n_own2 = 0;
+                n_crs[1] = 0;
+                p2_body = body_of(p2);
+            }
             place_p2(p1);
+        }
     }
 }
 
@@ -1579,7 +1737,6 @@ void split_install(void)
              + patch_slot(PLAYER_VTBL, SLOT_DTOR, (void *)hook_dtor, (void **)&real_dtor)
              + patch_slot(PLAYER_VTBL, 0x2e8 / 4, (void *)hook_die, (void **)&real_die)
              + patch_slot(PLAYER_VTBL, 0x22c / 4, (void *)hook_event, (void **)&real_event)
-             + (*(DWORD *)0xda1f84 == 0x5bbcd0 && patch_slot(0xda1f84, 0, (void *)hook_hud_weapons, (void **)&real_hud_weapons))
              + patch_slot(IM_VTBL, SLOT_EVAL, (void *)hook_eval, (void **)&real_eval);
     if (stage >= 3 || !forced)
         for (int i = 0; i < 5; i++) {   /* (weapons: 0x447a2e, 0x447a55; hands 0x442868; body: 0x4074b4, 0x4074f9) */
@@ -1592,6 +1749,11 @@ void split_install(void)
         }
     fx_off = ts_env("TS_SPLIT_FXSHARED", v, sizeof v) && v[0] == '1';
     hudlog = splitlog > 0;
+    if (stage >= 3 || !forced) {
+        int nh = install_hud_hooks();
+        if (nh != N_HUD)
+            ts_log("split: %d of %d HUD widget updates hooked (the others show player 1 in both halves)", nh, N_HUD);
+    }
     if (ts_env("TS_SPLIT_HUDNEXT", v, sizeof v))   /* (tests: which frame parity the HUD panel takes player 2 on) */
         hud_view1 = v[0] == '0' ? 0 : 1;
     if (ts_env("TS_SPLIT_FXVIEW", v, sizeof v)) {
