@@ -12,6 +12,8 @@ void *ts_patch_iat(const char *dll, const char *func, void *hook);
 void *ts_patch_vtable(void *obj, int index, void *hook);
 int ts_patch_bytes(DWORD addr, const void *expect, const void *repl, int len);
 void *ts_patch_ws2(const char *func, void *hook);   /* by-ordinal ws2_32 imports; chains */
+/* likely return addresses on a stack (dwords into the exe's code right after a call); no allocation */
+int ts_stack_returns(DWORD esp, DWORD stack_top, DWORD *out, DWORD *offs, int max);
 
 /* compat.c: start-up fixes for today's PCs */
 void compat_install(void);
@@ -76,5 +78,6 @@ void display_on_d3d(void *d3d);
 /* testmode.c: window, render adapter and focus handling for test instances */
 void testmode_install(void);
 void testmode_wrap_dinput(void *dinput);
+void ts_shot_next(void);   /* (lab) save the next presented frame (TS_SHOTDIR) */
 
 #endif
