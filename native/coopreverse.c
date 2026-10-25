@@ -640,7 +640,9 @@ static void frame(float dt)
     if (trap_kill) {
         char res[120];
         trap_kill = 0;
-        ts_script_run("$player.Kill()", res, sizeof res);
+        /* (a client dies the multiplayer way: $player.Kill() there left it "waiting for respawn" for good, seen live;
+         * FailMission on a client is a multiplayer death with respawn, multiplayer.md T5) */
+        ts_script_run(game_mode() == MODE_CLIENT ? "$player.FailMission(\"\")" : "$player.Kill()", res, sizeof res);
         RLOG("coopreverse: trapped in a container after the host's rewind: killed -> %s", res);
     }
     if (stock && game_mode() == MODE_SERVER) {

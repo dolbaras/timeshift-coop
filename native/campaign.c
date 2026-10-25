@@ -405,7 +405,9 @@ static void place_local(const float *pos, int ring, const float *mn, const float
 static void kill_local(const char *why)
 {
     char res[160];
-    ts_script_run("$player.Kill()", res, sizeof res);
+    /* (a client dies the multiplayer way: $player.Kill() there left it "waiting for respawn" for good, seen live;
+     * FailMission on a client is a multiplayer death with respawn, multiplayer.md T5) */
+    ts_script_run(game_mode() == MODE_CLIENT ? "$player.FailMission(\"\")" : "$player.Kill()", res, sizeof res);
     CLOG("campaign: own player killed (%s) -> %s", why, res);
 }
 
