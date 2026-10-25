@@ -10,7 +10,8 @@ powershell -File tools\package.ps1      # dist\timeshift-coop-<TS_VERSION>.zip (
 The version has one source: `TS_VERSION` in `native/ts.h`. `package.ps1` refuses a DLL that does not
 carry it, and writes it to `files\coop\version.txt`; the installed `build_pak.py` reads it from there
 (no `native\` in an installed copy), so the DLL, the data archives and the install record agree.
-`-Version` may be given but must equal `TS_VERSION`.
+`-Version` may be given but must equal `TS_VERSION`. The package is made from the working tree
+(`data\` as it is on disk, untracked recipes included): build a release from a clean checkout.
 
 The archive holds no game files:
 
