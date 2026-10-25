@@ -315,7 +315,9 @@ int campaign_dom_verdict(void *dom_, int host_inside)
     }
     switch (a->r->rule) {
     case R_ALL:
-        return host_inside && clients_inside(dom, NULL);
+        /* (the host by the domain's point test or by its body: live, level 22, a host standing on the train had its
+         * body inside but no test point, and the gate never opened) */
+        return (host_inside || inside(dom, PLAYER)) && clients_inside(dom, NULL);
     case R_HOST:
         return host_inside;
     case R_KILL:
