@@ -269,6 +269,13 @@ player 1 to move, time-power effects showed in one half only, split screen with 
 | `ts2_city_part01` after the opening | the same without split screen: no HUD and no first-person weapon in the level's scripted wake-up | `20261025-170432` `shot215/240.png` (no split) |
 | Frame rate | measured in split screen on the main PC (`ts2_city_part02`, test window 1912x1000): 67-73 frames/s, so each view 34-37 updates/s. Drawing both views every frame would cost the same two scene passes per shown frame (about 35 frames/s with both views each); the alternating views stay | `20261025-164210` log (`frames/s`) |
 
+### Round 11 (2026-10-25, main PC)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Viewer's own body | checked with player 1 moved 18 m away (`TS_SPLIT_ITEMTEST=!#187.8/0.5/102.8`): player 2 looking ahead and down sees no body of its own. Log per view: own body node +4 with 0x10000 set (player 1 `422f2810` in view 0, player 2 `662f2810`/`64212810` in view 1), the partner's cleared (`662e2810`, `422e2810`) | `20261025-171010` `shot100/103.png` and log (`view 0: own body ..`) |
+| Message line per player | done: the pick-up lines are drawn by the HUD's console element `ConsoleText` (class 0xd9f300, draw slot +0x28 = the text draw 0x706430; also `MessageText`). Its draw is skipped in the other player's view for 10 s after a player's own message (owner: player 2's swap, a pick-up by either player, player 1's own objects). Messages from elsewhere stay in both halves | `20261025-172638` `shot109/112.png` ("Получено: Пистолет КМ-33" only in player 2's half), `shot116.png` (gone) |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
@@ -281,7 +288,6 @@ player 1 to move, time-power effects showed in one half only, split screen with 
   (score, team, respawn) know one local player per machine. Plan: on the host, keep player 2 out of replication
   and send it to clients as a `player_mp` puppet (as remote players are), with its position from the host's
   player 2. The menu's split screen starts a single-player game, so it never meets a network session.
-- The pick-up message line ("Received: pistol") and other HUD messages are one widget: they show in both halves.
 - The line of sight of a joining spot is not checked (only the floor level).
 - The pause menu and loading screens are full screen (UI command context); cutscenes with the scene camera are
   full screen. Player 2 has no menu control (only player 1's pad and keyboard drive the menus).

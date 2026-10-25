@@ -317,6 +317,7 @@ __attribute__((naked)) static void spawn_trampoline(void)
 /* ---- state ---- */
 typedef struct { LONG refs; int len, cap; char s[1]; } EStr;
 int split_msg_owner(void);
+static int node_visible(BYTE *n);
 static int view = -1;           /* the view this frame renders (-1: no split this frame) */
 static unsigned frame_no;
 static int swapped;
@@ -615,6 +616,16 @@ static void TSCALL hook_fstart(void *r)
             if (own_node) {
                 own_flags = *(DWORD *)(on + 4);
                 *(DWORD *)(on + 4) |= 0x10000u;
+            }
+            if (splitlog > 1) {   /* (tests: both bodies' node flags in this view, every 2 s per view) */
+                static DWORD last[2];
+                DWORD t = GetTickCount();
+                if (t - last[view] >= 2000) {
+                    last[view] = t;
+                    ts_log("split: view %d: own body %p node %p +4 %08lx +8 %08lx vis %d; partner body %p node %p +4 %08lx +8 %08lx vis %d",
+                           view, (void *)ob, (void *)on, on ? *(DWORD *)(on + 4) : 0, on ? *(DWORD *)(on + 8) : 0, node_visible(on),
+                           (void *)b, (void *)n, n ? *(DWORD *)(n + 4) : 0, n ? *(DWORD *)(n + 8) : 0, node_visible(n));
+                }
             }
             n_fp_hidden = 0;
             BYTE **objs = view == 0 ? own2 : own1;
@@ -1337,7 +1348,7 @@ static void msg_box(BYTE *w, int v)
     if (k == 4)   /* (a free slot) */
         for (k = 0; k < 4 && hid[k]; k++)
             ;
-    int hide = v >= 0 && msg_owner && msg_owner != v + 1 && GetTickCount() - msg_time < 6000;
+    int hide = v >= 0 && msg_owner && msg_owner != v + 1 && GetTickCount() - msg_time < 10000;
     static int nl;
     if (splitlog && hide && nl++ < 10)
         ts_log("split: message box %p hidden for view %d (flags %08lx)", (void *)w, v, *(DWORD *)(w + 0x18));
@@ -1367,6 +1378,36 @@ __attribute__((unused)) static void msg_after_update(BYTE *hud, int v)
     listed = 1;
 }
 
+/* The message lines are drawn by the HUD's console element "ConsoleText" (class 0xd9f300; the text draw
+ * 0x706430 in slot +0x28, as for text elements, vtable 0xdafa10): its draw is skipped in the view of the other player while a player's own message shows. */
+static void (TSCALL *real_text_draw)(void *, void *);
+static int msg_hide_view(int v)
+{
+    return v >= 0 && p2 && msg_owner && msg_owner != v + 1 && GetTickCount() - msg_time < 10000;
+}
+
+static void TSCALL hook_text_draw(BYTE *e, void *arg)
+{
+    if (msg_owner && view >= 0 && msg_hide_view(view)) {
+        EStr *nm = *(EStr **)(e + 0x24);
+        static int nn;
+        if (splitlog > 1 && nn++ < 60) {
+            BYTE *par = *(BYTE **)(e + 0x40);
+            EStr *pn = par ? *(EStr **)(par + 0x24) : NULL;
+            ts_log("split: text draw %p \"%s\" (parent \"%s\") in view %d", (void *)e, nm && !IsBadReadPtr(nm, 0x18) ? nm->s : "?",
+                   pn && !IsBadReadPtr(pn, 0x18) ? pn->s : "?", view);
+        }
+        /* (the pick-up lines go to the HUD's console lines, "ConsoleText", class 0xd9f300) */
+        if (nm && !IsBadReadPtr(nm, 0x18) && (strcmp(nm->s, "ConsoleText") == 0 || strcmp(nm->s, "MessageText") == 0)) {
+            static int n;
+            if (splitlog && n++ < 6)
+                ts_log("split: message text not drawn in view %d", view);
+            return;
+        }
+    }
+    real_text_draw(e, arg);
+}
+
 static void install_msg_hook(void)
 {
     static int done;
@@ -1374,6 +1415,14 @@ static void install_msg_hook(void)
     if (done || !w || IsBadReadPtr(w, 4))
         return;
     done = 1;
+    static const DWORD vts[2] = {0xd9f300, 0xdafa10};
+    for (int i = 0; i < 2; i++)
+        if (*(DWORD *)(vts[i] + 0x28) == 0x706430) {
+            void *vt = (void *)(vts[i] + 0x28);
+            void *t = ts_patch_vtable(&vt, 0, (void *)hook_text_draw);
+            if (t)
+                real_text_draw = t;
+        }
     void *o = ts_patch_vtable(w, 0xc / 4, (void *)hook_msg_add);
     if (o)
         real_msg_add = o;
