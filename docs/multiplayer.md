@@ -189,8 +189,10 @@ A windowed game whose Direct3D device is lost never resets it: `TestCooperativeL
 `D3DERR_DEVICELOST`, the game runs on and draws nothing. On the test PC this happened at the first level load
 in some runs and not in others; the losses lined up with another program entering or leaving exclusive full
 screen on the same PC (Intel UHD 630, 2026-10-25), not with `VIDEO_FullScr` as first thought. Players who
-alt-tab from another full-screen game would hit it too: device-loss recovery (Reset with the game's own
-reset path) is a job for the mod, with its windowed and borderless display settings (as in the Jericho mod).
+alt-tab from another full-screen game would hit it too. The game has no reset path at all (its present step
+0x79bf50 only skips Present while the device is lost), so the mod runs it on Direct3D 9Ex instead
+(native/d3dex.c, on by default): a windowed 9Ex device is not lost. Checked 2026-10-25 with lab/fsgrab, which
+holds exclusive full screen on the test monitor for 3 s: plain D3D9 went black for good, 9Ex kept drawing.
 
 ## 7. Test tools in the mod's DLL
 
