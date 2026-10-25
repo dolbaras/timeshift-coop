@@ -12,11 +12,16 @@
  * motd.gamespy.com fail). Every name under gamespy.com is looked up under a replacement domain instead,
  * by default openspy.net, the community's GameSpy replacement that serves TimeShift (the same change
  * the community's exe edit makes). TS_MASTER=<domain> picks another, TS_MASTER=off keeps gamespy.com.
+ *
+ * Tests, TS_PORT_SHIFT=<n>: the game binds its UDP sockets to port 7777 (and up to 7877 for the LAN list)
+ * as a client too, so a second copy on the same PC could not open its socket. With the variable set those
+ * binds move up by n; the copy then joins a server on 127.0.0.1 (the server keeps 7777).
  */
 #include <winsock2.h>
 #include <iphlpapi.h>
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ts.h"
@@ -84,6 +89,26 @@ static int WINAPI hook_sendto(SOCKET s, const char *buf, int len, int flags, con
     return r;
 }
 
+/* ---- TS_PORT_SHIFT ---- */
+typedef int (WINAPI *bind_t)(SOCKET, const struct sockaddr *, int);
+static bind_t real_bind;
+static int port_shift;
+
+static int WINAPI hook_bind(SOCKET s, const struct sockaddr *name, int len)
+{
+    const struct sockaddr_in *a = (const struct sockaddr_in *)name;
+    if (port_shift && a && len >= (int)sizeof *a && a->sin_family == AF_INET) {
+        unsigned short p = ntohs(a->sin_port);
+        if (p >= 7777 && p <= 7877) {
+            struct sockaddr_in moved = *a;
+            moved.sin_port = htons((u_short)(p + port_shift));
+            ts_log("net: bind port %u moved to %u (TS_PORT_SHIFT)", p, p + port_shift);
+            return real_bind(s, (const struct sockaddr *)&moved, sizeof moved);
+        }
+    }
+    return real_bind(s, name, len);
+}
+
 /* ---- gamespy.com -> replacement domain ---- */
 typedef struct hostent *(WINAPI *gethostbyname_t)(const char *);
 typedef HANDLE (WINAPI *WSAAsyncGetHostByName_t)(HWND, u_int, const char *, char *, int);
@@ -124,6 +149,8 @@ void netfix_install(void)
 {
     real_sendto = (sendto_t)ts_patch_ws2("sendto", (void *)hook_sendto);
     char v[64];
+    if (ts_env("TS_PORT_SHIFT", v, sizeof v) && (port_shift = atoi(v)) != 0)
+        real_bind = (bind_t)ts_patch_ws2("bind", (void *)hook_bind);
     if (ts_env("TS_MASTER", v, sizeof v))
         strcpy(master, _stricmp(v, "off") == 0 ? "" : v);
     if (master[0]) {
