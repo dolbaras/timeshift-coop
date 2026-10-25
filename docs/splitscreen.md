@@ -142,6 +142,8 @@ Player 1's raw input, context and look state are restored afterwards.
 | `TS_SPLIT_P2FACE=1` | tests: player 2 is placed 2.5 m in front of player 1, facing it |
 | `TS_SPLIT_FXVIEW=8,10` | the screen effects (post-effect indices) kept per view; the others show in both halves |
 | `TS_SPLIT_FXSHARED=1` | tests: all screen effects as the game has them (both halves) |
+| `TS_SPLIT_ITEMTEST=<what>,<s>` | tests: <s> seconds after player 2 came in: `list`/`listall` log named objects (30 m / all), `nearitems` puts player 2 on the nearest recorded pick-up nodes one after another, `@name`, `name`, `#x/y/z` ("+"-separated, `!` = player 1) put a player on that object or spot; ammunition and life are logged before and 3 s after each |
+| `TS_SPLITLOG=3` | tests: also every scene node made with its template, and the callers of a pick-up |
 | `TS_SPLIT_HUDNEXT=0` | tests: the HUD weapon panel takes player 2 on the other frame parity (default 1 is right) |
 
 Pad assignment is `gamepad.c`'s: player 1 gets the first connected pad (or `[Gamepad] Pad=`), player 2 the next one.
@@ -230,6 +232,15 @@ player 1 to move, time-power effects showed in one half only, split screen with 
 | Pick-ups | **not shown in a run**. By code the pick-ups are methods of the player that touched them (`0x441c90`, `0x4433d0`). Tries: an `item_arifle` spawned on player 2's spot crashed in the node creation (wrong transform; the test was removed, `20261025-122418`); `$player2.MoveTo("pistol1")` (a placed `item_arifle`) did nothing; player 2 walking towards the dropped weapons was stopped after 2 m | `20261025-122418`, `20261025-122936`, `20261025-123537` |
 | Saves | `$saves_mng.AutoSave(-1)` in split screen: Ok, `CanSave` true; `$saves_mng.LoadLastGame()`: the level reloads, no crash, split screen goes on and player 2 comes back next to player 1 (placed on its trail), **without weapons** (the save holds player 1's equipment only; player 2's weapon panel is empty, no first-person weapon, `Y` brings none). Removing and remaking player 2 after the load hung the game (`20261025-123537`), so player 2 stays unarmed; if a load gives it a new body, its recorded objects are forgotten | `20261025-122936` `shot175/195.png`, `20261025-124206` `shot183/193.png` and log (`player 2 weapon set .. total 0.0`) |
 
+### Round 7 (2026-10-25, main PC; player 2's equipment after a load, the time-power bar, pick-ups)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Player 2's equipment after a load | after a level load player 2 without a weapon gets its weapons and hands made again with the player's own set-up (vtable +0x25c = `0x442840`: weapon set-up `0x4478e0` on player +0x328, then the hands), run as player 2 with the spawn hooks in their player 2 mode (own first-person geometry, recorded objects). At every level start player 2 gets player 1's three weapon slots (player +0x3a8/+0x3ac/+0x3b0, what the level script or the save gave player 1) through `SetupWeapon` when they differ (never an empty set). After `LoadLastGame`: `player 2's weapons made again after the load: ok, 11 objects`, `Y` brings the rifle (240), firing takes it to 220; after a level change (`ts2_city_part03`) player 2 keeps its weapons (rifle 210) | `20261025-130230` log 13:05:27-13:05:47, `shot197.png`; `20261025-141144` `shot197.png` (player 2 firing after the load), `shot272.png` (part03, rifle) |
+| Time-power bar | the bar is the TimeGrenadeBar widget (class `0xda19f0`, update `0x5b8610`): it puts the player's energy (player +0x2ac) into its ProgressTime bar's target (+0x298 -> +0x108), and the bar moves its shown value (+0x10c) there over some frames in its own update. With one widget for both views the shown value ended between both players' energies. The shown value is now set to the view's player's energy at once (its motion stopped). The power icons stay shared (the world's time) | `20261025-141144` `shot128/132/138.png`: player 1's bar full, player 2's 25 % / empty / 20 % (log: player 2 0.97 -> 0 -> 0.36, player 1 1.00), the stop icon lit in both halves |
+| Pick-ups | **not shown for player 2.** The way found: a pick-up item calls the toucher's vtable +0x17c (`0x420470`: item class check, +0x2a4 decides, +0x284 takes), from the item's own method `0x8ad570`; the mod logs each call with the player. One real pick-up by player 1 was logged (`pick-up .. by player 1: taken`, `20261025-134528`, 13:47:23, next to the level's ammo box). Player 2 was put on the level's pick-ups found in the script name table and the world's scene nodes (ammo box `s3d_refLocator55|ammobox`, the dropped pistol prop `wpn_drop_pistol`, a policeman's rifle dropped with the game's `DropWeapon()`, ground objects), with `X` (use) pressed: no +0x17c call for player 2 at all. What lets an item notice its toucher (possibly the local player only) is the next step | `20261025-131823`, `-132055`, `-132850`, `-133456`, `-134528`, `-134917`, `-135144` |
+| Join spot at a level start | trail spots must be beside the partner (1-12 m away horizontally, within 1.2 m in height); spots are tried at 1.6 m and 0.9 m. `ts2_city_part03` starts player 1 about 100 m up on something moving (its height swings by half a metre) with the ground below every spot around it: player 2 waits on the ground below and is placed again every 2 s (putting it on player 1's own spot pushed player 1 off and both died) | `20261025-140722`, `20261025-141144` log 14:15:38 |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
@@ -242,11 +253,10 @@ player 1 to move, time-power effects showed in one half only, split screen with 
   (score, team, respawn) know one local player per machine. Plan: on the host, keep player 2 out of replication
   and send it to clients as a `player_mp` puppet (as remote players are), with its position from the host's
   player 2. The menu's split screen starts a single-player game, so it never meets a network session.
-- **Player 2 after loading a save has no weapons** (round 6). A way to give it a weapon set again (the player's
-  weapon manager init `0x4478e0` as player 2, or script `SetupWeapon` once its weapon objects exist) is next.
-- **Time-power bar** shared while a power runs (round 6); the line of sight of the joining spot is not checked
-  (only the floor level).
-- Pick-ups going to the right player: by code yes, not seen in a run.
+- **Pick-ups for player 2**: no pick-up item ever called player 2's take method (round 7); the item's touch
+  detection is to be found (`0x8ad570` is called from the items' vtables).
+- **`ts2_city_part03` start**: player 1 starts 100 m up on something moving; player 2 waits on the ground below
+  until a spot beside player 1 holds. The line of sight of a joining spot is not checked (only the floor level).
 - The pause menu and loading screens are full screen (UI command context); cutscenes with the scene camera are
   full screen. Player 2 has no menu control (only player 1's pad and keyboard drive the menus).
 - Each view runs at half the frame rate; no frame cap yet.

@@ -244,6 +244,21 @@ static int crosshair_alive(int who, int i)
     return n && !IsBadReadPtr(n, 0x1c4) && *(BYTE **)(n + 0x1c0) == crs[who][i].geo;
 }
 
+/* Tests: the scene nodes of the level's pick-ups (templates "item_*"), recorded at their creation, so the item
+ * test can put player 2 on them (TS_SPLIT_ITEMTEST=nearitems,<s>). */
+#define MAX_ITEMS 96
+static struct { BYTE *node, *geo; char name[28]; } items_seen[MAX_ITEMS];
+static int n_items_seen;
+
+static void record_item(BYTE *tpl, BYTE *node)
+{
+    if (!tpl || !node || strncmp((char *)(tpl + 0x30), "item_", 5) != 0 || n_items_seen >= MAX_ITEMS)
+        return;
+    items_seen[n_items_seen].node = node;
+    items_seen[n_items_seen].geo = *(BYTE **)(node + 0x1c0);
+    snprintf(items_seen[n_items_seen++].name, 28, "%s", (char *)(tpl + 0x30));
+}
+
 static void *TSCALL hook_mknode(void *world, BYTE *tpl, void *xform)
 {
     BYTE *geo = tpl ? *(BYTE **)(tpl + 0xb8) : NULL;
@@ -273,6 +288,15 @@ static void *TSCALL hook_mknode(void *world, BYTE *tpl, void *xform)
             geo2[n_geo2].geo = geo, geo2[n_geo2++].node2 = r;
     }
     record_crosshair(tpl, r);
+    record_item(tpl, r);
+    if (splitlog > 2 && tpl)   /* (tests, TS_SPLITLOG=3: every node's template) */
+        ts_log("split: node template \"%s\" -> %p", (char *)(tpl + 0x30), (void *)r);
+    if (splitlog > 2 && tpl && r) {   /* (where the node keeps its template) */
+        static int n;
+        for (int off = 0; off < 0x238 && n < 40; off += 4)
+            if (*(BYTE **)(r + off) == tpl)
+                n++, ts_log("split: node %p keeps template %p at +%#x", (void *)r, (void *)tpl, off);
+    }
     if (spawning_p2 || (splitlog && mark))
         ts_log("split: node for template \"%s\" geometry %p in use %08lx -> %p (own geometry %p)",
                tpl ? (char *)(tpl + 0x30) : "?", (void *)geo, mark, (void *)r, r ? *(void **)(r + 0x1c0) : NULL);
@@ -1146,6 +1170,25 @@ static void TSCALL hook_event(void *pl, BYTE *ev)
     real_event(pl, ev);
 }
 
+/* Pick-ups: the item calls the toucher's vtable +0x17c (0x420470: the item's class checked, +0x2a4 decides,
+ * +0x284 takes it). Logged with the player it went to. */
+static int (TSCALL *real_pickup)(void *, void *);
+static int TSCALL hook_pickup(void *pl, void *item)
+{
+    int r = real_pickup(pl, item);
+    static int n;
+    if (n++ < 200) {
+        ts_log("split: pick-up %p by player %d (%p): %s", item, pl == p2 ? 2 : 1, pl, r ? "taken" : "not taken");
+        if (splitlog > 2 && n < 4) {   /* (tests: the callers, code addresses on the stack) */
+            DWORD *sp = (DWORD *)__builtin_frame_address(0);
+            for (int k = 0; k < 64; k++)
+                if (sp[k] > 0x401000 && sp[k] < 0xd11000)
+                    ts_log("split:   pick-up stack +%#x %08lx", k * 4, sp[k]);
+        }
+    }
+    return r;
+}
+
 /* The destructor clears both player pointers: player 2's must leave them on player 1. */
 static void *TSCALL hook_dtor(void *pl, int flags)
 {
@@ -1208,13 +1251,16 @@ static void trail_add(int who, BYTE *pl)
         trail[who].n++;
 }
 
-/* The newest spot at least 4 samples (2 s) old and `away` m from where the partner is now. */
+/* The newest spot at least 4 samples (2 s) old, `away` m beside where the partner is now, not more than 12 m
+ * (a level start can move the player after its first frames: in ts2_city_part03 player 1 stood 105 m lower
+ * first, and player 2 was put there). */
 static int trail_pick_away(int who, const float *now_pos, float *out, float away)
 {
     for (int age = 4; age < trail[who].n; age++) {
         float *q = trail[who].p[(trail[who].head - 1 - age + 2 * TRAIL) % TRAIL];
-        float dx = q[0] - now_pos[0], dy = q[1] - now_pos[1], dz = q[2] - now_pos[2];
-        if (dx * dx + dy * dy + dz * dz >= away * away) {
+        float dx = q[0] - now_pos[0], dy = q[1] - now_pos[1], dz = q[2] - now_pos[2], h2 = dx * dx + dz * dz;
+        /* (beside, not above or below: in ts2_city_part03 a spot 2 m above player 1 put player 2 on its head) */
+        if (h2 >= away * away && h2 <= 12.0f * 12.0f && dy * dy < 1.2f * 1.2f) {
             memcpy(out, q, 12);
             return 1;
         }
@@ -1232,8 +1278,9 @@ static int trail_own(int who, const float *partner_pos, float *out)
 {
     for (int age = 4; age < trail[who].n; age++) {
         float *q = trail[who].p[(trail[who].head - 1 - age + 2 * TRAIL) % TRAIL];
-        float dx = q[0] - partner_pos[0], dy = q[1] - partner_pos[1], dz = q[2] - partner_pos[2];
-        if (dx * dx + dy * dy + dz * dz <= 25.0f * 25.0f) {
+        float dx = q[0] - partner_pos[0], dy = q[1] - partner_pos[1], dz = q[2] - partner_pos[2], h2 = dx * dx + dz * dz;
+        /* (beside the partner on its level, not on its head: a level start put player 2 2 m above player 1) */
+        if (h2 <= 25.0f * 25.0f && h2 >= 1.0f && dy * dy < 1.2f * 1.2f) {
             memcpy(out, q, 12);
             return 1;
         }
@@ -1250,6 +1297,9 @@ static void trail_clear(void)
  * +0x210 as that player. Only spots someone stood on: the partner's trail (2 s old, 1.5 m away), else one's own
  * trail near the partner, else the partner's own spot (a fixed offset beside it could be inside a wall).
  * TS_SPLIT_P2FACE=1 (tests): player 2 2.5 m in front of player 1, facing it. */
+static DWORD place_retry;
+static BYTE *place_retry_who;
+
 static void put_player(BYTE *pl, float *pos, float *dir)
 {
     if (pl == p2) {
@@ -1291,26 +1341,40 @@ static void place_player(BYTE *pl, BYTE *partner)
         static const char *cname[6] = {"behind the partner", "right of the partner", "left of the partner",
                                        "behind right of the partner", "behind left of the partner", "ahead of the partner"};
         float rx = -az, rz = ax;   /* (the partner's right on the ground) */
-        for (int c = 0; c < 6; c++) {
-            float want[3] = {pp[0] + (ax * cand[c][0] + rx * cand[c][1]) * 1.6f, pp[1] + 0.3f,
-                             pp[2] + (az * cand[c][0] + rz * cand[c][1]) * 1.6f};
-            memcpy(pos, want, sizeof pos);
-            put_player(pl, pos, dir);
-            float gx = pos[0] - want[0], gz = pos[2] - want[2], dx = pos[0] - pp[0], dz = pos[2] - pp[2];
-            int ok = fabsf(pos[1] - pp[1]) < 0.45f && gx * gx + gz * gz < 0.25f && dx * dx + dz * dz > 1.0f;
-            BYTE *pn = *(BYTE **)(pl + 0x230);
-            float *np = pn ? (float *)(pn + 0x68) : pos;
-            ts_log("split: player %d spot %s: asked %.2f %.2f %.2f, got %.2f %.2f %.2f (node %.2f %.2f %.2f)%s", pl == p2 ? 2 : 1,
-                   cname[c], want[0], want[1], want[2], pos[0], pos[1], pos[2], np[0], np[1], np[2], ok ? "" : " (not taken)");
-            how = cname[c];
-            if (ok)
-                break;
-        }
+        /* (two rings, 1.6 m and 0.9 m. ts2_city_part03 starts player 1 100 m up on something moving (its height
+         * swings by half a metre) with the ground below every spot around it: putting player 2 on player 1's own
+         * spot pushed player 1 off and both died, so then player 2 stays on the ground below for now (the last
+         * spot tried) and is placed again every 2 s until a spot beside player 1 holds) */
+        int ok = 0;
+        for (int ring = 0; ring < 2 && !ok; ring++)
+            for (int c = 0; c < 6 && !ok; c++) {
+                float r = ring ? 0.9f : 1.6f;
+                float want[3] = {pp[0] + (ax * cand[c][0] + rx * cand[c][1]) * r, pp[1] + 0.3f,
+                                 pp[2] + (az * cand[c][0] + rz * cand[c][1]) * r};
+                memcpy(pos, want, sizeof pos);
+                put_player(pl, pos, dir);
+                float gx = pos[0] - want[0], gz = pos[2] - want[2], dx = pos[0] - pp[0], dz = pos[2] - pp[2];
+                ok = fabsf(pos[1] - pp[1]) < 0.45f && gx * gx + gz * gz < 0.25f && dx * dx + dz * dz > r * r * 0.36f;
+                if (splitlog)
+                    ts_log("split: player %d spot %s (%.1f m): asked %.2f %.2f %.2f, got %.2f %.2f %.2f%s", pl == p2 ? 2 : 1, cname[c], r,
+                       want[0], want[1], want[2], pos[0], pos[1], pos[2], ok ? "" : " (not taken)");
+                how = cname[c];
+            }
+        int again = place_retry != 0;   /* (a retry: logged once) */
+        if (!ok) {
+            how = "on the ground below the partner (no floor beside it; tried again every 2 s)";
+            place_retry = GetTickCount() + 2000;
+            place_retry_who = pl;
+            if (again)
+                return;
+        } else
+            place_retry = 0;
         ts_log("split: player %d placed %s at %.2f %.2f %.2f (partner at %.2f %.2f %.2f)", pl == p2 ? 2 : 1, how, pos[0],
                pos[1], pos[2], pp[0], pp[1], pp[2]);
         return;
     }
     put_player(pl, pos, dir);
+    place_retry = 0;
     ts_log("split: player %d placed %s at %.2f %.2f %.2f (partner at %.2f %.2f %.2f)", pl == p2 ? 2 : 1, how, pos[0],
            pos[1], pos[2], pp[0], pp[1], pp[2]);
 }
@@ -1495,12 +1559,24 @@ __attribute__((used)) void __cdecl split_hud_update(int i, void *w, float dt)
         return;
     }
     int v = next == hud_view1 ? 1 : 0;
+    /* The time-power bar (TimeGrenadeBar, class 0xda19f0; its ProgressTime bar = widget +0x298) puts the player's
+     * energy (player +0x2ac) into the bar's target (+0x108); the bar's own update moves the shown value (+0x10c)
+     * towards it over some frames. With one widget for both views the shown value ended between the two players'
+     * energies (both bars went down while only player 2 used a power), so the shown value is set to this view's
+     * player's energy at once. */
+    BYTE *bar = hud_vt[i][0] == 0xda19f0 ? *(BYTE **)((BYTE *)w + 0x298) : NULL;
+    if (bar && IsBadReadPtr(bar, 0x120))
+        bar = NULL;
     BYTE *pa = PLAYER_A, *pb = PLAYER_B;
     if (v == 1)
         PLAYER_A = PLAYER_B = p2;
     hud_real[i](w, dt);
     PLAYER_A = pa;
     PLAYER_B = pb;
+    if (bar) {
+        *(float *)(bar + 0x10c) = *(float *)(bar + 0x108);
+        *(float *)(bar + 0x110) = 0;
+    }
 }
 
 /* One thunk per widget class: eax = its index, then the common part calls split_hud_update(i, this, dt). */
@@ -1552,6 +1628,235 @@ static BYTE *ammo_rec(BYTE *pl, int which, BYTE **set_out)
         return NULL;
     BYTE *rec = ((BYTE *(TSCALL *)(void *, int))(*(void ***)vb)[0x4c / 4])(vb, which);
     return rec && !IsBadReadPtr(rec, 0x24) ? rec : NULL;
+}
+
+/* Player 2's weapons and hands made again (after a load took them), as at its spawn: the player's weapon set-up
+ * (vtable +0x25c, thiscall, no arguments) run as player 2 with the spawn hooks in their player 2 mode. */
+static void p2_rearm(void)
+{
+    if (!p2 || (DWORD)(*(void ***)p2)[0x25c / 4] != 0x442840) {
+        ts_log("split: player 2's weapons not made again (other exe?)");
+        return;
+    }
+    n_own2 = 0;
+    n_crs[1] = 0;
+    spawning_p2 = 1;
+    p2_enter();
+    int ok = ((int (TSCALL *)(void *))(*(void ***)p2)[0x25c / 4])(p2);
+    p2_leave();
+    spawning_p2 = 0;
+    BYTE *rec = ammo_rec(p2, 0, NULL);
+    ts_log("split: player 2's weapons made again after the load: %s, %d objects, weapon %p total %.1f magazine %d",
+           ok ? "ok" : "failed", n_own2, (void *)rec, rec ? *(float *)(rec + 8) : -1.0f, rec ? *(int *)(rec + 0xc) : -1);
+}
+
+/* Player 2 gets player 1's three weapon slots (player +0x3a8, +0x3ac, +0x3b0) when they differ. */
+static void p2_loadout(BYTE *p1)
+{
+    if (!p1 || !p2)
+        return;
+    int *a = (int *)(p1 + 0x3a8), *b = (int *)(p2 + 0x3a8);
+    ts_log("split: weapon slots at the level start: player 1 %d %d %d, player 2 %d %d %d", a[0], a[1], a[2], b[0], b[1], b[2]);
+    if ((a[0] == b[0] && a[1] == b[1] && a[2] == b[2]) || !(a[0] | a[1] | a[2]))   /* (never takes player 2's away) */
+        return;
+    char ssl[96], out[64];
+    snprintf(ssl, sizeof ssl, "$player2.SetupWeapon(%d, %d, %d)", a[0], a[1], a[2]);
+    ts_script_run(ssl, out, sizeof out);
+    ts_log("split: player 2 gets player 1's weapons %d %d %d (it had %d %d %d): %s", a[0], a[1], a[2], b[0], b[1], b[2], out);
+}
+
+/* Tests (TS_SPLIT_ITEMTEST=list,<s> or <name>,<s>): <s> seconds after player 2 came in, "list" logs the named
+ * objects within 30 m of player 1 (script name table, entity node position); a name moves player 2 onto that
+ * placed object (a pick-up of the level), to see who gets what. Each player's ammunition and life are logged
+ * before and 3 s after. */
+static BYTE *named_entity(const char *name)
+{
+    BYTE *mgr = *(BYTE **)0xebedec;
+    if (!mgr)
+        return NULL;
+    BYTE **items = *(BYTE ***)(mgr + 0x14);
+    int n = *(int *)(mgr + 0x18);
+    for (int i = 0; i < n; i++) {
+        EStr *m = *(EStr **)(items[i] + 4);
+        if (m && strcmp(m->s, name) == 0)
+            return *(BYTE **)(items[i] + 0xc);
+    }
+    return NULL;
+}
+
+static int item_next, item_step;
+static int near_idx[8], n_near, near_at;
+
+/* The next of the nearest recorded pick-up nodes (still existing: geometry unchanged) onto which player 2 goes. */
+static int near_move(void)
+{
+    while (near_at < n_near) {
+        int k = near_idx[near_at++];
+        BYTE *n = items_seen[k].node;
+        if (!n || IsBadReadPtr(n, 0x1c4) || *(BYTE **)(n + 0x1c0) != items_seen[k].geo)
+            continue;
+        float pos[3], dir[3] = {-0.89f, -0.45f, 0};
+        memcpy(pos, n + 0x68, 12);
+        pos[1] += 0.3f;
+        put_player(p2, pos, dir);
+        ts_log("split: item test: player 2 put on %s (node %p) at %.2f %.2f %.2f", items_seen[k].name, (void *)n, pos[0], pos[1],
+               pos[2]);
+        return 1;
+    }
+    return 0;
+}
+
+/* The next object of a "+"-separated list ("@name": onto it, "name": 1.2 m beside it facing it); 0: none left. */
+static int item_move(const char *list, int *at)
+{
+    char tok[64];
+    const char *t = list + *at;
+    if (!*t)
+        return 0;
+    const char *end = strchr(t, '+');
+    int len = end ? (int)(end - t) : (int)strlen(t);
+    if (len <= 0 || len >= (int)sizeof tok)
+        return 0;
+    memcpy(tok, t, len);
+    tok[len] = 0;
+    *at += len + (end ? 1 : 0);
+    int one = tok[0] == '!';   /* (!name: player 1 instead) */
+    int exact = tok[one] == '@';
+    BYTE *who = one ? (PLAYER_B != p2 ? PLAYER_B : NULL) : p2;
+    if (!who)
+        return 1;
+    if (tok[one] == '#') {   /* (#x/y/z: a spot) */
+        float pos[3], dir[3] = {-0.89f, -0.45f, 0};
+        if (sscanf(tok + one + 1, "%f/%f/%f", &pos[0], &pos[1], &pos[2]) == 3) {
+            put_player(who, pos, dir);
+            ts_log("split: item test: player %d put on %.2f %.2f %.2f, got %.2f %.2f %.2f", one ? 1 : 2, pos[0], pos[1], pos[2],
+                   ((float *)(*(BYTE **)(who + 0x230) + 0x68))[0], ((float *)(*(BYTE **)(who + 0x230) + 0x68))[1],
+                   ((float *)(*(BYTE **)(who + 0x230) + 0x68))[2]);
+        }
+        return 1;
+    }
+    BYTE *e = named_entity(tok + one + exact), *en = e && !IsBadReadPtr(e, 0x234) ? *(BYTE **)(e + 0x230) : NULL;
+    if (!en || IsBadReadPtr(en, 0x74)) {
+        ts_log("split: item test: no object \"%s\"", tok);
+        return 1;
+    }
+    /* (1.2 m from it, facing it and a bit down: some need the use button while looked at) */
+    float pos[3], dir[3] = {-0.89f, -0.45f, 0};
+    memcpy(pos, en + 0x68, 12);
+    if (!exact)
+        pos[0] += 1.2f;
+    pos[1] += 0.3f;
+    put_player(who, pos, dir);
+    ts_log("split: item test: player %d put on \"%s\" at %.2f %.2f %.2f", one ? 1 : 2, tok, pos[0], pos[1], pos[2]);
+    return 1;
+}
+
+static void item_test(BYTE *p1)
+{
+    static char what[256];
+    static int secs = -1, stage_t;
+    char v[300];
+    if (secs == -1) {
+        secs = -2;
+        if (ts_env("TS_SPLIT_ITEMTEST", v, sizeof v)) {
+            char *c = strchr(v, ',');
+            if (c)
+                *c = 0, snprintf(what, sizeof what, "%s", v), secs = atoi(c + 1);
+        }
+    }
+    if (secs < 0 || !p2 || !p1 || stage_t > 1)
+        return;
+    int age = (int)(GetTickCount() - p2_born);
+    BYTE *r1 = ammo_rec(p1, 0, NULL), *r2 = ammo_rec(p2, 0, NULL);
+    if (stage_t == 0 && age >= secs * 1000) {
+        stage_t = 1;
+        ts_log("split: item test before: player 1 ammo %.1f life %.1f slots %d %d %d, player 2 ammo %.1f life %.1f slots %d %d %d",
+               r1 ? *(float *)(r1 + 8) : -1.0f, *(float *)(p1 + 0x234), *(int *)(p1 + 0x3a8), *(int *)(p1 + 0x3ac),
+               *(int *)(p1 + 0x3b0), r2 ? *(float *)(r2 + 8) : -1.0f, *(float *)(p2 + 0x234), *(int *)(p2 + 0x3a8),
+               *(int *)(p2 + 0x3ac), *(int *)(p2 + 0x3b0));
+        BYTE *n1 = *(BYTE **)(p1 + 0x230);
+        float *pp = n1 ? (float *)(n1 + 0x68) : NULL;
+        if ((strcmp(what, "list") == 0 || strcmp(what, "listall") == 0) && pp) {
+            float lim = what[4] ? 100000.0f : 30.0f;
+            BYTE *mgr = *(BYTE **)0xebedec;
+            BYTE **items = mgr ? *(BYTE ***)(mgr + 0x14) : NULL;
+            int n = mgr ? *(int *)(mgr + 0x18) : 0;
+            for (int i = 0; i < n; i++) {
+                EStr *m = *(EStr **)(items[i] + 4);
+                BYTE *e = *(BYTE **)(items[i] + 0xc), *en = e && !IsBadReadPtr(e, 0x234) ? *(BYTE **)(e + 0x230) : NULL;
+                if (!m || !en || IsBadReadPtr(en, 0x74))
+                    continue;
+                float *q = (float *)(en + 0x68), dx = q[0] - pp[0], dy = q[1] - pp[1], dz = q[2] - pp[2];
+                if (dx * dx + dy * dy + dz * dz < lim * lim)
+                    ts_log("split: item test: \"%s\" %p at %.2f %.2f %.2f (%.1f m)", m->s, (void *)e, q[0], q[1], q[2],
+                           sqrtf(dx * dx + dy * dy + dz * dz));
+            }
+            stage_t = 2;
+            return;
+        }
+        item_next = 0;
+        if (strcmp(what, "nearitems") == 0 && pp) {
+            /* (the world's scene nodes (world [0xfcacdc] +0x2ad0, 0xa8c nodes of 0x238 bytes, template at +0x1d0,
+             * its name at +0x30): the pick-ups among them recorded too) */
+            BYTE *w = *(BYTE **)0xfcacdc, *base = w ? *(BYTE **)(w + 0x2ad0) : NULL;
+            for (int i = 0; base && i < 0xa8c && n_items_seen < MAX_ITEMS; i++) {
+                BYTE *n = base + i * 0x238, *tpl = *(BYTE **)(n + 0x1d0);
+                if (!tpl || IsBadReadPtr(tpl, 0x50))
+                    continue;
+                const char *tn = (const char *)(tpl + 0x30);
+                float *q = (float *)(n + 0x68), dx = q[0] - pp[0], dz = q[2] - pp[2];
+                if (splitlog > 2 && dx * dx + dz * dz < 40.0f * 40.0f)
+                    ts_log("split: item test: world node %d \"%.40s\" at %.2f %.2f %.2f", i, tn, q[0], q[1], q[2]);
+                if (strncmp(tn, "item_", 5) == 0 || strstr(tn, "ammo") || strstr(tn, "medkit") || strncmp(tn, "wpn_drop", 8) == 0) {
+                    int dup = 0;
+                    for (int k = 0; k < n_items_seen; k++)
+                        dup |= items_seen[k].node == n;
+                    if (!dup) {
+                        items_seen[n_items_seen].node = n;
+                        items_seen[n_items_seen].geo = *(BYTE **)(n + 0x1c0);
+                        snprintf(items_seen[n_items_seen++].name, 28, "%s", tn);
+                    }
+                }
+            }
+            /* (the 8 nearest of the recorded pick-ups, nearest first) */
+            float d[MAX_ITEMS];
+            int alive = 0;
+            for (int k = 0; k < n_items_seen; k++) {
+                BYTE *n = items_seen[k].node;
+                d[k] = 1e30f;
+                if (!n || IsBadReadPtr(n, 0x1c4) || *(BYTE **)(n + 0x1c0) != items_seen[k].geo)
+                    continue;
+                float *q = (float *)(n + 0x68), dx = q[0] - pp[0], dy = q[1] - pp[1], dz = q[2] - pp[2];
+                d[k] = dx * dx + dy * dy + dz * dz;
+                alive++;
+                ts_log("split: item test: pick-up %s at %.2f %.2f %.2f (%.1f m)", items_seen[k].name, q[0], q[1], q[2], sqrtf(d[k]));
+            }
+            n_near = 0;
+            while (n_near < 8 && n_near < alive) {
+                int best = -1;
+                for (int k = 0; k < n_items_seen; k++)
+                    if (d[k] < 1e29f && (best < 0 || d[k] < d[best]))
+                        best = k;
+                if (best < 0)
+                    break;
+                near_idx[n_near++] = best;
+                d[best] = 1e30f;
+            }
+            near_at = 0;
+            if (!near_move())
+                stage_t = 2;
+            return;
+        }
+        item_move(what, &item_next);
+    } else if (stage_t == 1 && age >= (secs + 3 * (item_step + 1)) * 1000) {
+        item_step++;
+        ts_log("split: item test after: player 1 ammo %.1f life %.1f slots %d %d %d, player 2 ammo %.1f life %.1f slots %d %d %d",
+               r1 ? *(float *)(r1 + 8) : -1.0f, *(float *)(p1 + 0x234), *(int *)(p1 + 0x3a8), *(int *)(p1 + 0x3ac),
+               *(int *)(p1 + 0x3b0), r2 ? *(float *)(r2 + 8) : -1.0f, *(float *)(p2 + 0x234), *(int *)(p2 + 0x3a8),
+               *(int *)(p2 + 0x3ac), *(int *)(p2 + 0x3b0));
+        if (strcmp(what, "nearitems") == 0 ? !near_move() : !item_move(what, &item_next))
+            stage_t = 2;
+    }
 }
 
 /* main thread, script tick */
@@ -1613,6 +1918,15 @@ static void split_tick(float dt)
     }
     if (stage < 3)
         return;
+    item_test(PLAYER_B != p2 ? PLAYER_B : NULL);
+    if (place_retry && (int)(GetTickCount() - place_retry) >= 0 && p2 && PLAYER_B && PLAYER_B != p2) {
+        if (place_retry_who == p2)
+            place_player(p2, PLAYER_B);
+        else if (place_retry_who == PLAYER_B)
+            place_player(PLAYER_B, p2);
+        else
+            place_retry = 0;
+    }
     BYTE *p1 = PLAYER_B && *(DWORD *)PLAYER_B == PLAYER_VTBL && PLAYER_B != p2 ? PLAYER_B : NULL;
     if (p1 != p1_seen) {
         p1_seen = p1;
@@ -1654,25 +1968,19 @@ static void split_tick(float dt)
         && (walked || now - p1_since >= (DWORD)p2_delay * 1000 + 3000)) {
         placed = 1;
         /* Loading a save rebuilds the players' equipment from the save, which holds player 1's only: player 2
-         * comes back with a new body and without its weapons (an empty weapon, no first-person model). Removing
-         * and remaking it then hung the game (run 20261025-123537), so it stays, unarmed; its recorded objects
-         * (first-person weapons, crosshairs) are gone and forgotten, so new objects at their addresses are not
-         * taken for player 2's. */
+         * comes back without its weapons (an empty weapon, no first-person model; removing and remaking player 2
+         * then hung the game, run 20261025-123537). Its weapons are made again with the player's own weapon set-up
+         * (vtable +0x25c, 0x442840: weapons and hands, as at its spawn), as player 2. Then, at every level start,
+         * player 2 gets player 1's three weapon slots (+0x3a8, +0x3ac, +0x3b0: what the level script or the save
+         * gave player 1) through SetupWeapon when they differ. */
         BYTE *rec = ammo_rec(p2, 0, NULL);
-        int body_new = p2_body && body_of(p2) != p2_body;
         int unarmed = !rec || (*(float *)(rec + 8) <= 0 && *(int *)(rec + 0xc) <= 0);
-        if ((int)(now - p2_born) <= 2000)
-            ;   /* (the one just spawned and placed) */
-        else {
-            if (body_new) {
-                ts_log("split: player 2 after the level load: new body%s; its old objects forgotten",
-                       unarmed ? ", no weapon (not in the save)" : "");
-                n_own2 = 0;
-                n_crs[1] = 0;
-                p2_body = body_of(p2);
-            }
+        if ((int)(now - p2_born) > 2000) {
+            if (unarmed)
+                p2_rearm();
             place_p2(p1);
         }
+        p2_loadout(p1);
     }
 }
 
@@ -1737,6 +2045,8 @@ void split_install(void)
              + patch_slot(PLAYER_VTBL, SLOT_DTOR, (void *)hook_dtor, (void **)&real_dtor)
              + patch_slot(PLAYER_VTBL, 0x2e8 / 4, (void *)hook_die, (void **)&real_die)
              + patch_slot(PLAYER_VTBL, 0x22c / 4, (void *)hook_event, (void **)&real_event)
+             + (((DWORD *)PLAYER_VTBL)[0x17c / 4] == 0x420470
+                && patch_slot(PLAYER_VTBL, 0x17c / 4, (void *)hook_pickup, (void **)&real_pickup))
              + patch_slot(IM_VTBL, SLOT_EVAL, (void *)hook_eval, (void **)&real_eval);
     if (stage >= 3 || !forced)
         for (int i = 0; i < 5; i++) {   /* (weapons: 0x447a2e, 0x447a55; hands 0x442868; body: 0x4074b4, 0x4074f9) */
