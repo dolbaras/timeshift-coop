@@ -184,7 +184,8 @@ static void console_pump(void)
         else {
             /* "@all ", "@peers ", "@srv ": send to the other machines of a network game (coopnet.c) */
             if (!coopnet_console(texts[i], out, sizeof out) && !storysync_console(texts[i], out, sizeof out)
-                && !aisync_console(texts[i], out, sizeof out) && !campaign_console(texts[i], out, sizeof out))
+                && !aisync_console(texts[i], out, sizeof out) && !campaign_console(texts[i], out, sizeof out)
+                && !coopreverse_console(texts[i], out, sizeof out))
                 ts_script_run(texts[i], out, sizeof out);
             if (con_sock != INVALID_SOCKET)
                 sendto(con_sock, out, (int)strlen(out), 0, (struct sockaddr *)&from[i], sizeof from[i]);
@@ -198,12 +199,12 @@ static void (TSCALL *orig_update_delayed)(void *, float) = (void *)0x8fbf70;
 static LONG tick_logged;
 
 /* Per-frame callbacks of other parts of the mod (main thread, after the script delayed calls). */
-static ts_frame_fn frame_fns[8];
+static ts_frame_fn frame_fns[16];   /* (16: campaign.c and coopreverse.c added theirs) */
 static int n_frame_fns;
 
 int ts_frame_add(ts_frame_fn fn)
 {
-    if (n_frame_fns >= 8 || !ts_tick_install())
+    if (n_frame_fns >= 16 || !ts_tick_install())
         return 0;
     frame_fns[n_frame_fns++] = fn;
     return 1;

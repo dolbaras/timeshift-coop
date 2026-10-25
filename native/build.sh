@@ -5,5 +5,5 @@ cd "$(dirname "$0")"
 ZIG="${ZIG:-../../../../tools/zig/zig-x86_64-windows-0.16.0/zig.exe}"
 mkdir -p build
 "$ZIG" cc -target x86-windows-gnu -O2 -fno-omit-frame-pointer -shared -o build/dinput8.dll \
-  -DWIN32 proxy.c compat.c d3dex.c display.c testmode.c console.c coopnet.c coopsession.c netfix.c gamepad.c split.c aisync.c timesync.c storysync.c campaign.c dinput8.def \
+  -DWIN32 proxy.c compat.c d3dex.c display.c testmode.c console.c coopnet.c coopsession.c netfix.c gamepad.c split.c aisync.c timesync.c storysync.c campaign.c coopreverse.c dinput8.def \
   -luser32 -lkernel32 -lws2_32 -liphlpapi

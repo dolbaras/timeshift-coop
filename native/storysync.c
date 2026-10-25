@@ -468,7 +468,10 @@ static int classify(const char *src, ClassRec *r, char *out, size_t cap, int *n_
                     r->ev_story[cur] = 1;
                 const char *c;
                 int len = callee_of(code, &c);
-                if (len && in_list(host_calls, c, len)) {
+                /* campaign.c (TS_CAMPAIGN, not yet run): SetSpeed is the force-field/wind domains' only setter in the
+                 * levels; it then runs on clients too (their players are pushed by their own copy of the domain) */
+                if (len && in_list(host_calls, c, len)
+                    && !(len == 8 && strncmp(c, "SetSpeed", 8) == 0 && campaign_local_setspeed())) {
                     r->authority = 1;
                     wrap = out != NULL;
                 }
@@ -891,6 +894,9 @@ static Status *TSCALL hook_event(void *cls, Status *out, void *inst, int idx, in
     cur_entity = *(char **)((char *)inst + INST_NATIVE);
     Status *res = orig_event(cls, out, inst, idx, argc, argv);
     cur_entity = prev;
+    /* campaign.c (TS_CAMPAIGN, not yet run): seats and rides of the host's story events */
+    campaign_story_event(r->name, r->ev_name[k], argc > 0 && argv && argv[0] && argv[0]->type == type_str()
+                         && argv[0]->data ? ((String)argv[0]->data)->s : "");
     return res;
 }
 

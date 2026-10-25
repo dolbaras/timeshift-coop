@@ -48,6 +48,15 @@ int ts_coop_feature(int flag);    /* COOP_F_* of this session: the host's settin
 /* timesync.c: players' time powers in co-op (one world power for everyone, TS_TIMESYNC) */
 void timesync_install(void);
 
+/* timesync.c: a slow/stop world power runs or is asked for (coopreverse.c keeps one power at a time) */
+int timesync_busy(void);
+
+/* coopreverse.c: time reversal in co-op, quick variant: the puzzles' reverse events on every machine, no rewind
+ * (TS_COOP_REVERSE=1; not yet run in a game) */
+void coopreverse_install(void);
+int coopreverse_busy(void);                                       /* a co-op reverse runs now */
+int coopreverse_console(const char *text, char *out, int size);   /* "!rv ..."; 0 = not ours */
+
 /* storysync.c: the campaign story in co-op (host runs it, clients replay it; exits, checkpoints; TS_STORYSYNC) */
 void storysync_install(void);
 int storysync_console(const char *text, char *out, int size);   /* "!ss ..." test commands; 0 = not ours */
@@ -56,6 +65,8 @@ int storysync_console(const char *text, char *out, int size);   /* "!ss ..." tes
 void campaign_install(void);
 int campaign_console(const char *text, char *out, int size);   /* "!cp ..." test commands; 0 = not ours */
 int campaign_dom_verdict(void *dom, int host_inside);           /* storysync.c (host): -1 no rule, 0 out, 1 in */
+void campaign_story_event(const char *obj, const char *ev, const char *arg0);   /* storysync.c (host): a story event ran */
+int campaign_local_setspeed(void);   /* storysync.c (client): domain SetSpeed runs locally (force fields, wind) */
 
 /* aisync.c: AI soldiers on clients of a campaign level */
 void aisync_install(void);

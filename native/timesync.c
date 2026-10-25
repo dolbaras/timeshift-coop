@@ -159,11 +159,21 @@ __attribute__((used)) int tsync_may_start(int mode)
         TLOG("timesync: local %s refused, a teammate's power runs", mode_name(mode));
         return 0;
     }
+    if (coopreverse_busy()) {   /* coopreverse.c (TS_COOP_REVERSE, not yet run): one world power at a time */
+        TLOG("timesync: local %s refused, a co-op reverse runs", mode_name(mode));
+        return 0;
+    }
     if (mode == 2 && !allow_reverse) {
         TLOG("timesync: local reverse refused (not shared in co-op yet)");
         return 0;
     }
     return 1;
+}
+
+/* coopreverse.c (TS_COOP_REVERSE, not yet run): a slow/stop world power runs, is owned or asked for here. */
+int timesync_busy(void)
+{
+    return enabled && (owner != NONE || team_mode != NONE || local_last != NONE || applied != NONE);
 }
 
 /* A game-mode object whose mode reads "single player" (for the patched `mov ecx, [0xfcab34]`). */

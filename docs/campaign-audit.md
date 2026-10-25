@@ -41,6 +41,10 @@ their owners, 6 135 object texts, the same count as the earlier audit), class da
 
 ## 2. Per level
 
+Round 2 (section 3a) changed several "design" entries below: the quick reversal covers the force-field, hidden
+collision and kill-zone puzzles (3, 5 partly, 14, 16, 17, 19 partly, 21), seats/rides are written for 8, 19 and
+23, late-join state (G8) and nearest-player AI targets (G7) are written - all not yet run.
+
 Columns: Risk | Fix | Status. "storysync" = covered by the shipped story sync (checked live on part02/part03 only);
 "campaign.c" = new rule, not yet run; "design" = section 1 / 5. Exit = the reload domain (target in brackets).
 Every level also has the generic items G6 (buttons), G7 (cosmetic AI aims), G8 (late joiners), G12 (regroup).
@@ -298,10 +302,126 @@ warnings with `-Wall -Wextra`); the data archives are unchanged (no recipe neede
   (host).
 - Switches: `TS_CAMPAIGN=1` on; `TS_CAMPAIGN_RULES=0` no domain rules; `TS_CAMPAIGN_GATHER=<s>` (0 = never);
   `TS_CAMPAIGN_KILL=0` death domains as storysync; `TS_CAMPAIGN_LOG=1` verbose log (`campaign: ...` lines).
-- Messages: subtypes 70-79 (70 gather/regroup, 71 kill). Frame slot: the 8th and last of console.c's table.
+- Messages: subtypes 70-79 (70 gather/regroup, 71 kill; 72-74 in section 3a). console.c's per-frame table grew
+  from 8 to 16 entries for campaign.c and coopreverse.c.
 - Known limits: a dead client counts as "missing" for an ALL gate until it respawns, then the gather pulls it in
   (gathering a dead player is [G]); a client that steps out while a lift door closes can still be left behind (the
   `lift_door` check uses the host's player); the rules are by object name, checked against the 1.2 data only.
+
+## 3a. Round 2: reversal, seats, late joiners, AI targets (written, **not yet run**)
+
+Everything below builds (`build.sh`, `-Wall -Wextra` clean) and is off unless switched on; the per-level tables of
+section 2 still say "design" for these items: read them with this section.
+
+### Reversal, quick variant (`native/coopreverse.c`, `TS_COOP_REVERSE=1`)
+
+How the engine reverses (static, patch 1.2):
+
+| Part | Where | Notes |
+|---|---|---|
+| Reverse key | player `+0x39c` bit `0x1000000`, power input `0x40d2c0` | needs the power controller idle (`+0x280` = -1) and energy (`+0x2ac`) above the reverse threshold, then asks the recorder: `call 0x5847c0` at `0x40d491` (`[0xfc8400]` recorder, at least 5 frames, `+0x700ad0`) -> 0 = refusal path `0x40d449` -> `0x40d469` (key flag cleared, `ret 4`). A reverse is a timed run, not held: a second press while it runs is ignored by the engine |
+| Recorder | `0x5846b0` records only in game mode 1 (`cmp [gm+0x3c],1`) [V] | so in co-op the key always reaches the refusal |
+| World messages | `0x3ff` reverse start (playback `0x584720`), `0x400` end (`0x584870`); the entity message switch `0x643fe0` (table `0x644264`/`0x644298`) sends `0x3fd/0x3fe` slow -> vtable `+0x100/+0x104`, `0x3ff/0x400` reverse -> `+0xf0/+0xf4`, `0x401/0x402` stop -> `+0xf8/+0xfc` [V] | base entity: all six do nothing; the script events `OnStartTReverse`/`OnStopTReverse` are what the puzzles listen to |
+
+The quick variant: the call at `0x40d491` goes through a thunk; in a co-op session with timesync on, a reverse
+key press becomes a request to the host (message 80; the host's own press directly), which accepts it when no other
+world power runs (timesync's slow/stop, or another reverse: one power at a time, both ways: timesync refuses
+slow/stop starts while a co-op reverse runs). Every machine then fires `OnStartTReverse` on the level's
+reverse-puzzle objects and shows the reverse screen effect (slot 5); after `TS_COOP_REVERSE_SECONDS` (default 5,
+less when the owner's energy does not pay for it) every machine fires `OnStopTReverse`. Only the owner's energy is
+spent (`TS_COOP_REVERSE_COST`, default 0.12 per second; energy out ends it), a second press ends one's own reverse.
+The host repeats the state every second (late joiners), ends it when the owner leaves, a level change drops it.
+storysync treats these events as local (each machine runs its own handlers), and campaign.c keeps `SetSpeed` in
+the clients' scripts (storysync had wrapped it as an AI call: the force fields and the wind would not have
+flipped, or even started, on clients) - so `TS_CAMPAIGN=1` belongs with `TS_COOP_REVERSE=1`.
+
+What it covers, per reverse puzzle:
+
+| Level | Puzzle | Mechanism in the scripts | Quick variant |
+|---|---|---|---|
+| 2 `ts2_city_part02` | `tc_domain_bridge` (auto mode reverse), `building_site_rocket_6` | an object to rewind [L] (no reverse handler) | **needs rewind** (or not needed at all: check live) |
+| 3 `ts2_city_part03` | `dom_kill1/2` | kill domains `Lock()` on reverse start, `Unlock()` on stop [V] | **yes** |
+| 5 `ts2_skyscraper_part2` | `Shaft_coll_actor`, `Shaft_coll_actor1` | collision `Hide()` during a reverse [V] | **yes** |
+| 5 | `force_field1/2` | `SetSpeed` flips [V] | **yes** (with `TS_CAMPAIGN=1` on clients) |
+| 5 | crane `Kran_actor` (`s3d_Kran_button` FORTH/BACK, `dom_kran_tc`), conveyor `Conveyer_actor` (`s3d_refLocator18`), propellers `dom_hint_propeller1/2`, traps `dom_hint_trap1`, `act_revers` | animated `dynamic` actors (`isSyncTR`) put back by the recorder [L] | **needs rewind** |
+| 9 `ts2_zepcrashsite_part01` | `dom_time_zone3/4/6/14/15` (`puzzle_reverse_once`), `bridge_puzle_actor` (UP/DOWN) | rewind of the bridge actor [L] | **needs rewind** |
+| 10 `ts2_zepcrashsite_part02` | lift `Lift_actor` (DOWN, `acktor_revers*`, `dom_hint_lift*`) | rewind of the lift [L] | **needs rewind** |
+| 14 `ts2_guardfactory_part01` | fan shaft `dom_force_field`, `_1`, `_2` (`SetSpeed` up during a reverse), `dom_force_field3` locked during a reverse, `dom_hint_guns` hint | [V] | **yes** |
+| 16 `ts2_guardfactory_part03` | `dom_ffield_conveyer` `SetSpeed` flips | [V] | **yes** |
+| 17 `ts2_guardfactory_part04` | `dom_force_field1/2` flip, `PROPELLERS_1` locks `dom_propeller_kill` during a reverse | [V] (the blades keep turning forwards: cosmetic) | **yes** |
+| 19 `ts2_zep_factory_part1` | `force_field` flips | [V] | **yes** |
+| 19 | `dom_hint_conveyor` (`puzzle_reverse`), `dom_train_hint` (`puzzle_reverse_once`; `Actor_train`) | rewind [L] | **needs rewind** |
+| 21 `ts2_zep_factory_part3` | turbines: `Propellers_dom_WIND`, `_WIND2` `SetSpeed` -5/-7.5 instead of 25 | [V] | **yes** |
+| 23 `ts2_zepride2_part01` | `rope_btn1/2` drop `cage1_actor`/`cage2_actor` (`FALL`), reverse brings them back | rewind [L] | **needs rewind** |
+| 11, 15, 18, 20 | container traps `*\|dom_mis_fail`, `start_room_door2` | `OnStopTReverse` + `IsBelong($player)` -> `FailMission` | **left out on purpose** (without a real rewind they would fail the mission for nothing) |
+| 8, 23 | `hide_dom`, `hide_dom_planer1` | show zeppelin parts for a real rewind | left out |
+
+Per-object rewind (design for the "needs rewind" rows): record only the objects a per-level table names (the actors
+above: `Kran_actor`, `Conveyer_actor`, `bridge_puzle_actor`, `Lift_actor`, `Actor_train`, `cage1_actor`,
+`cage2_actor`, the level 2 and 5 propeller/trap objects once identified live), on the host, 10 times a second for
+the last 10 s: animation clip name and time, position and orientation (`dynamic` actors play animations, so the
+clip and its time are the state; `Start(clip, time, ...)` with a start time is used by the shipped scripts, e.g.
+`$Train_actor.Start("MOVE_A",23)`). During a co-op reverse the host steps that ring buffer backwards: each step
+starts the recorded clip at the recorded time and holds it (RE item: the native behind `Start`'s third argument and
+an animation pause/speed field of `dynamic`), and stops at the oldest record or when the reverse ends; `dynamic` is
+`isSyncMP`, so clients follow the host's actor. Script events fired by the forward animation (`OnAnimEnd`,
+`OnActionFrame`) must not fire while it runs backwards (a guard in storysync's event hook during a reverse). Not
+covered by it: physics objects and AI (the engine's own recorder does those; enabling it on the server instead -
+the game-mode test at `0x5846b0` - is the full variant, L, with unknown effects on replicated players). Estimate
+for the per-object rewind: RE of the animation time API 0.5 day, recorder + playback + event guard 1-2 days, live
+tuning per puzzle 1 day: **M (3-4 days)**.
+
+### Seats and vehicles (`campaign.c`, `TS_CAMPAIGN_SEATS`)
+
+Static check of replication:
+- Class properties are inherited along `parentDesc` (the team `idTeam` of `plr_comm.cls` reaches `player_mp`,
+  observed); `isSyncMP` is a class property (entity `+0x98` bit 1). The chains: `vhc_zeppelin_cruiser`, `vhc_bike`,
+  `vhc_bronik` -> `vehicle` -> `dyn_destroy` -> `dynamic` (`isSyncMP = Yes`); `vhc_truck` -> `dyn_destroy`;
+  zeppelin and armoured-car guns `sob_turret_hmg_vhc_zep` / `_bronik` -> `sob_turret_hmg_vhc` -> `sob_turret_hmg`
+  -> `sob_turret_usable` -> `sob_turret_basic` (`isSyncMP = Yes`). No class in the `ps` block sets `isSyncMP = No`
+  on a vehicle or turret [V]. So vehicles and their guns are networked objects; their own net code (regular update)
+  was not traced [L].
+- A player's network update (`0x420120`) appends the state of the object its vtable `+0x248` returns (the weapon or
+  the used object) [V], and the stock MP maps have usable mounted guns (`sob_turret_hmg`, `sob_turret_lom` on maps 1,
+  4, 7) [V]: a remote player manning a fixed gun is stock MP behaviour [L]. A remote player driving (quad) is not
+  (no MP map has quads) [G].
+
+Implemented (host story events, through one callback in storysync's host event hook):
+
+| Level | Event (host) | Clients |
+|---|---|---|
+| `ts2_zepride1_part01` | `Cine1_ACTOR.OnAnimEnd("CLIP_3")` (host -> `tur02`), every `Check_Point_n.OnUnlocked` (restores: host -> `tur05`/`tur02`) | client 1 -> `tur04` (host removes `rebel_hmg1`), client 2 -> `tur03` (`rebel_tur1`), client 3 -> `tur06` (`rebel25`); the gunners from their AI blocks' `turret =` [V] |
+| `ts2_zepride2_part01` | `Zep_Intro_actor` / `Zeppelin_cruiser_plc_iga` `.OnAnimEnd("MOVE")` (host -> `tur01`) | `tur04` (`rebel_hmg1`), `tur03` (`rebel_tur1`), `tur02` (`rebel_hmg2`) |
+| `ts2_zep_factory_part1` | `actor_start_chase.OnUnlocked` (host -> the gun of `Bronevik`) ... `BR_pl_3.OnAnimEnd("MOVE")` | **ride**: each frame the client's player is placed 2.2 m above the car's origin, 0.8 m steps to the sides, view kept; at the end the replayed `Transport("Bronik_Exitpos")` puts everybody down |
+
+The client runs `$player.StartUse("<seat>")` 0.5 s after the host's message (after the replay of the same event).
+Open [G]: whether a client's `StartUse` on a turret of the moving zeppelin works, whether the removed gunner's
+seat is free at once, the ride height on the armoured car (`TS_CAMPAIGN_RIDE_HEIGHT`), jitter of a per-frame
+placement. Quads (9, 12): design only - one `bike*` copy per player when T-V shows that a `player_mp` can drive;
+otherwise the host-only scanner rule (section 3) plus `!cp regroup` at the checkpoints. Effort left: quads M,
+spectator fallback M (only if the seats fail).
+
+### Late joiners (`campaign.c`, `TS_CAMPAIGN_LATEJOIN`)
+
+The host records what its level scripts set on its own player in this level run - `DisableMove`, `DisableInput`,
+`Aimable`, `DisableTC(mode)` (each of the three modes) and `SetupWeapon` - by hooking those natives (`0x438e90`,
+`0x438d40`, `0x666d90`, `0x439040`, `0x43a140`; all start `push -1; push <handler>`, replaced by a jump, the
+trampoline replays the 7 bytes). A client whose slot starts running the level (coopnet's in-game flag) more than 20
+s after the host's level start gets that state (message 72) 3, 10 and 25 s later (its own `OnInitLevel` may run
+after the first one); the loadout only with the first. Covers 14 (`DisableMove(1)` until `Start_cine`), 9
+(`Aimable(0)` until the truck stops), 1 (powers off, pistol from `Rebel_weaponer`), 2/3/14/16 (`DisableTC`). Not
+covered: weapons picked up (not scripted), story progress itself (objects the host already unlocked replicate;
+local-only presentation does not).
+
+### AI targets (`campaign.c`, `TS_CAMPAIGN_AI`)
+
+On the host `SetAim` (`0x83d3f0`) and the three `SetTarget` natives (`0x4b2ba0`, `0x4cb6d0`, `0x51a3d0`: turrets,
+vehicles, the boss) are hooked: an argument `"player"` becomes the name of the nearest player to the caller (the
+host's player keeps `"player"`). Remote players get a script name for that, `coop_player<slot>`, inserted into the
+script manager's named list as aisync.c names objects created in play. Covers `Metro_Tank` (3),
+`helicopter_actor|tur01` (7), `ceilgun1..4` (14), `ai_swat1..5` in the lift (18), `STRIDER|tur_shoulder1` (24) and
+the ~230 scripted aims of ordinary soldiers. The choice is made once per call (as the script calls it); dead players
+are not skipped [G].
 
 ## 4. Test plan for the live pass
 
@@ -309,7 +429,8 @@ Set-up (N100 pair, `lab\n100_pair.ps1`; later the same steps with the main PC as
 
 ```
 lab\n100_pair.ps1 -Seconds 600 -HostIni 'AutoTestMap="<level>"' `
-  -HostEnv 'TS_CAMPAIGN=1;TS_CAMPAIGN_LOG=1;TS_STORYSYNC_LOG=1' -ClientEnv 'TS_CAMPAIGN=1;TS_CAMPAIGN_LOG=1' `
+  -HostEnv 'TS_CAMPAIGN=1;TS_CAMPAIGN_LOG=1;TS_COOP_REVERSE=1;TS_COOP_REVERSE_LOG=1;TS_STORYSYNC_LOG=1' `
+  -ClientEnv 'TS_CAMPAIGN=1;TS_CAMPAIGN_LOG=1;TS_COOP_REVERSE=1;TS_COOP_REVERSE_LOG=1' `
   -Steps { At 90; OnHost '!cp state'; ... }
 ```
 
@@ -338,6 +459,14 @@ Generic tests (run once, on the level named):
 | T-A AI (G7) | 3, 14, 24 | client in the open near `Metro_Tank`, `ceilgun*`, the boss | they fire at the host only (expected today) |
 | T-L late join (G8) | 14 | client joins after `Start_cine` ended | client locked (expected today) |
 | T-X exits | all | the smoke run above | 23 level changes, client joined after each |
+| T-R1 quick reverse | 14 | `!ss goto dom_force_field` on the client, client presses reverse (or `!rv start`) | host log `coopreverse: client's reverse key: reverse for 5.0 s`; both `reverse on (5 puzzle object(s))`, reverse effect on both; the client is lifted up the fan shaft; `reverse off` after 5 s, the field pushes down again |
+| T-R2 one power | 14 | during a reverse press slow on the host; during a host slow press reverse on the client | `timesync: local slow refused, a co-op reverse runs`; `coopreverse: ... refused (a slow/stop power runs)` |
+| T-R3 energy, early end | 21 | client reverses, presses again after 2 s | client energy down ~0.24 then regenerating; host's energy unchanged; wind back to 25 at once (`Propellers_dom_WIND`) |
+| T-R4 force fields without reverse | 21 | `$Propellers_mortal_Cine.Unlock()` on the host, client stands in the wind domain | the client is pushed as the host is (SetSpeed now runs on clients) |
+| T-S1 zeppelin seats | 8 | host `!ss fire Check_Point_1 OnUnlocked` | host on `tur05`, `rebel_hmg1` gone, client on `tur04` (`campaign: seat ... taken`), both turrets fire; zeppelin moving on both |
+| T-S2 armoured-car ride | 19 | host `!ss fire actor_start_chase OnUnlocked`, wait for the route, then the end | the client stands on the car's roof while it drives and can shoot; set down at `Bronik_Exitpos` at the end |
+| T-L2 late join state | 14 | host waits 60 s after the level start (past `Start_cine`), then the client joins | host `client 1 joined 6x s into the level`; the client can move ~3 s after it runs the level |
+| T-A2 nearest player | 14 | client stands near `ceilgun1`, host far; host console `$ceilgun1.SetTarget("player")` | `campaign: remote player in slot 1 named coop_player1`; the gun shoots the client |
 
 Per level, after the generic tests: start each level with `AutoTestMap`, walk the risky places of section 2 with
 `!ss goto`/`Transport`, and record per level: client joined, story replays without errors
@@ -349,8 +478,8 @@ lock outlives the host's.
 | Step | Work | Effort | Unblocks |
 |---|---|---|---|
 | 1 | Live pass of campaign.c (T-C1..T-C8) and the probes T-B, T-R, T-V, T-A, T-L | 1 day | decides G2, G6, G11 |
-| 2 | Time reversal in co-op: (b) script-only reverse events first, then (a) shared recorder | M + L | 2?, 3, 5, 9, 10, 14, 16, 17, 19, 21, 23 |
-| 3 | Seats: spectate-the-host fallback for 8, 19, 23 (+ quads 9, 12 if remote driving fails); then turret seats per player | M, then L | 8, 9, 12, 19, 23 |
+| 2 | Time reversal: quick variant written (coopreverse.c, section 3a: 3, 5 partly, 14, 16, 17, 19 partly, 21); per-object rewind for the rest | live test + M | 2?, 5, 9, 10, 19, 23 |
+| 3 | Seats written (zeppelin turrets per player, armoured-car ride, section 3a); quads and a spectator fallback if T-S fails | live test + M | 8, 9, 12, 19, 23 |
 | 4 | G6 forwarding if T-B fails | S-M | many levels |
-| 5 | AI `"player"` -> nearest player (G7) | M | 3, 7, 14, 18, 24 |
-| 6 | Late-join state (G8), lock watchdog (G9), spread teleports (G11), player-facing regroup (G12), campaign end (G15) | M + S | polish |
+| 5 | AI `"player"` -> nearest player (G7): written (section 3a) | live test | 3, 7, 14, 18, 24 |
+| 6 | Late-join state (G8): written (section 3a); lock watchdog (G9), spread teleports (G11), player-facing regroup (G12), campaign end (G15) | M + S | polish |
