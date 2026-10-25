@@ -471,7 +471,7 @@ static int classify(const char *src, ClassRec *r, char *out, size_t cap, int *n_
                 /* campaign.c (TS_CAMPAIGN, not yet run): SetSpeed is the force-field/wind domains' only setter in the
                  * levels; it then runs on clients too (their players are pushed by their own copy of the domain) */
                 if (len && in_list(host_calls, c, len)
-                    && !(len == 8 && strncmp(c, "SetSpeed", 8) == 0 && campaign_local_setspeed())) {
+                    && !campaign_local_call(c, len)) {
                     r->authority = 1;
                     wrap = out != NULL;
                 }

@@ -121,7 +121,7 @@ static void (TSCALL *node_pos)(void *, float *) = (void *)0x94c8e0;
 /* ---- settings ---- */
 static int enabled, use_rules = 1, use_kill = 1, verbose;
 static int gather_after = 20;                /* s; 0 = no automatic gather */
-static int use_seats = 1, use_setspeed = 1, use_latejoin = 1, use_ai = 1;
+static int use_seats = 1, use_setspeed = 1, use_latejoin = 1, use_ai = 1, use_routes = 1;
 static float ride_height = 2.2f;             /* m above the ridden vehicle's origin */
 static LONG n_logged;
 #define CLOG(...) do { if (InterlockedIncrement(&n_logged) <= 1000) ts_log(__VA_ARGS__); } while (0)
@@ -634,6 +634,21 @@ int campaign_local_setspeed(void)
     return enabled && use_setspeed;
 }
 
+/* Calls storysync wraps as host-only that clients run themselves: SetSpeed (force fields and wind, see above) and the
+ * vehicles' StartRoute/StopRoute (live: a route-driven vehicle - the zeppelin, helicopters, interceptors, the
+ * armoured car - has a net id but no motion data to send, so it stood still on clients; run locally, each machine's
+ * copy follows the same route from the same replayed start). */
+int campaign_local_call(const char *name, int len)
+{
+    if (!enabled)
+        return 0;
+    if (use_setspeed && len == 8 && strncmp(name, "SetSpeed", 8) == 0)
+        return 1;
+    if (use_routes && ((len == 10 && strncmp(name, "StartRoute", 10) == 0) || (len == 9 && strncmp(name, "StopRoute", 9) == 0)))
+        return 1;
+    return 0;
+}
+
 /* ---- native hooks: the host's player state for late joiners, "player" in AI targets ---- */
 typedef struct { void **type; unsigned data; } Variant;
 static void *(*type_int)(void) = (void *)0x9c8c50;
@@ -1055,6 +1070,7 @@ void campaign_install(void)
     use_setspeed = !(ts_env("TS_CAMPAIGN_SETSPEED", v, sizeof v) && v[0] == '0');
     use_latejoin = !(ts_env("TS_CAMPAIGN_LATEJOIN", v, sizeof v) && v[0] == '0');
     use_ai = !(ts_env("TS_CAMPAIGN_AI", v, sizeof v) && v[0] == '0');
+    use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
     if (ts_env("TS_CAMPAIGN_RIDE_HEIGHT", v, sizeof v))
         ride_height = (float)atof(v);
     if (!ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_GATHER, SUB_LAST, on_message)) {
