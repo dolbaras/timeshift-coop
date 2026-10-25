@@ -8,7 +8,7 @@ side on wide screens and top and bottom on others. This is a prototype, off unle
 Status (2026-10-25, prototype, main PC, `ts2_city_part02`/`part03`, single player): both views render on alternate
 frames into their halves with a HUD each; player 2 is spawned next to player 1 with its own first-person weapons,
 moves, turns and fires with pad 2, has the script name `player2`, cannot hurt player 1, respawns next to player 1
-instead of ending the game, and stays through a level change. Not ready for players: see "Open problems".
+instead of ending the game, stays through a level change, and each player sees the other's body. Not ready for players: see "Open problems".
 
 ## Why it has to be built
 
@@ -168,17 +168,32 @@ Without `TS_SPLIT` the same level load runs as before (control run `20261025-071
 | Player 2's death | before: `$player2.Kill()` ended the game for both ("you died", `20261025-080936` `shot170.png`); now: `player 2 died: respawned next to player 1`, also for kills by enemies | `20261025-081604`, `20261025-083424` |
 | Level change | `$ui.LoadLevel("ts2_city_part03.lg")` with player 2 present: no crash, `return $player2` still answers, player 2 is placed again in the new level and has its own view there | `20261025-083954` `shot235.png`, `20261025-083424` |
 | Pause menu | Start on pad 1 opens the pause menu over the whole screen, Start closes it, the split comes back | `20261025-083424` `shot155.png` |
-| Bodies | each player's body is **not visible** to the other; clearing bit 0x800 of the body node (+4, set by the player's init on "player_3d") per view did not show it | `20261025-081604` `shot136.png` |
+| Bodies | each player's body is **not visible** to the other; clearing bit 0x800 of the body node (+4, set by the player's init on "player_3d") per view did not show it (fixed in round 3: bit 0x10000) | `20261025-081604` `shot136.png` |
+
+### Round 3 (2026-10-25, main PC; stopped early at the session's usage limit)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Double placement at the spawn (fixed after round 2) | fixed: one `player 2 placed` line at the spawn | `20261025-091255` |
+| Each player sees the other's body | works: in each half the other player's third-person model stands where it is (face to face test). The render prep skips nodes with +4 bit 0x10000 in the main view (view entry flags 0, `0x9a1389`); the local player's body has it, and both players are local here. The bit is cleared on the other player's body node from the frame start to the frame end of each view | `20261025-091649` `shot125.png` |
+
+Not started in round 3: player 2's health and HUD values, player 1's respawn while player 2 lives, respawn on a
+navigable spot, per-view screen effects. For the health: `TS_SPLIT_MSGLOG=1` now logs every field of player 1
+that a hit message (`0x4e3`) changes, and `TS_SPLIT_FF=1` lets the players hit each other for that test (player 2
+facing player 1 with `TS_SPLIT_P2FACE=1`, `lab/split_cmds4.txt` gives both a rifle, `lab/split_p2moves3.json`
+fires); the field found there is the one to reset at player 2's respawn (it now dies again at once) and to show in
+its HUD.
 
 ## Open problems
 
-- **Player 2's first-person model is not drawn.** Its weapons exist and fire, but nothing of them shows in its
-  half. The render prep (`0x67f9b0`) only handles scene nodes whose visibility bit is set (world +0x50) and that are
-  enabled (node +8 bit 0x200000), and only those get their animation advanced (`0x951090`); the first-person pass
-  (`0x680730`) draws render bucket 3 (`0x9a1fe0(rend+0x124, 3, 3, 1)`). Next step: log player 2's weapon nodes in
-  that loop (bits, bucket) against player 1's.
-- **Bodies.** Neither player sees the other's body. The hide is not the node bit 0x800; to be found the same way
-  (render prep, bucket choice), then shown per view with the one-frame-lag rule from Jericho.
+- **Player 2's first-person model is not drawn.** Its weapons exist, fire, and their scene nodes are set up
+  like player 1's (round 3 log, `20261025-091649`: player 2's rifle and hands at its camera position, +4 bits
+  0/1 clear, so not hidden; the only difference is +4 bit 0x4000000 on all of player 2's nodes). Lead for the
+  next step: a mesh's geometry +0xbc is not just a flag but the node that owns the shared geometry (the "in use"
+  value at the spawn was player 1's own weapon node, e.g. `7ce111c8` = player 1's pistol node), and the mesh
+  pass (`0x9a1070`) reads it. Try making player 2's weapon node the owner of each weapon geometry for the span of
+  view 1 (record geometry and node in the node-creation wrapper at its spawn, swap +0xbc in the frame start and
+  back in the frame end, as for the bodies).
 - **Per-view screen effects: not done.** Hit/blood overlays are HUD widgets and follow the view (blood only in
   player 1's half while it was hit, `20261025-081604` `shot136.png`), but the red tint and blur of the damage and
   death effects, the time-power effects and HDR adaptation are global and show in both halves. Their parameters
