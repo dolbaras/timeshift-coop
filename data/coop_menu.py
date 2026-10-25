@@ -16,10 +16,13 @@ leave finds the reason in the UI string CoopError, which the main menu shows.
 Split screen -> new frame CoopSplit: the same level list and difficulty; "Start" starts the level as a
 single-player game with the UI string CoopSplit = "1" (native/split.c turns split screen on; the main menu
 clears it). Without a second pad (UI string CoopPad2, set by the DLL) it shows COOP_ERR_PAD2 instead.
+Co-op frame option "Second player on pad 2" (CoopSplitJoin, off/on, kept in the profile key CoopSplitJoin and
+set as a UI string by the Co-op frame and the main menu): joining a co-op game with it on brings a second
+player on pad 2 into the game, the screen split (native/split.c, docs/splitscreen.md).
 
 UI strings shared with the DLL and the lab's test recipe: CoopSession ("host" / "client" / ""),
 CoopDifficulty, CoopMaxPlayers, CoopLevel, CoopStage, CoopAuto, CoopError, CoopDataVersion, CoopSplit,
-CoopPad2.
+CoopPad2, CoopSplitJoin.
 """
 import re
 
@@ -207,6 +210,11 @@ def build(ctx):
       $ui.SetStr("CoopSession", "")
       $ui.SetStr("CoopStage", "")
       $ui.SetStr("CoopSplit", "")
+      if $ui.GetUserVar("CoopSplitJoin") == "1"
+         $ui.SetStr("CoopSplitJoin", "1")
+      else
+         $ui.SetStr("CoopSplitJoin", "0")
+      end
       if $ui.GetStr("CoopError") != ""
          CoopShowError($ui.ShowFrame("ErrorMsg"))
       end

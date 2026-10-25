@@ -72,6 +72,47 @@ child = [
             text        = COOP_BTN_SPLIT
          }
          {
+            type        = select
+            name        = CoopSplitJoin
+            posX        = 10%, 80%
+            posY        = 285, 30
+            text        = COOP_OPT_SPLITJOIN
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
             type      = text
             name      = ModVersion
             posX      = 8%, 85%
@@ -104,6 +145,22 @@ ssl = <<<
 
    override OnInit
       Element("ModVersion").SetText("COOP_MOD_VERSION,%VERSION%")
+      // joining with split screen: a second player on pad 2 on this PC (native/split.c reads the UI
+      // string CoopSplitJoin; the choice is kept in the profile and set again by the main menu)
+      Element("CoopSplitJoin").AddItem("UI_SOFF", "0")
+      Element("CoopSplitJoin").AddItem("UI_SON", "1")
+      if $ui.GetUserVar("CoopSplitJoin") == "1"
+         Element("CoopSplitJoin").SetVal("1")
+      else
+         Element("CoopSplitJoin").SetVal("0")
+      end
+      $ui.SetStr("CoopSplitJoin", Element("CoopSplitJoin").GetVal())
+   end
+
+   override OnSelectSelection("CoopSplitJoin")
+      $ui.SetStr("CoopSplitJoin", Element("CoopSplitJoin").GetVal())
+      $ui.SetUserVar("CoopSplitJoin", Element("CoopSplitJoin").GetVal())
+      $ui.FlushCfg()
    end
 
    // CoopAuto (UI string) starts a step by itself; only test builds set it (lab recipe)

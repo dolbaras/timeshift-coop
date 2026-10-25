@@ -139,6 +139,17 @@ STRINGS = [
         "hungarian": "Két játékos ezen a gépen, a képernyő kettéosztva. Csatlakoztass két gamepadet: a 2. játékos "
                      "a másodikkal játszik, az 1. játékos az elsővel vagy billentyűzettel és egérrel.",
     }),
+    ("COOP_OPT_SPLITJOIN", {   # Co-op frame option: joining with split screen
+        "english": "Second player on pad 2",
+        "russian": "Второй игрок на геймпаде 2",
+        "german": "Zweiter Spieler an Gamepad 2",
+        "french": "Deuxième joueur sur la manette 2",
+        "italian": "Secondo giocatore sul gamepad 2",
+        "spanish": "Segundo jugador en el mando 2",
+        "polish": "Drugi gracz na padzie 2",
+        "czech": "Druhý hráč na gamepadu 2",
+        "hungarian": "Második játékos a 2. gamepaden",
+    }),
     ("COOP_ERR_PAD2", {
         "english": "Split screen needs a second gamepad for player 2. Connect two gamepads and try again.",
         "russian": "Для разделённого экрана нужен второй геймпад для игрока 2. Подключите два геймпада и попробуйте снова.",

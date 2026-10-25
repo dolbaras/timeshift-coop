@@ -332,21 +332,41 @@ over movement, hits, damage, deaths, items and time powers, and the game replica
 | The client's second half | client | split screen as on a single PC, the second view's camera from message 61 (position smoothed, the client's own field of view); in that half the echoed `player_mp` of its player 2 is hidden, its player 1's body is shown, and its player 1's first-person weapon, crosshair and HUD are hidden |
 | Time powers | host | timesync takes player 2's power as the host's when player 1 has none (`split_player2()`), so a power of either player 2 (split host or client) runs for everybody |
 
-Switches: the client turns it on with `TS_SPLIT=1` or the UI string `CoopSplitJoin = "1"` (no menu entry yet) and
-needs a second pad; `TS_SPLIT_CLIENT=0` turns the whole feature off on either side.
+Switches: the client turns it on with `TS_SPLIT=1` or the UI string `CoopSplitJoin = "1"` (the Co-op frame's
+option, round 17) and needs a second pad; `TS_SPLIT_CLIENT=0` turns the whole feature off on either side.
 
-Known limits of the first version: player 2's half on a client has no HUD (life, ammunition, powers) and no
-first-person weapon (the host has them; only the camera and life travel); its camera follows the host's at 30 Hz
-(aim latency = the network round trip); player 2's own screen effects are not shown on the client; its pick-up
-messages show on the host.
+Known limits of the first version (round 16): player 2's half on a client has no HUD (life, ammunition, powers)
+and no first-person weapon (the host has them; only the camera and life travel); its camera follows the host's at
+30 Hz (aim latency = the network round trip); player 2's own screen effects are not shown on the client; its
+pick-up messages show on the host. Round 17 below addresses these.
+
+### Round 17 (code; not tested yet): the menu option, player 2's HUD, weapon, effects and messages on the client
+
+| Part | How |
+|---|---|
+| Menu | Co-op frame: option "Second player on pad 2" (`COOP_OPT_SPLITJOIN`, all 9 string tables; values the game's own `UI_SOFF`/`UI_SON`). It sets the UI string `CoopSplitJoin` and the profile key `CoopSplitJoin`; the main menu sets the UI string from the profile at every start, so the choice holds until changed. With it on and a second pad, joining any co-op game brings player 2 in |
+| Player 2's copy on the client (the "shadow") | once message 61 arrives in play, the client spawns its own local `player` as player 2, the same way as the single-PC split screen (so the second half has the game's own first-person weapon, crosshair, HUD widgets and screen effects per view, and movement and aim answer the local pad 2 at once). It is kept out of the network game (`isSyncMP` cleared, role bit 0x4000, also its body and weapons) and placed beside the host's player 2 (its `player_mp`). Its hits go nowhere (message 0x4e3 from its objects dropped) and its time-power and grenade buttons (RB, LB, d-pad up/left/right) are masked: the host's player 2, driven by the same pad, fires the real shots, throws the grenades and uses the powers. Items are never taken on a client |
+| State from the host | message 61 is now version 2: + the host's player 2's body position, time energy, ammunition of the current weapon (total and magazine), its three weapon slots (`+0x3a8`) and its screen effects 6 (damage), 8 (death), 10 (low life) (on and strength). The client writes life, energy and ammunition into its copy every message, gives it the host's weapon slots (`$player2.SetupWeapon`) when they differ, and puts the effects into player 2's per-view effect records (shown in its half only). When the copy is more than 2.5 m from the host's player 2 (the two bodies push each other apart; after a respawn or a level change) it is put back beside it, at most once a second |
+| Views on the client | view 0 (player 1): the copy's body is hidden, the host's player 2 is seen as its `player_mp`; view 1 (player 2): the `player_mp` of its own player 2 is hidden, player 1's body is shown, player 1's first-person weapon and crosshair hidden (the single-PC rules) |
+| Messages | host: a HUD message of a client's player 2 (pick-ups etc., `split_msg_owner() == 2`) is not shown on the host but sent as mod message 62 `{u8 2, u8 n, u16 text[n]}` (UTF-16 from the game's counted wide string) to that client; the client adds it to its message line (`"console"` channel, as the game's pick-up message 0x440720) as player 2's, so it shows in player 2's half only. Messages of the client's copy itself are dropped (the host's are the real ones). The text is in the host's language |
+| Items on a host | player 2 (of a split host or of a client) now also takes items on a server: the item loop's network branch (items the server has authority over, kinds other than 1-10, which are taken with the use key), the same check and take as in single player |
+
+Switches: `TS_SPLIT_SHADOW=0` (client): no local copy, the round 16 camera-only half; `TS_SPLIT_HOSTITEMS=0`
+(host): player 2 takes no items in a network game; `TS_SPLIT_CLIENT=0` everything off.
+
+Risks to check first in the tests: whether a client can spawn a local `player` at all (the spawn path is the
+single-PC one; never run in client mode before), whether the copy and the `player_mp` of the host's player 2 jitter
+when they touch, whether the copy's local shots leave pictures only (impact effects without damage on the
+client), and that the menu option changes the UI string (the select is a stock `select` without a profile
+section).
 
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
   triggers, checkpoints, cutscenes, death and restart see player 1 only. The same audit as for network co-op
   (`player-audit.md`).
-- **Split screen with the network**: player 2 of a split host is seen on clients (round 15); its time powers are not
-  sent (timesync reads player 1 only). Split screen on a client is not in the first release.
+- **Split screen with the network**: player 2 of a split host is seen on clients (round 15); its time powers run
+  for everybody since round 16. Split screen on a client: code of rounds 16 and 17, not tested yet.
 - Hint boxes are one for both halves: a hint naming a button names player 1's device when both see it.
 - Old notes on the network (round 5 goal 6): What blocks it: the
   network co-op runs the multiplayer game mode (2) and the multi-thread frame, split screen needs the

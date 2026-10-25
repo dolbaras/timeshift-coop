@@ -502,6 +502,15 @@ void gamepad_set_player2_pad(const void *g)
     remote_pad2_on = g != NULL;
 }
 
+/* Buttons player 2's commands do not get (split.c: on a client, the local copy of player 2 does not use its time
+ * power and grenades, the host's player 2 does). */
+static WORD pad2_mask;
+
+void gamepad_mask_player2(unsigned short buttons)
+{
+    pad2_mask = buttons;
+}
+
 static void pad2_poll(BYTE *raw)
 {
     static WORD last_buttons;
@@ -515,6 +524,7 @@ static void pad2_poll(BYTE *raw)
         st.Gamepad = remote_pad2;
     else if (!(slot >= 0 && (test_pad || game_in_front()) && x_get(slot, &st) == ERROR_SUCCESS))
         memset(&st.Gamepad, 0, sizeof st.Gamepad);
+    st.Gamepad.wButtons &= ~pad2_mask;
     float l[2], r[2];
     write_codes(v, &st.Gamepad, 0, l, r);
     if (padlog && st.Gamepad.wButtons != last_buttons)
