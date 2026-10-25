@@ -257,6 +257,9 @@ static float saved_canvas;
 static BYTE *shown_node;        /* the other player's body node, shown for this view */
 static DWORD shown_flags;
 static BYTE *body_of(BYTE *pl);
+static void fx_apply_view(int k);
+static void fx_restore(void);
+static int p2_depth(void);
 static void place_p2(BYTE *p1);
 static void place_player(BYTE *pl, BYTE *partner);
 static BYTE *rc;                /* the render camera: a copy of the view's camera with the half-screen fov */
@@ -382,6 +385,7 @@ static void restore_globals(void)
             ts_log("split: frame end view %d geometry %p owner %08lx (p2 node %p, saved %08lx)", view, (void *)geo2[4].geo,
                    *(DWORD *)(geo2[4].geo + 0xbc), (void *)geo2[4].node2, geo2[4].saved);
     }
+    fx_restore();
     if (geo_swapped)
         for (int i = 0; i < n_geo2; i++)
             *(DWORD *)(geo2[i].geo + 0xbc) = geo2[i].saved;
@@ -435,6 +439,7 @@ static void TSCALL hook_fstart(void *r)
                 geo_swapped = 1;
             }
         }
+        fx_apply_view(view);
         /* The other player's body is drawn in this view. The render prep skips nodes with +4 bit 0x10000 in the
          * main view (view entry flags 0, 0x9a1389): the local player's body has it, and both players are local
          * here. */
@@ -466,6 +471,154 @@ static void TSCALL hook_fstart(void *r)
                (void *)CAM, (void *)PLAYER_A, (void *)PLAYER_B, (void *)p2, CORES);
     }
     real_fstart(r);
+}
+
+/* ---- screen effects per view ----
+ * The renderer's post-effect manager (0x1096f18, also [[0xfcacd8] +0x24]) holds 13 effect objects at +0x14f4
+ * (vtable +4 start, +8 stop, +0x14 set the strength; +8 bit 0 of the object: on, drawn by 0x665e1e). The players'
+ * code starts and sets them by index (0x665f70 and 0x504b40, stopped by 0x665fa0 / 0x504b80): the death blur (8),
+ * the low-life tint (10, every frame from the player's update, 0x446600), the time powers and more. Both players'
+ * calls land in the same objects. The mod keeps each player's last call per effect (player 2's: those made while
+ * its swap is on), and from the frame start to the frame end of a view puts that view's player's state into the
+ * objects (on/off and strength), then the last state back. */
+#define N_FX 13
+static struct { int seen, on; float v; } fx[2][N_FX];
+static float fx_last[N_FX];
+static int fx_view = -1;
+static DWORD fx_saved_flags[N_FX];
+static int fx_off;   /* TS_SPLIT_FXSHARED=1: effects as the game has them (shared) */
+
+typedef void (TSCALL *fx_call_t)(void *);
+typedef void (TSCALL *fx_set_t)(void *, float);
+
+static BYTE *fx_obj(BYTE *pm, int i)
+{
+    return pm && i >= 0 && i < N_FX ? *(BYTE **)(pm + 0x14f4 + i * 4) : NULL;
+}
+
+__attribute__((used)) void __cdecl split_fx_start(BYTE *pm, int i, float v)
+{
+    BYTE *e = fx_obj(pm, i);
+    if (!e)
+        return;
+    ((fx_call_t)(*(void ***)e)[1])(e);
+    ((fx_set_t)(*(void ***)e)[5])(e, v);
+    *(DWORD *)(pm + 0x2c) |= 0x10000;
+    int who = p2_depth() ? 1 : 0;
+    fx[who][i].seen = fx[who][i].on = 1;
+    fx[who][i].v = v;
+    fx_last[i] = v;
+}
+
+__attribute__((used)) void __cdecl split_fx_stop(BYTE *pm, int i)
+{
+    BYTE *e = fx_obj(pm, i);
+    if (!e)
+        return;
+    ((fx_call_t)(*(void ***)e)[2])(e);
+    int who = p2_depth() ? 1 : 0;
+    fx[who][i].seen = 1;
+    fx[who][i].on = 0;
+}
+
+/* entries: 0x665f70 (esi = manager, edi = index, float on the stack, ret 4), 0x504b40 (edi = index, float,
+ * ret 4), 0x665fa0 (eax = manager, ecx = index), 0x504b80 (eax = renderer, ecx = index) */
+__attribute__((naked)) static void fx_start_a(void)
+{
+    __asm__("push 4(%esp)\n\t"
+            "push %edi\n\t"
+            "push %esi\n\t"
+            "call _split_fx_start\n\t"
+            "add $12, %esp\n\t"
+            "ret $4");
+}
+
+__attribute__((naked)) static void fx_start_b(void)
+{
+    __asm__("push 4(%esp)\n\t"
+            "push %edi\n\t"
+            "mov 0xfcacd8, %eax\n\t"
+            "push 0x24(%eax)\n\t"
+            "call _split_fx_start\n\t"
+            "add $12, %esp\n\t"
+            "ret $4");
+}
+
+__attribute__((naked)) static void fx_stop_a(void)
+{
+    __asm__("push %ecx\n\t"
+            "push %eax\n\t"
+            "call _split_fx_stop\n\t"
+            "add $8, %esp\n\t"
+            "ret");
+}
+
+__attribute__((naked)) static void fx_stop_b(void)
+{
+    __asm__("push %ecx\n\t"
+            "push 0x24(%eax)\n\t"
+            "call _split_fx_stop\n\t"
+            "add $8, %esp\n\t"
+            "ret");
+}
+
+static int install_fx_hooks(void)
+{
+    static const struct { DWORD at; unsigned char want[5]; void *to; } h[4] = {
+        {0x665f70, {0x8b, 0x8c, 0xbe, 0xf4, 0x14}, (void *)fx_start_a},
+        {0x504b40, {0xa1, 0xd8, 0xac, 0xfc, 0x00}, (void *)fx_start_b},
+        {0x665fa0, {0x8b, 0x8c, 0x88, 0xf4, 0x14}, (void *)fx_stop_a},
+        {0x504b80, {0x8b, 0x40, 0x24, 0x8b, 0x8c}, (void *)fx_stop_b},
+    };
+    int n = 0;
+    for (int i = 0; i < 4; i++) {
+        unsigned char j[5] = {0xe9};
+        *(DWORD *)(j + 1) = (DWORD)h[i].to - (h[i].at + 5);
+        n += ts_patch_bytes(h[i].at, h[i].want, j, 5);
+    }
+    return n == 4;
+}
+
+static BYTE *fx_manager(void)
+{
+    BYTE *r = *(BYTE **)0xfcacd8;
+    return r ? *(BYTE **)(r + 0x24) : NULL;
+}
+
+static void fx_apply_view(int k)
+{
+    BYTE *pm = fx_manager();
+    if (fx_off || !pm || !p2)
+        return;
+    for (int i = 0; i < N_FX; i++) {
+        BYTE *e = fx_obj(pm, i);
+        if (!e)
+            continue;
+        fx_saved_flags[i] = *(DWORD *)(e + 8);
+        if (!fx[0][i].seen && !fx[1][i].seen)
+            continue;
+        int on = fx[k][i].seen && fx[k][i].on;
+        *(DWORD *)(e + 8) = (*(DWORD *)(e + 8) & ~1u) | (on ? 1u : 0u);
+        if (on)
+            ((fx_set_t)(*(void ***)e)[5])(e, fx[k][i].v);
+    }
+    fx_view = k;
+}
+
+static void fx_restore(void)
+{
+    BYTE *pm = fx_manager();
+    if (fx_view < 0 || !pm)
+        return;
+    for (int i = 0; i < N_FX; i++) {
+        BYTE *e = fx_obj(pm, i);
+        if (!e || (!fx[0][i].seen && !fx[1][i].seen))
+            continue;
+        *(DWORD *)(e + 8) = fx_saved_flags[i];
+        if (fx_saved_flags[i] & 1)
+            ((fx_set_t)(*(void ***)e)[5])(e, fx_last[i]);
+    }
+    fx_view = -1;
 }
 
 static void TSCALL hook_fend(void *r)
@@ -687,6 +840,11 @@ static void p2_enter(void)
     }
 }
 
+static int p2_depth(void)
+{
+    return as2.depth;
+}
+
 static void p2_leave(void)
 {
     if (--as2.depth)
@@ -850,8 +1008,19 @@ static void TSCALL hook_die(void *pl, int arg)
         return;
     }
     died_at[who] = now;
-    /* (the script's Kill sets the dying flags first: +0x39c 0x1000 by vtable +0x370, 0x400000 by +0x3a4 (1);
-     * cleared again for a living player) */
+    /* The script's Kill starts the dying first: vtable +0x370 sets +0x39c 0x1000, +0x3a4 (1, ...) sets 0x400000
+     * and starts the death screen effect (0x43cb70: a renderer effect and flags in the globals [0xfcabac] +0x28,
+     * [0x109649c] +0x28, and [0x109842c] vtable +0x20). The player's own counterparts end it: +0x3a4 (0, 0) and
+     * +0x36c, called as that player. */
+    {
+        void **vt = *(void ***)pl;
+        if (who)
+            p2_enter();
+        ((void (TSCALL *)(void *, int, int))vt[0x3a4 / 4])(pl, 0, 0);
+        ((void (TSCALL *)(void *))vt[0x36c / 4])(pl);
+        if (who)
+            p2_leave();
+    }
     *(DWORD *)((BYTE *)pl + 0x39c) &= ~(0x1000u | 0x400000u);
     *(float *)((BYTE *)pl + HEALTH) = 100.0f;
     *(float *)((BYTE *)pl + 0x468) = 0;
@@ -957,13 +1126,29 @@ static int trail_pick(int who, const float *now_pos, float *out)
     return 0;
 }
 
+/* The newest spot of one's own trail at least 2 s old (ground one stood on) within 25 m of the partner. */
+static int trail_own(int who, const float *partner_pos, float *out)
+{
+    for (int age = 4; age < trail[who].n; age++) {
+        float *q = trail[who].p[(trail[who].head - 1 - age + 2 * TRAIL) % TRAIL];
+        float dx = q[0] - partner_pos[0], dy = q[1] - partner_pos[1], dz = q[2] - partner_pos[2];
+        if (dx * dx + dy * dy + dz * dz <= 25.0f * 25.0f) {
+            memcpy(out, q, 12);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void trail_clear(void)
 {
     memset(trail, 0, sizeof trail);
 }
 
 /* Player `pl` (player 1 or 2) put next to its partner, facing the partner's way, with the player's own vtable
- * +0x210 as that player (TS_SPLIT_P2FACE=1, tests: player 2 2.5 m in front of player 1, facing it). */
+ * +0x210 as that player. Only spots someone stood on: the partner's trail (2 s old, 1.5 m away), else one's own
+ * trail near the partner, else the partner's own spot (a fixed offset beside it could be inside a wall).
+ * TS_SPLIT_P2FACE=1 (tests): player 2 2.5 m in front of player 1, facing it. */
 static void place_player(BYTE *pl, BYTE *partner)
 {
     BYTE *node1 = partner ? *(BYTE **)(partner + 0x230) : NULL;
@@ -972,7 +1157,7 @@ static void place_player(BYTE *pl, BYTE *partner)
     float *fw = (float *)(node1 + 0x58), *pp = (float *)(node1 + 0x68);
     float pos[3] = {pp[0] + fw[2] * 1.5f, pp[1] + 0.3f, pp[2] - fw[0] * 1.5f};
     float dir[3] = {fw[0], fw[1], fw[2]};
-    const char *how = "beside";
+    const char *how = "beside";   /* (the last resort: only when neither player has walked yet) */
     char v[8];
     if (pl == p2 && ts_env("TS_SPLIT_P2FACE", v, sizeof v) && v[0] == '1') {
         pos[0] = pp[0] + fw[0] * 2.5f, pos[2] = pp[2] + fw[2] * 2.5f;
@@ -980,6 +1165,8 @@ static void place_player(BYTE *pl, BYTE *partner)
         how = "facing";
     } else if (trail_pick(partner == p2 ? 1 : 0, pp, pos))
         how = "on the partner's trail";
+    else if (trail_own(pl == p2 ? 1 : 0, pp, pos))
+        how = "on its own trail";
     if (pl == p2) {
         p2_enter();
         ((place_t)(*(void ***)p2)[SLOT_PLACE])(p2, pos, dir, 1);
@@ -1168,11 +1355,15 @@ static void split_tick(float dt)
         if (p2)
             trail_add(1, p2);
     }
-    if (p1 && !p2 && p2_failed < 3 && now - p1_since >= (DWORD)p2_delay * 1000)
+    /* (player 2 comes in on ground player 1 walked on: once player 1 has moved 1.5 m from a spot it stood on
+     * 2 s before; the same after a level change) */
+    float spot[3], *p1pos = p1 && *(BYTE **)(p1 + 0x230) ? (float *)(*(BYTE **)(p1 + 0x230) + 0x68) : NULL;
+    int walked = p1pos && trail_pick(0, p1pos, spot);
+    if (p1 && !p2 && p2_failed < 3 && now - p1_since >= (DWORD)p2_delay * 1000 && walked)
         spawn_p2(p1);
     /* Player 2 survives a level change like player 1 (both are objects of the game, not of the level): it is put
      * next to player 1 again once the new level is in play. */
-    if (p1 && p2 && !placed && now - p1_since >= (DWORD)p2_delay * 1000) {
+    if (p1 && p2 && !placed && now - p1_since >= (DWORD)p2_delay * 1000 && walked) {
         placed = 1;
         if ((int)(now - p2_born) > 2000)   /* (not the one just spawned and placed) */
             place_p2(p1);
@@ -1242,6 +1433,9 @@ void split_install(void)
             *(DWORD *)(r + 1) = (DWORD)spawn_trampoline - (at + 5);
             ts_patch_bytes(at, w, r, 5);
         }
+    fx_off = ts_env("TS_SPLIT_FXSHARED", v, sizeof v) && v[0] == '1';
+    if (stage >= 3 && !fx_off && !install_fx_hooks())
+        ts_log("split: screen effect calls not found (effects shared by both views)");
     if (stage >= 3 && !install_dispatch_hook())
         ts_log("split: scheduler dispatch not found (player 2's weapons run as player 1)");
     if (stage >= 3) {

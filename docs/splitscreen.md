@@ -186,12 +186,28 @@ Round 3, continued after the limit reset (main PC, Direct3D 9Ex on, the default 
 | Death and respawn of both | a death of either player becomes a respawn next to the partner with full life (+0x234 = 100), as long as the partner did not die in the last 5 s; when both are down within 5 s the game's own death runs ("you died", the restart). Checked with deaths by damage (enemies, and the other player with `TS_SPLIT_FF=1`) and by `$player.Kill()` / `$player2.Kill()` | `20261025-103525`, `20261025-103902` (log: `player 1 died: respawned next to player 2`, `player 2 died while player 1 was down: the game's death`) |
 | Respawn spot | each player's positions are kept every half second in play; a respawn goes to the newest spot of the partner that is at least 2 s old and 1.5 m from it (ground the partner walked on), else beside the partner as before | `20261025-103525` (`player 2 placed on the partner's trail at ...`) |
 
-Still open from round 3:
-- **Player 2's weapon model**: see above; the hands show, the weapon does not. The pose of the shared geometry seems to come from the last node animated with it, and the weapon's own node of player 2 may not be the one drawn. Next: log which node the first-person pass draws in view 1 (bucket 3 entries) for the weapon geometry.
-- **After `Kill`**: the script's `Kill` sets the dying state before the death (`+0x370`, `+0x3a4`); the respawn clears the flags it sets on the player (+0x39c 0x1000, 0x400000), but the red blurred death view stays. Deaths by damage call the death directly; their respawn did not show this, but it was not checked in frames.
-- **HUD values**: the HUD widgets read the player through the swapped pointers; the life (+0x234) has no bar of its own (the red edges of the screen show low life), and the ammo counter in player 2's half did not change while it fired.
-- **Per-view screen effects**: each player's update fills its own effect record (player +0x5b4, `0x446600`, called from the player's update at `0x409e62`), but the red tint of low life and of a death shows in both halves: something global is set from it after that. Not found yet.
-- **Respawn by the partner when it stands still**: the fallback is beside the partner, which can be inside a wall; a nearby checkpoint (`Check_Point_<n>`, as in `storysync.c`) or the level's respawn points (mp_rules_sys +0x114) would be better.
+### Round 4 (2026-10-25, main PC, Direct3D 9Ex)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Player 2's first-person weapon | works: drawn in its half (and player 1's in its own). Cause: a first-person template shares its geometry with every node made from it (node +0x1c0 = template +0xb8, set at `0x95dd6c`, node +8 0x1000), and the geometry is bound to one node (+0xbc); both players' rifle nodes had the same +0x1c0. For player 2's spawn the template takes the path of ordinary templates, which copy the geometry (`0x961f30`): its name's first letter is changed for the call (`0x95c480` tests "wpn_plr"), and the first-person flag is set on the node as the shared path does. Each view hides the other player's first-person nodes | `20261025-105425` `shot124/141.png`; `20261025-110134` `shot134.png` (player 2 firing, muzzle flash) |
+| Death view after a respawn | cleared: the script's `Kill` starts the dying first (vtable +0x370, +0x3a4 (1): the death screen effect); the respawn ends it with the player's own counterparts, +0x3a4 (0, 0) and +0x36c, called as that player. No red or blur after either player's `Kill` | `20261025-105820` `shot148/158.png` |
+| Per-view screen effects | works for the low-life tint and blur: player 1 at 10 life has the red, blurred picture in its half, player 2 (84) a clear one while it fires. The post-effect manager (`0x1096f18` = renderer +0x24) has 13 effect objects at +0x14f4 (vtable +4 on, +8 off, +0x14 strength; +8 bit 0 on). The players start and set them by index (`0x665f70`, `0x504b40`; off: `0x665fa0`, `0x504b80`): the death effect is 8, the low-life tint 10 (set every frame from the player's update, `0x446600`). These four entries are replaced: each call is done as before and kept per player (player 2's: made while its swap is on); for each view the effect objects get that view's player's state (on/off, strength) from the frame start to the frame end. `TS_SPLIT_FXSHARED=1` turns it off | `20261025-110134` `shot134.png`, `shot140.png` |
+| Respawn spot when the partner has not moved | a respawn goes to the partner's trail (2 s old, 1.5 m away), else to the dying player's own trail near the partner (ground it stood on), never to a fixed offset; player 2 joins (and is placed again after a level change) only once player 1 has walked 1.5 m, on a spot player 1 stood on | `20261025-110431` (`placed on its own trail`), `20261025-111123` `shot135.png` (player 2 joins on player 1's start spot) |
+
+Still open after round 4:
+- **HUD values of player 2**: the widgets read the player through the swapped pointers, but whether the ammo counter
+  follows player 2 is not shown yet (the reserve stayed 210 in both halves; the clip bar is too small to read in
+  the frames). Life has no bar; the low-life tint is now per view.
+- **Time-power effects**: they are effect objects too, so they now show in the half of the player who started them;
+  whether that is wanted (the world's time is one for both) is to be decided.
+- **Split screen with the network** (goal 6 of round 4): not started. What blocks it: the network co-op runs the
+  multiplayer game mode (2) and the multi-thread frame, split screen needs the single-thread frame; player 2 is a
+  campaign `player` spawned locally, which the server's entity replication (0x42a CREATE_ENT) would send to clients
+  as a second campaign player (clients would make a local `player` of it); the network layer's per-player records
+  (score, team, respawn) know one local player per machine. A test also needs two machines (the main PC may run
+  one game; the N100 was busy). Plan: on the host, keep player 2 out of replication and send it to clients as a
+  `player_mp` puppet (as remote players are), with its position from the host's player 2.
 
 ## Open problems
 
