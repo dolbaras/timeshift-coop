@@ -15,6 +15,7 @@
  * Subtypes:
  *   1  run this SSL text here (queued for the script tick, like the test console)
  *   2  (client -> server) run on every machine: the server runs it and relays it as 1 to all other clients
+ *   10+ other parts of the mod (coopnet_listen): 10-19 time powers (timesync.c)
  * Running received SSL needs TS_COOPNET=1 or the test console (TS_CONSOLE); otherwise it is logged and
  * dropped. TS_COOPNET=0 leaves the game's handlers alone.
  *
@@ -74,7 +75,22 @@ typedef struct {
  * slot 2 (returns 0), then slot 1, and slot 3 only when slot 1 returned 0. */
 typedef int (TSCALL *handler_t)(void *self, int msg, int *data, void *sender);
 static handler_t orig_server = (handler_t)SRV_HANDLER, orig_client = (handler_t)CLI_HANDLER;
-static int remote_ssl;
+static int remote_ssl, hooks_in;
+
+/* Subtype ranges handled by other parts of the mod (registered at start-up, before any message). */
+static struct { unsigned short first, last; coopnet_recv fn; } listeners[8];
+static int n_listeners;
+
+int coopnet_listen(unsigned short first, unsigned short last, coopnet_recv fn)
+{
+    if (n_listeners >= 8 || first <= SUB_RUN_ALL)
+        return 0;
+    listeners[n_listeners].first = first;
+    listeners[n_listeners].last = last;
+    listeners[n_listeners].fn = fn;
+    n_listeners++;
+    return hooks_in;
+}
 static LONG n_sent_logged, n_got_logged, n_ignored_logged;
 #define LOG_FIRST 8
 
@@ -201,6 +217,11 @@ static int catch_message(int msg, int *data)
         break;
     }
     default:
+        for (int i = 0; i < n_listeners; i++)
+            if (m->sub >= listeners[i].first && m->sub <= listeners[i].last) {
+                listeners[i].fn(peer, m->sub, m->data, len);   /* (synchronous; the body is not kept) */
+                return 1;
+            }
         ts_log("coopnet: unknown sub %u from peer %d", m->sub, peer);
     }
     return 1;
@@ -267,6 +288,7 @@ void coopnet_install(void)
         ts_log("coopnet: net handlers not found (other exe)");
         return;
     }
+    hooks_in = 1;
     char con[16];
     remote_ssl = ((set && v[0] == '1') || ts_env("TS_CONSOLE", con, sizeof con)) && ts_tick_install();
     ts_log("coopnet: handlers in, remote SSL %s", remote_ssl ? "on" : "off");

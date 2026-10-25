@@ -384,6 +384,41 @@ static void log_camera(void)
 }
 
 /* ---- per frame ---- */
+/* The pad's state into the joystick codes (sticks for the log in lxy/rxy). */
+static void write_codes(float *v, XINPUT_GAMEPAD *g, int menu, float *lxy, float *rxy)
+{
+    static const WORD xb[10] = {XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
+                                XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_RIGHT_SHOULDER, XINPUT_GAMEPAD_BACK,
+                                XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_LEFT_THUMB, XINPUT_GAMEPAD_RIGHT_THUMB};
+    for (int i = 0; i < 10; i++)
+        v[J_A + i] = (g->wButtons & xb[i]) ? 1.0f : 0.0f;
+    v[J_LT] = g->bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ? 1.0f : 0.0f;
+    v[J_RT] = g->bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ? 1.0f : 0.0f;
+    v[J_LT_AXIS] = g->bLeftTrigger / 255.0f;
+    v[J_RT_AXIS] = g->bRightTrigger / 255.0f;
+
+    float lx, ly, rx, ry;
+    stick(g->sThumbLX, g->sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, &lx, &ly);
+    stick(g->sThumbRX, g->sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, &rx, &ry);
+    if (menu)
+        menu_stick(&lx, &ly);
+    rx *= look_speed;
+    ry *= invert_y ? -look_speed : look_speed;
+    v[J_LX_R] = pos(lx);
+    v[J_LX_L] = pos(-lx);
+    v[J_LY_U] = pos(ly);
+    v[J_LY_D] = pos(-ly);
+    v[J_RX_R] = pos(rx);
+    v[J_RX_L] = pos(-rx);
+    v[J_RY_U] = pos(ry);
+    v[J_RY_D] = pos(-ry);
+    v[J_DUP] = (g->wButtons & XINPUT_GAMEPAD_DPAD_UP) ? 1.0f : 0.0f;
+    v[J_DDOWN] = (g->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) ? 1.0f : 0.0f;
+    v[J_DRIGHT] = (g->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) ? 1.0f : 0.0f;
+    v[J_DLEFT] = (g->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) ? 1.0f : 0.0f;
+    lxy[0] = lx, lxy[1] = ly, rxy[0] = rx, rxy[1] = ry;
+}
+
 static void pad_poll(BYTE *raw)
 {
     static int frame;
@@ -404,37 +439,10 @@ static void pad_poll(BYTE *raw)
     XINPUT_GAMEPAD *g = &st.Gamepad;
     if (!ok)
         memset(g, 0, sizeof *g);
-
-    static const WORD xb[10] = {XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
-                                XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_RIGHT_SHOULDER, XINPUT_GAMEPAD_BACK,
-                                XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_LEFT_THUMB, XINPUT_GAMEPAD_RIGHT_THUMB};
-    for (int i = 0; i < 10; i++)
-        v[J_A + i] = (g->wButtons & xb[i]) ? 1.0f : 0.0f;
-    v[J_LT] = g->bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ? 1.0f : 0.0f;
-    v[J_RT] = g->bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ? 1.0f : 0.0f;
-    v[J_LT_AXIS] = g->bLeftTrigger / 255.0f;
-    v[J_RT_AXIS] = g->bRightTrigger / 255.0f;
-
-    float lx, ly, rx, ry;
-    stick(g->sThumbLX, g->sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, &lx, &ly);
-    stick(g->sThumbRX, g->sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, &rx, &ry);
     int menu = menu_active(im);
-    if (menu)
-        menu_stick(&lx, &ly);
-    rx *= look_speed;
-    ry *= invert_y ? -look_speed : look_speed;
-    v[J_LX_R] = pos(lx);
-    v[J_LX_L] = pos(-lx);
-    v[J_LY_U] = pos(ly);
-    v[J_LY_D] = pos(-ly);
-    v[J_RX_R] = pos(rx);
-    v[J_RX_L] = pos(-rx);
-    v[J_RY_U] = pos(ry);
-    v[J_RY_D] = pos(-ry);
-    v[J_DUP] = (g->wButtons & XINPUT_GAMEPAD_DPAD_UP) ? 1.0f : 0.0f;
-    v[J_DDOWN] = (g->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) ? 1.0f : 0.0f;
-    v[J_DRIGHT] = (g->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) ? 1.0f : 0.0f;
-    v[J_DLEFT] = (g->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) ? 1.0f : 0.0f;
+    float l[2], r[2];
+    write_codes(v, g, menu, l, r);
+    float lx = l[0], ly = l[1], rx = r[0], ry = r[1];
     menu_repeat(v, menu);
 
     if (padlog) {
@@ -450,8 +458,41 @@ static void pad_poll(BYTE *raw)
     }
 }
 
+/* Local player 2 (split.c): while split.c runs the engine's command evaluation a second time for player 2's
+ * command context, this poll gives the engine pad 2 and an idle keyboard and mouse. The pad is read in the
+ * background when player 1's pad is a test pad (TS_PAD), as for player 1. */
+static int poll_player2;
+
+void gamepad_poll_player2(int on)
+{
+    poll_player2 = on;
+}
+
+static void pad2_poll(BYTE *raw)
+{
+    static WORD last_buttons;
+    float *v = (float *)(raw + 0x10);
+    memset(v, 0, 0x108 * sizeof *v);           /* keys and mouse buttons */
+    memset(v + 0x12c, 0, 6 * sizeof *v);       /* mouse axes */
+    XINPUT_STATE st;
+    memset(&st, 0, sizeof st);
+    int slot = player_slot[1];
+    if (!(slot >= 0 && (test_pad || game_in_front()) && x_get(slot, &st) == ERROR_SUCCESS))
+        memset(&st.Gamepad, 0, sizeof st.Gamepad);
+    float l[2], r[2];
+    write_codes(v, &st.Gamepad, 0, l, r);
+    if (padlog && st.Gamepad.wButtons != last_buttons)
+        ts_log("gamepad: player 2 pad %d buttons=0x%04x L=%.2f,%.2f R=%.2f,%.2f", slot + 1, st.Gamepad.wButtons, l[0], l[1],
+               r[0], r[1]);
+    last_buttons = st.Gamepad.wButtons;
+}
+
 static void THISCALL hook_kb_poll(void *raw)
 {
+    if (poll_player2) {
+        pad2_poll((BYTE *)raw);
+        return;
+    }
     real_kb_poll(raw);
     pad_poll((BYTE *)raw);
 }

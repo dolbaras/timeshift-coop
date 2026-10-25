@@ -183,7 +183,7 @@ static void console_pump(void)
             done[i](tag[i], texts[i], ts_script_run(texts[i], out, sizeof out));
         else {
             /* "@all ", "@peers ", "@srv ": send to the other machines of a network game (coopnet.c) */
-            if (!coopnet_console(texts[i], out, sizeof out))
+            if (!coopnet_console(texts[i], out, sizeof out) && !storysync_console(texts[i], out, sizeof out))
                 ts_script_run(texts[i], out, sizeof out);
             if (con_sock != INVALID_SOCKET)
                 sendto(con_sock, out, (int)strlen(out), 0, (struct sockaddr *)&from[i], sizeof from[i]);
@@ -196,12 +196,26 @@ static void console_pump(void)
 static void (TSCALL *orig_update_delayed)(void *, float) = (void *)0x8fbf70;
 static LONG tick_logged;
 
+/* Per-frame callbacks of other parts of the mod (main thread, after the script delayed calls). */
+static ts_frame_fn frame_fns[8];
+static int n_frame_fns;
+
+int ts_frame_add(ts_frame_fn fn)
+{
+    if (n_frame_fns >= 8 || !ts_tick_install())
+        return 0;
+    frame_fns[n_frame_fns++] = fn;
+    return 1;
+}
+
 static void TSCALL hook_update_delayed(void *mgr, float dt)
 {
     orig_update_delayed(mgr, dt);
     if (InterlockedIncrement(&tick_logged) == 1)
         ts_log("console: first script tick on thread %lu", GetCurrentThreadId());
     console_pump();
+    for (int i = 0; i < n_frame_fns; i++)
+        frame_fns[i](dt);
 }
 
 /* ---- script log ---- */

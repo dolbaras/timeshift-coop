@@ -310,8 +310,12 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         testmode_install();
         console_install();
         coopnet_install();
+        timesync_install();
+        aisync_install();
+        storysync_install();
         netfix_install();
         gamepad_install();
+        split_install();
         char v[16];
         if (ts_env("TS_WATCHDOG", v, sizeof v) && (watchdog_secs = (DWORD)atoi(v)) > 0) {
             DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &main_thread,

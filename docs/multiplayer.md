@@ -169,10 +169,12 @@ them was used in LAN or direct play.
 
 ## 6a. The game's own windowed mode
 
-With `VIDEO_FullScr = no` in the profile the Direct3D device was lost at the first level load (the main
-menu level) and never reset: the game kept running and drew nothing (Intel UHD 630, 2026-10-25). With
-`yes` and the proxy's test mode making the device windowed, everything renders. Players' windowed and
-borderless modes are a job for the mod's display settings (as in the Jericho mod).
+A windowed game whose Direct3D device is lost never resets it: `TestCooperativeLevel` keeps returning
+`D3DERR_DEVICELOST`, the game runs on and draws nothing. On the test PC this happened at the first level load
+in some runs and not in others; the losses lined up with another program entering or leaving exclusive full
+screen on the same PC (Intel UHD 630, 2026-10-25), not with `VIDEO_FullScr` as first thought. Players who
+alt-tab from another full-screen game would hit it too: device-loss recovery (Reset with the game's own
+reset path) is a job for the mod, with its windowed and borderless display settings (as in the Jericho mod).
 
 ## 7. Test tools in the mod's DLL
 
@@ -340,12 +342,12 @@ by moving that machine's player onto it (`Transport("<ai name>")`) and reading t
 |---|---|---|---|
 | Remote player body and position | **Yes, both ways** | Client moved 50 m by `Transport`: its `player_mp` on the server followed within 0.03 m; the same for the host as seen on the client. Frames: each sees the other's white suit standing where expected; the host shows with a red name tag ("Default", its `PlayerName`). | Nothing for movement. A way for scripts to address remote players (below). |
 | Naming / listing remote players in script | **No** | `player_mp` objects have an empty name (`string(p)` = `""`); `foreach p : @player_mp`, `@player_ghost`, `@plr_model` iterate *every* object of the level (these are not script classes, the class filter is ignored); `@player` lists only the local `player`. A domain's `IsBelong()` does see the remote body (listed as `""` plus its `wpn_mp_pistol`). | Native: name the remote players (e.g. `player_mp<slot>`) or a native that returns them, so C3/C10 of `player-audit.md` can be written. |
-| AI movement and animation | **No** (with or without `isSyncMP` on `ai_brain`) | Same position and view direction on both machines: on the server the soldiers fight and fall, on the client the same soldiers stand frozen in their first pose for minutes; positions differ by 3-15 m (e.g. police3: server 196-207, client stays at 191-194). The shipped data and `--sync-ai` gave the same frozen picture. | Find why the AI regular update does not move client proxies (the AI classes have the update code, `netcode.md` section 4); else mirror AI transforms/animations over mod messages. |
+| AI movement and animation | **No** (with or without `isSyncMP` on `ai_brain`); **yes with the mod's `aisync.c` and `isSyncMP`** (see "AI on clients") | Same position and view direction on both machines: on the server the soldiers fight and fall, on the client the same soldiers stand frozen in their first pose for minutes; positions differ by 3-15 m (e.g. police3: server 196-207, client stays at 191-194). The shipped data and `--sync-ai` gave the same frozen picture. | Find why the AI regular update does not move client proxies (the AI classes have the update code, `netcode.md` section 4); else mirror AI transforms/animations over mod messages. |
 | AI death | **Only with `isSyncMP`**, and it **crashes the client** | With `--sync-ai`, `Die()` on the server made `IsLive()` false on the client too (the figure kept standing); without it the client still said `true`. With `--sync-ai` and no fix the client crashed 1-4 minutes after joining, when AI died on the server: `AccessViolation at 0x8496D7 (read 0)` (2 of 3 unpatched sessions; the first, exploratory one ran 8 minutes without). | Native fix (below), then death animation/ragdoll on the client (the proxy stays standing). AIs that died before the client joined still count as alive there (`slo_*`): the join state must carry deaths. |
-| Client shooting AI | **Yes** (damage reaches the server) | The client fired (input written in memory, ammo 15 -> 4 / 112 -> 96) at a soldier it saw (the frozen proxy); the soldier, alive on the server just before, was dead there right after, with no other shooter left (rebels removed by script, host far away with `SetGOD`). Twice, once with and once without `isSyncMP`. Without it the client did not learn of the death. | Make the client aim at where the AI really is (AI movement sync); show the death on the client. |
-| AI shooting the client | **Not seen** | ~1 minute next to live hostile soldiers (server side 8 m away, host elsewhere): client health stayed full; one earlier session showed the red damage tint once while soldiers fought rebels. AI target natives take names and remote players have none (`SetTarget("player")` = the host, audit D7). | Check AI target selection over `player_mp` (C10 of the audit); probably native. |
+| Client shooting AI | **Yes** (damage reaches the server) | The client fired (input written in memory, ammo 15 -> 4 / 112 -> 96) at a soldier it saw (the frozen proxy); the soldier, alive on the server just before, was dead there right after, with no other shooter left (rebels removed by script, host far away with `SetGOD`). Twice, once with and once without `isSyncMP`. Without it the client did not learn of the death. | Make the client aim at where the AI really is (done: AI movement sync, a client burst killed a moving soldier); show the death on the client (open). |
+| AI shooting the client | **Not seen** (frozen AI); with AI replication on: yes, the client was shot dead several times | ~1 minute next to live hostile soldiers (server side 8 m away, host elsewhere): client health stayed full; one earlier session showed the red damage tint once while soldiers fought rebels. AI target natives take names and remote players have none (`SetTarget("player")` = the host, audit D7). | Check AI target selection over `player_mp` (C10 of the audit); probably native. |
 | Pickups / dropped weapons | **Yes** | Weapons dropped by AI killed on the server appeared on the client's ground (`isSyncMP` items). | - |
-| Time powers | **No** (each machine only) | Client `StartTControl("tslow", true)`: the client's flags `[0xfcace0]` = 0x41 and world scale 0.2 with the blue effect on its screen; the server stayed 0x40 / 1.0, no effect. Host `tslow`/`tstop`: server 0x41 / 0.2 and its grey screen; the client stayed 0x40 / 1.0, no effect. Host-side slow-down of AI cannot be seen on the client while AI do not move there. | Mod message: a client asks the host to run the power, the host broadcasts flags/effect to every client (as `netcode.md` section 5 says). |
+| Time powers | **No** (each machine only) | Client `StartTControl("tslow", true)`: the client's flags `[0xfcace0]` = 0x41 and world scale 0.2 with the blue effect on its screen; the server stayed 0x40 / 1.0, no effect. Host `tslow`/`tstop`: server 0x41 / 0.2 and its grey screen; the client stayed 0x40 / 1.0, no effect. Host-side slow-down of AI cannot be seen on the client while AI do not move there. | Mod message: a client asks the host to run the power, the host broadcasts flags/effect to every client. Built: section 9a (not yet run). |
 | Level triggers (audit D1) | **Local only** | Client alone entered `dom_farm_first_room` (its `OnEnter` creates `ai_house_first_room_2`): the client ran it (the soldier existed on the client), the server did not (`unknown object`), although `IsBelong` on the server saw the client's body inside. Then the host entered: the server created the soldier and the client got a second, unnamed replica next to its own local copy (`object ... already exist, new one added as unnamed`). | C1 (host-only story handlers on clients: client-run `$farm.Create` makes local, non-networked duplicates) and C4 (a client's entry forwarded to the host) of `player-audit.md`, both native. |
 | Level scripts on the client (audit D2) | **Yes, they run** | The client's log shows the same domain handlers and their errors as the server's (`dom_BRIDGE.OnEnter`, `dom_kill_mech_and_street_guys.OnEnter`, ...). | C1. |
 | Mission failure (`$player.FailMission`) | MP death, session stays | On the client: red death screen, kill feed "Client2", score -1, respawn in 3 s; on the host the same for "Default"; both still connected, server mode unchanged. No mission-failed menu. | C6/C7 (team restart) of the audit. |
@@ -364,6 +366,67 @@ to a zeroed 4 KB block instead of NULL (`8b 89 90 02 00 00 8b 40 08 8b 11 68 <bl
 the client survived several AI deaths (by script and by its own shots) for the rest of two sessions (8-9 minutes each). The mod needs the same in its
 DLL (or a NULL check at `0x8496c0`) before AI replication can be switched on. Without `isSyncMP` no crash happened
 (one session with AI deaths).
+
+### AI on clients (`native/aisync.c`)
+
+With `isSyncMP = Yes` on `ai_brain.cls` the server gives every soldier a net id and the client matches its own
+copy of the level's soldier to it, but the soldiers still stood in their first pose on the client. The AI classes
+contain finished-looking network code (a state write/read pair on top of the base entity's, `netcode.md` section 4);
+three gaps kept it from running, all found in the executable and confirmed with counters in the mod's log:
+
+1. **Nothing starts an AI's network updates.** Replicated objects call their "net start" virtual (entity vtable
+   `+0x44`), which creates a *motion component* for the transform (a writer on the server, an interpolating
+   reader on a client) and sets the entity's role bits for "in the regular updates" (`0x10`) and "has motion data"
+   (`0x40`). Players, items, doors and physics objects do; no AI code does. On the server the AI write was called
+   0 times and the soldiers' role was `0x406`. The mod calls the **item classes' net start** (`0x4f6b60`, kind 2,
+   motion on) for every AI that has a server net id, on both machines: the server then sends position and
+   rotation of each soldier, and the client's reader interpolates and places the body every frame. The
+   component's transform state is generic (position, rotation, velocities read through entity virtuals); it worked
+   for soldiers unchanged.
+2. **The AI's animation bytes are never sent.** The AI write puts three bytes after the base message (the body's
+   animation id, the animation its behaviour wants, a speed), and a client's AI does play exactly these (it
+   picks one of the two ids and starts it); but the update codec (`0x693240`/`0x6932b0`) serialises only the
+   sequence number, the length and the motion bytes. A client therefore read whatever its static receive buffer
+   held: animation 0 at time 0, the "first pose". The mod appends the two ids (16 bits each, the AI's own bytes
+   cannot hold ids above 127) and the speed to the motion bytes with a 2-byte marker, and gives them back to the
+   AI's own read on the client (a message without the marker gets "no animation" instead of buffer leftovers).
+3. **A soldier that stands still is never sent again** (the transform did not change, so its relevance is 0),
+   so a new idle, aim or crouch animation would not arrive. The server sets the entity's "send now" bit (`8`) on
+   an AI whose animation changed since its last update.
+
+The client also copies the body's position into the entity's own position field (`+0xb0`, which the server's AI
+code keeps equal to the body and scripts read).
+
+Measured **(observed)**, level `ts2_city_part02`, both instances on one test PC, positions and animations of all
+soldiers logged by both machines at the same clock seconds (`TS_AIDEBUG`):
+
+| Check | Result |
+|---|---|
+| Position | after the join (the first ~30 s, while the server works through its update queue, some soldiers still lag), client body within 0.02-0.18 m of the server's for moving soldiers (one update behind; 0.58 m once for a running one) and within 0.03-0.1 m for standing ones, over 4 sessions (e.g. police3 `200.98/109.50` server, `200.97/109.47` client at the same second) |
+| Animation | same animation id on both in 95-99 % of the samples (walk, run, aim, fire, idle variants: 12, 25, 26, 42, 60, 69, 82, 161, 181, 187, 262 ...), times 0.05-0.5 s apart; a switch shows on the client one update later |
+| Frames of the same scene | the soldier the host sees running and firing is at the same spot on the client, in a running pose, not in its first pose (muzzle flashes are not shown on the client, see below) |
+| Client shooting a moving soldier | a 1.5 s burst from the client at the soldier it saw killed it on the server in one session (alive before, dead right after), missed in another |
+| AI shooting the client | soldiers now shoot the client's body: the client died several times within minutes (`SetGOD` on the client does not protect its body on the server) |
+| Update rate | ~9 updates per second per moving soldier (the engine's priority scheduler); standing soldiers only when their animation changes |
+| Stability | 10 minutes (and 9.5 minutes with the default build, no test variables but the diagnostics) with AI updates, AI deaths (script and client fire), client deaths and respawns: no crash on either side |
+
+Still open:
+
+- **Deaths on the client.** The server's soldiers die into ragdolls (body animation id -1). The client gets the
+  death (`IsLive()` false) and the body stays where the server's ragdoll lies, but the client's AI then plays its
+  default idle animation: a standing corpse. The visual part of a death (hit reaction, death animation or
+  ragdoll start: `0x8496c0` -> vtable `+0x2e8` = `0x466b90` -> `+0x394`/`+0x430`) runs only with authority.
+- Soldiers playing scripted sequences (the level-start actors `*_MM`/`*_CR`, body animation id -2 on the server)
+  stand in their idle on the client.
+- AI weapon fire effects (muzzle flash, tracers, sounds) are not seen on the client.
+- Soldiers created at run time (`$farm.Create`) reach the client without their name (`""`), so client-side
+  scripts cannot address them.
+- AIs that died before the client joined still stand on the client (`slo_*`, as before).
+
+| Environment | Effect |
+|---|---|
+| `TS_AISYNC=0` | leave the AI as the game has it (the mod's AI replication is on by default; it acts only on AI with `isSyncMP` in a network session) |
+| `TS_AIDEBUG=<s>` | every `<s>` seconds (on the clock) each AI's net id, role bits, body position, animation and update counters in the log; with it a client also reads `<TS_SHOTDIR>\follow.req` (`side back up` in metres) and puts its player next to the host's body, facing the same way, so both machines can render the same scene |
 
 ### Script facts found on the way
 
@@ -399,7 +462,8 @@ nothing extra. Built and checked against the executable only; not yet run in a g
   machine: the server runs it and passes it on to the other clients as `1`. Received SSL runs in the
   per-frame script tick, like the test console, and is logged as
   `coopnet: ran from peer N: <text> -> <result>`. It runs only with `TS_COOPNET=1` or the test console
-  (`TS_CONSOLE`); otherwise it is logged and dropped.
+  (`TS_CONSOLE`); otherwise it is logged and dropped. Subtypes from `10` up belong to other parts of the mod
+  (`coopnet_listen`): `10`/`11` are the time powers of section 9a, `20`-`22` the story of section 9b.
 - **Test console** (section 7, `TS_CONSOLE`): a line starting with `@all ` runs the rest here and on every
   other machine, `@peers ` only on the other machines, `@srv ` on the server. The reply is `sent to N`
   (plus the local result for `@all`), `not in a network game`, or `too long`.
@@ -410,6 +474,204 @@ nothing extra. Built and checked against the executable only; not yet run in a g
 | `TS_COOPNET=0` | no mod messages at all (the game's handlers stay as they are) |
 
 The log shows the first 8 messages sent and received (`coopnet: sent sub ...`, `coopnet: got sub ...`).
+
+## 9a. Time powers in co-op
+
+Built and checked against the executable only (`native/timesync.c`, switched on with `TS_TIMESYNC=1`); not
+yet run in a game. Addresses are those of patch 1.2.
+
+### The rule
+
+- **One world power at a time**, as the engine itself allows only one (its script call refuses a second
+  power while one runs). The server decides who owns it: first come, first served.
+- The owner uses the power exactly as in the campaign: its own key, its own energy, its own screen effect.
+- On every other machine the **world** (enemies, projectiles, physics, scripted objects) is slowed or
+  stopped the same way, with the same screen effect, so everyone sees what is happening.
+- **Every human player keeps normal speed**, the owner and the others alike (as in Jericho's co-op slow
+  motion): each machine's own player runs on real time, and a remote player's body follows the positions
+  its owner sends.
+- **Energy is per player**: only the owner spends energy. While a teammate's power runs, the power keys do
+  nothing (no energy is spent). When the owner ends the power, runs out of energy, dies or leaves, the world
+  returns to normal speed on every machine.
+- **Time reversal is not shared yet**: in co-op the reverse key does nothing (see "Reversal" below).
+- Scripted slow-motion moments of the levels are not part of this: level scripts run on every machine and
+  start them there themselves.
+
+### What the engine does (static analysis)
+
+| Part | Where | Notes |
+|---|---|---|
+| World clock | per frame `0x6494c0` | world frame time `[0xfcab8c]` = real frame time `[0xfcab74]` x current world scale `[0xec00e0]`; the scale moves towards the target `[0xebfbb4]` (1.0 normal, 0.2 slow, 0.001 stop) at the rate `[0x1095f88]` |
+| Global time flags | `[0xfcace0]` | bit 0 slow, bit 1 stop (bit 0x40 is set during play; 0x40 = nothing active, 0x41 slow, 0x42 stop) |
+| World start | `0x441700` | `eax` = mode (0 slow, 1 stop), `ecx` = the player; sets the flag and the target scale and tells every object with the in-process messages `0x3fd` (slow) / `0x401` (stop); nothing is sent over the network |
+| World end | `0x4419b0` | `eax` = mode, `ecx` = the player, one stack argument (1 = at once, 0 = back with the normal ramp), `ret 4`; messages `0x3fe` / `0x402` |
+| Player speed | player code | the player's own code reads the **real** frame time, never the world frame time: the player keeps normal speed during slow and stop. Remote player bodies are placed from their owners' updates |
+| Screen effects | manager `0x1096f18` | effect slot `mode + 3` at `+0x14f4 + slot*4` (slow 3, stop 4, reverse 5); start `0x665f70` (`esi` = manager, `edi` = slot, one float), stop = the slot's virtual function 2 while `+8 & 1` (both as the script `StartTControl(mode, true)` / `StopTControl(mode)` do) |
+| A player's own power | controller at player `+0x280` | `+0` active mode (-1 none, 0 slow, 1 stop, 2 reverse), `+0x2c` energy (0..1); every start goes through `0x43e1b0` (`eax` = mode, `esi` = controller, stack = player, `ret 4`), which calls the world start; the end is `0x43e2b0` (`ecx` = player, `esi` = controller, `edx` = 0) |
+| Script calls | `StartTControl` `0x43a8b0` -> `0x43c640`; `StopTControl` `0x43aa50` -> `0x43c6c0` | only `"tslow"` and `"tstop"`; the start is refused while a power runs (`[0xfcace0] & 3`); they do not touch the player's controller |
+| Power keys in a network game | input function `0x40d2c0` | **in game modes 2/3/4 the keys never reach the campaign powers**: the function takes its multiplayer branch (chrono grenades, time shield). The energy set-up at spawn (`0x43de20`), its regeneration (`0x43e3b0`, `0x43eae0`) and the start threshold (`0x43e1b0`) also switch to the multiplayer rules (`StartEnergy`, `bPlayersTimeEnergy`, `bTimeControl`, ...). So on a campaign level hosted on a server, players had no campaign powers at all; only the script call worked |
+
+### What the mod does
+
+- **Campaign powers on a server.** In a network game on a campaign level (level file name containing
+  `ts2_`), the six game-mode reads named in the last row see "single player": the keys, energy (full at
+  spawn, regeneration) and HUD behave as in the campaign. Other maps keep the multiplayer rules
+  (`TS_TIMESYNC=all` applies it to every network map).
+- **Detection**: every frame (in the script tick, main thread) each machine reads its own player's active
+  power at `+0x280`.
+- **Messages** (mod messages of section 9, reliable):
+
+  | Subtype | Direction | Body | Meaning |
+  |---|---|---|---|
+  | `10` | client -> server | `u8 version (1), i8 mode` | "my own power is now `mode`" (-1 none, 0 slow, 1 stop) |
+  | `11` | server -> each client | `u8 version, i8 mode, u8 yours, u8 0, i32 owner` | "the world power is `mode`, owned by client `owner` (0 = the server's player); `yours` = it is your own" |
+
+- **Server**: keeps the owner and the mode. Its own player's power, or a client's request, is accepted when
+  nobody owns the world power (or the same player changes it) and sent to every joined client; a refused
+  request is answered with the current state, and the client ends its own power (both players pressed in
+  the same moment). The state is repeated every second while a power runs (for clients that join during
+  it); a power whose owner left ends.
+- **Every machine**: when the world power belongs to someone else, the machine runs it for them with the
+  world start/end calls above (the player argument is its own player) and the screen effect, and refuses
+  its own player's power starts (a gate in front of `0x43e1b0`). If the world loses that power (a death or
+  a level script resets the clock), it is started again within half a second.
+
+| Environment | Effect |
+|---|---|
+| `TS_TIMESYNC=1` | shared time powers on campaign levels hosted on a server (all machines need it) |
+| `TS_TIMESYNC=all` | the same on every network map (multiplayer maps then lose the chrono grenades) |
+| `TS_TIMESYNC_FX=0` | no screen effect on the machines of the other players |
+| `TS_TIMESYNC_REVERSE=1` | the reverse key works in co-op, on the local machine only (experiment) |
+
+The log has every decision as `timesync: ...` (co-op powers on/off with the level name, local power changes,
+requests, refusals, world power changes, re-starts).
+
+### Reversal (next step)
+
+The campaign rewinds every object recorded with `isSyncTR` (`tr_writer`, `0x586000`) and plays the record
+back; the player is not rewound. In a network game the recorder is never started (`0x5846b0`, which starts it,
+does so only in game mode 1), so a reverse cannot start (`0x5847c0` needs recorded frames). Planned rule: the server's world
+rewinds (the server owns AI, physics and doors, so clients see the result through the normal updates), the
+players' own bodies do not (they are owned by their machines), the reverse screen effect shows on every
+machine, and clients pause their local-only objects. Needs the recorder on the server and a check of what a
+rewind does to replicated objects.
+
+### Risks to check in the first run
+
+- Whether the server overwrites a client's energy with its own value (players' energy is a networked
+  property in multiplayer, notify subtype 7).
+- Whether remote players' animations play slowed (their positions should not).
+- What the in-process messages `0x3fd`/`0x401` do to objects that are replicas on a client.
+- The HUD's energy bar in multiplayer mode.
+
+## 9b. Story in co-op
+
+Built and checked against the executable only (`native/storysync.c`, switched on with `TS_STORYSYNC=1` on every
+machine); not yet run in a game. The classifier and the client rewrite were run offline over the scripts of all
+24 campaign levels (6 135 object texts: 2 480 get statements wrapped, 10 746 statements in all; no statement
+spans two lines). Addresses are those of patch 1.2. The rules come from `player-audit.md` (C1, C2, C4, C6-C8).
+
+### The rule
+
+- **The host runs the story.** Every level-script handler that changes the world (AI, creations, unlocks,
+  saves, failure, level exits) runs on the host only. Clients see its results through the game's replication
+  and through replays (below).
+- **Presentation runs on every machine for its own player**: light zones, camera shake, hints, the automatic
+  time-power choice (`$tc.SetMode`), sounds, holster and fall-height zones.
+- **The first player to arrive starts the story**: a story domain counts as entered while any player is
+  inside; its `OnLeave` fires when the last one has left.
+- **The host's story events reach every client at the same moment**, and each client applies the `$player`
+  calls of that handler (input and movement locks, teleports, time-power settings, loadouts, hints, FMVs) to
+  its own player.
+- **Level exits move the whole session**; a client never changes level by itself.
+- **A player's death is a multiplayer respawn**, at the last checkpoint instead of the level start.
+  **A mission failure restarts the level for everybody**, at the last checkpoint where the level has a
+  restore object for it.
+
+### What the engine does (static analysis)
+
+| Part | Where | Notes |
+|---|---|---|
+| Script of a level object | `0x644e50`, compile call `0x644fc4` -> `0x8f9150` | each object with script text gets its own class; the compile call's hint argument is the object's name |
+| Every script event | `0x903940` (thiscall: class, Status out, instance, member index, argc, argv; ret `0x14`) | called by index `0x8f82bf`, by name `0x8f97c6` (`0x8f9680`: instance, out, symbol, argc, argv) and for the per-frame mask events `0x905462` |
+| Mask events | entity `+0x84`, fired by `0x6442f0` each frame | `OnLocked` 1, `OnUnlocked` 2, `OnInitLevel` 4, time events 8-`0x100`; class events `0x200`/`0x400`/`0x800` (domain `OnEnter`/`OnLeave`, door `OnOpen`/`OnClose`, button `OnPushed`/`OnPoped`, `OnComplete`) |
+| Named events | by name with argument values | `OnBhvEnd(bhv)`, `OnActionFrame(anim, frame)`, `OnAnimBegin/End`, `OnEye(on)`, `OnAlert`, `OnDestroyed`, `OnPicked(user)`, ... |
+| Domain test | `0x6c2dd0` (vtable `+0x134` of every domain class) | tests the points of one watched object, `+0xf8` = the local player; state `+0xe8` (1 inside, 2/4 fired once), lock count `+0x88`; the enter/leave virtuals `+0x124`/`+0x128` set the mask bits. **Only the local player sets off a domain**; `IsBelong` (`0x6c3d60`) tests any entity's position |
+| Level exit | reload domain: per-point callback `0x8a9ec0` -> `Reload` `0x8a9f00` | needs the authority bit (never on a client); sends the single-player `LOAD_LEVEL` (`0x3ec`, `nameScene` at `+4`) to the world object (call `0x8aa0e3`): the host alone would leave |
+| Server map change | `0x606960` (match rounds): in-process `0x3f6`, then `0x43e` to the level loader `[0x1033980]` | the loader (`0x6e3690`) tells every client (`0x43e`) and sends `0x3ec` with the level name; clients load the same level |
+| Single-player level load | `0x675370` (stdcall, String) | used by `$ui.LoadLevel`, `$ui.RestartLevel` and the menus; on a server it ends the session |
+| Checkpoint | `$saves_mng.AutoSave(id)` -> `0x6ce030` | |
+| Respawn points | `mp_rules_sys` `[0xfcab18]` `+0x114`, count `+0x118`, stride `0x1c` (position, angles, team flags) | built from the level's `start_pos*` objects at the server's level start (`0x5ec4f0`) |
+| Mission failure | `FailMission` `0x43b550` | on a server: a multiplayer death (observed, section 8a) |
+
+### What the mod does
+
+- **Classification** (host and clients, when a level object's script is compiled): each handler of the object
+  is *local* when every statement is presentation (the calls listed under "The rule"), else *story*.
+  `OnInitLevel` and `OnInit` are always local: every machine sets up its own copy of the level and its AI.
+  Over the 24 levels: 900 story and 247 local `OnEnter` handlers, 902 story domains.
+- **Client scripts** are compiled with the statements only the host may make wrapped in `if false ... end`:
+  AI control (`SetBHV`, `SetAim`, `SetTarget`, `Die`, ...), creations (`Create`), deaths and failure
+  (`Kill`, `FailMission`), saves and level loads, seats (`StartUse`). The rewritten text is compiled once into
+  a throwaway class first; if it does not compile, the original is kept and that object's story is not
+  replayed on the client.
+- **Client**: a story event the client detects itself does not run. A story domain entry or exit is reported
+  to the host (message 20), a look trigger too (22).
+- **Host**: runs every handler as before. Before a story event runs, it is sent to every client (21: object
+  name, event name, arguments). A story domain is entered while the host's player, a client's body (by
+  `IsBelong`) or a client's report is inside it (the domain test's point count is replaced at `0x6c2e3d`).
+  A look trigger fires once even when several players look.
+- **Client replays**: the event runs on the client's own object of the same name, with the rewritten script,
+  in the next script tick (in order; an object the host has just created is waited for up to 5 s). So the
+  client's own player gets the handler's `$player` calls, local objects are shown, hidden, locked and
+  started as on the host, and the world changes come from the host.
+- **Level exits**: on the host the reload domain's `LOAD_LEVEL`, and `$ui.LoadLevel` / `$ui.RestartLevel` of a
+  campaign level, become the server's map change (`0x3f6`, then `0x43e` to the level loader with the next
+  level), done in the next script tick: every machine loads it. The profile's `ServerLocation` is set to that
+  level, so a server started later continues there. On a client a campaign level load is refused.
+- **Checkpoints**: `AutoSave(n)` on the host moves every respawn point to `Check_Point_<n>` if the level has
+  that object, else to the player who set the checkpoint off (the one inside the domain whose handler saved),
+  else to the host's player. Players who die respawn there.
+- **Mission failure**: `$player.FailMission` on the host restarts the level for everybody 3 s later (server
+  map change to the same level). When the level is up again and has `Check_Point_<n>` for the last checkpoint,
+  the host unlocks it: its own restore script (teleport, world fixes) runs on the host and, replayed, moves
+  each client's player too; the respawn points go there. Without such an object the level restarts from its
+  start. `TS_STORYSYNC_FAIL=death` keeps the game's multiplayer death instead.
+
+| Subtype | Direction | Body | Meaning |
+|---|---|---|---|
+| `20` | client -> server | `u8 1, u8 inside, name` | a story domain was entered / left by the client's player |
+| `21` | server -> each client | `u8 1, u8 argc, u8 len, object, u8 len, event, arguments` | run this story event here |
+| `22` | client -> server | `u8 1, u8 on, name` | a story look trigger (`OnEye`) fired on the client |
+
+Arguments: `u8 type` (0 null, 1 int, 2 bool, 3 float, 4 string) and the value (4 bytes, 1 byte, or `u8 len` +
+bytes). Object arguments (`OnPicked(user)`, `OnOccupied(user)`) travel as null.
+
+| Environment | Effect |
+|---|---|
+| `TS_STORYSYNC=1` | story in co-op (all machines need it; single player is unchanged) |
+| `TS_STORYSYNC_FAIL=death` | mission failure stays a multiplayer death |
+| `TS_STORYSYNC_LOG=1` | every held-back, sent and replayed event in the log |
+
+Test console (`TS_CONSOLE`): `!ss state`, `!ss class <object>` (its handlers: story or local; rewritten),
+`!ss enter <domain>` / `!ss leave <domain>` (client: report as if its player entered or left),
+`!ss fire <object> <event>` (run an event; on the host it is also sent), `!ss exit <level>` and `!ss restart`
+(host). The log has every decision as `storysync: ...`.
+
+### Not covered yet
+
+- **Late joiners**: story events from before a client joined are not repeated; clients should join before
+  the host leaves the start area (level changes through the server keep everybody in step afterwards).
+- **"All players" gates** (lifts, trains, vehicle boarding) still follow the first player; level exits need
+  the host's own player inside the exit domain (the reload runs from the host's point test).
+- **Story handlers that test `IsBelong($player)`** (container traps, some event domains) check the host's
+  player only (audit C3): a trapped client is not failed, a trapped host fails everybody.
+- **Death scenes** (`RIP_cine` ... `$player.Kill()`): the host dies even when a client set the scene off.
+- **Seats and vehicles** (audit C9): `StartUse` runs on the host only.
+- **AI that names `"player"`** (audit C10) still means the host.
+- Objects with duplicate names (unnamed instances) run their rewritten handlers locally on a client and are
+  not replayed.
+- A restart without a restore object loses all story progress of the level (no server-side saves are loaded).
 
 ## 10. Open questions
 
