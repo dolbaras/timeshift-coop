@@ -872,6 +872,23 @@ static const Hook hooks[] = {
 };
 #define N_HOOKS ((int)(sizeof hooks / sizeof hooks[0]))
 
+/* Client crash guard (live, also without the mod's campaign parts: ts2_zep_factory_part1, AV 0x49bddd when an AI
+ * biker died on a client): the vehicle method 0x49bd70 (vtable 0xd7edfc slot; ecx = the vehicle, plain ret) uses the
+ * vehicle's physics body +0x27c, which a client's copy does not have. Without a body it now returns at once. */
+extern void cp_veh_guard(void) __asm__("cp_veh_guard");
+__asm__(".text\n"
+        ".globl cp_veh_guard\n"
+        "cp_veh_guard:\n"
+        "  cmpl $0, 0x27c(%ecx)\n"
+        "  je 1f\n"
+        "  subl $0x28, %esp\n"
+        "  pushl %esi\n"
+        "  movl %ecx, %esi\n"
+        "  pushl $0x49bd76\n"
+        "  ret\n"
+        "1:\n"
+        "  ret\n");
+
 /* ---- late joiners (host): a client that joins a level running for more than 20 s gets the host's player state ---- */
 #define LATE_MS 20000
 static DWORD level_start;
@@ -1120,6 +1137,13 @@ void campaign_install(void)
         return;
     }
     int n_hooked = 0;
+    {
+        static const unsigned char want_vg[6] = {0x83, 0xec, 0x28, 0x56, 0x8b, 0xf1};
+        unsigned char r[6] = {0xe9, 0, 0, 0, 0, 0x90};
+        *(DWORD *)(r + 1) = (DWORD)cp_veh_guard - (0x49bd70 + 5);
+        if (!(ts_env("TS_CAMPAIGN_VEHGUARD", v, sizeof v) && v[0] == '0') && !ts_patch_bytes(0x49bd70, want_vg, r, 6))
+            ts_log("campaign: vehicle guard site not as expected (other exe)");
+    }
     for (int i = 0; i < N_HOOKS; i++) {
         const Hook *h = &hooks[i];
         if ((h->group == 1 && !use_latejoin) || (h->group == 2 && !use_ai))
