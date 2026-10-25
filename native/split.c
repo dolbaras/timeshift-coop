@@ -201,21 +201,39 @@ static void geo_owner_p2(int on)
  * 0x9a1331): both players' weapon nodes share one geometry, and the last one animated in a frame would pose it. */
 static struct { BYTE *node; DWORD saved; } fp_hidden[2 * MAX_OWN];
 static int n_fp_hidden;
+static int fp_share;   /* TS_SPLIT_FPSHARE=1: player 2's first-person nodes share player 1's geometry (owner swaps) */
+
 static void *TSCALL hook_mknode(void *world, BYTE *tpl, void *xform)
 {
     BYTE *geo = tpl ? *(BYTE **)(tpl + 0xb8) : NULL;
     DWORD mark = geo ? *(DWORD *)(geo + 0xbc) : 0;
-    if (spawning_p2 && geo && mark)
+    int fp = spawning_p2 && geo && mark;
+    char first = 0;
+    if (fp) {
         *(DWORD *)(geo + 0xbc) = 0;
-    void *r = ((mknode_t)0x95dcf0)(world, tpl, xform);
-    if (spawning_p2 && geo && mark) {
+        /* A first-person template (0x95c480: name "wpn_plr*") shares its geometry with every node made from it
+         * (node +0x1c0 = template +0xb8, node +8 |= 0x1000); the geometry is bound to one node (+0xbc), so two
+         * players cannot draw it. Other templates get their own copy (0x961f30). For player 2 the template's name
+         * is changed for the call (its first letter), so the copy is made; the node's first-person flag is set
+         * as the shared path would. */
+        if (!fp_share) {
+            first = tpl[0x30];
+            tpl[0x30] = 'W';
+        }
+    }
+    BYTE *r = ((mknode_t)0x95dcf0)(world, tpl, xform);
+    if (fp) {
         *(DWORD *)(geo + 0xbc) = mark;
-        if (r && n_geo2 < MAX_GEO)
+        if (!fp_share) {
+            tpl[0x30] = first;
+            if (r)
+                *(DWORD *)(r + 8) |= 0x1000;
+        } else if (r && n_geo2 < MAX_GEO)
             geo2[n_geo2].geo = geo, geo2[n_geo2++].node2 = r;
     }
     if (spawning_p2 || (splitlog && mark))
-        ts_log("split: node for template \"%s\" geometry %p in use %08lx -> %p", tpl ? (char *)(tpl + 0x30) : "?",
-               (void *)geo, mark, r);
+        ts_log("split: node for template \"%s\" geometry %p in use %08lx -> %p (own geometry %p)",
+               tpl ? (char *)(tpl + 0x30) : "?", (void *)geo, mark, (void *)r, r ? *(void **)(r + 0x1c0) : NULL);
     return r;
 }
 
@@ -1097,6 +1115,18 @@ static void split_tick(float dt)
                                    own_cls[i][k], (void *)o, (void *)on, *(DWORD *)(on + 4), *(DWORD *)(on + 8),
                                    node_visible(on), ((float *)(on + 0x68))[0], ((float *)(on + 0x68))[1],
                                    ((float *)(on + 0x68))[2]);
+                        if (on && !(*(DWORD *)(on + 4) & 3)) {   /* (and its meshes: node +0x1c4 list, +0x1c8 count, 0x9a1070) */
+                            BYTE **ml = *(BYTE ***)(on + 0x1c4);
+                            int nm = *(int *)(on + 0x1c8);
+                            ts_log("split:       geometry %p meshes %p x%d", *(void **)(on + 0x1c0), (void *)ml, nm);
+                            for (int m = 0; ml && !IsBadReadPtr(ml, 4) && m < nm && m < 3; m++) {
+                                BYTE *me = ml[m];
+                                if (me && !IsBadReadPtr(me, 0xc0))
+                                    ts_log("split:       mesh %p +0 %08lx +4 %08lx +10 %08lx +28 %08lx +bc %08lx", (void *)me,
+                                           *(DWORD *)me, *(DWORD *)(me + 4), *(DWORD *)(me + 0x10), *(DWORD *)(me + 0x28),
+                                           *(DWORD *)(me + 0xbc));
+                            }
+                        }
                     }
                 if (pl) {
                     float *c = (float *)((i ? cam2 : (as2.depth ? as2.cam : (swapped ? saved_cam : CAM))) + 0x30);
@@ -1171,6 +1201,7 @@ void split_install(void)
         layout_cfg = v[0];
     keep_mt = ts_env("TS_SPLIT_MT", v, sizeof v) && v[0] == '1';
     no_geo_owner = ts_env("TS_SPLIT_NOGEO", v, sizeof v) && v[0] == '1';   /* (tests: without the owner swap) */
+    fp_share = ts_env("TS_SPLIT_FPSHARE", v, sizeof v) && v[0] == '1';
     splitlog = ts_env("TS_SPLITLOG", v, sizeof v) ? atoi(v) : 0;
     msglog = ts_env("TS_SPLIT_MSGLOG", v, sizeof v) && v[0] == '1';
     allow_ff = ts_env("TS_SPLIT_FF", v, sizeof v) && v[0] == '1';   /* (tests: friendly fire on) */
