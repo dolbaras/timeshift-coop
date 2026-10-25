@@ -219,7 +219,31 @@ static void geo_owner_p2(int on)
  * 0x9a1331): both players' weapon nodes share one geometry, and the last one animated in a frame would pose it. */
 static struct { BYTE *node; DWORD saved; } fp_hidden[2 * MAX_OWN];
 static int n_fp_hidden;
-static int fp_share;   /* TS_SPLIT_FPSHARE=1: player 2's first-person nodes share player 1's geometry (owner swaps) */
+static int fp_share;
+/* Player 2 in a network game (server). The game already shows a `player` to clients as `player_mp`: the player's
+ * create descriptor (vtable +0x38 = 0x40b790) names its class through vtable +0x334, which in a network game gives
+ * the multiplayer class; the join list (0x6525e0) and CREATE_ENT (0x652c00) take every isSyncMP entity with a
+ * net id, and `player` is isSyncMP. So player 2 goes to clients as a `player_mp` puppet by the game's own way;
+ * the mod adds the server's regular-update bit (role 0x10, which player 1 has and player 2 lacked) so its moves
+ * are sent. TS_SPLIT_NETLOCAL=1 keeps player 2 out of the network game instead (isSyncMP cleared). Both need the
+ * client test. */
+static int net_local = 0;
+
+/* Player 2 and its objects out of the network game (server): isSyncMP (+0x98 bit 0) cleared, so they are not in a
+ * joining client's entity list (0x6525e0) and not sent as CREATE_ENT (0x652c00), and role bit 0x4000 (no create
+ * message) set. Returns the number of objects changed. */
+static int net_hide(BYTE *o, const char *what)
+{
+    if (!o || IsBadReadPtr(o, 0x230))
+        return 0;
+    unsigned before = *(unsigned *)(o + 0x98);
+    *(unsigned *)(o + 0x98) &= ~1u;
+    *(unsigned *)(o + 0x2c) |= 0x4000u;
+    if (splitlog || (before & 1))
+        ts_log("split: %s %p out of the network game (net id %d, sync flags %08x -> %08x)", what, (void *)o, *(int *)(o + 0x18),
+               before, *(unsigned *)(o + 0x98));
+    return (before & 1) != 0;
+}   /* TS_SPLIT_FPSHARE=1: player 2's first-person nodes share player 1's geometry (owner swaps) */
 
 /* The crosshairs are scene nodes too (templates "crs_*", made with each player's weapons, kept in front of the
  * player's camera): in the other player's view a player's crosshair floats in front of that player's body
@@ -1253,9 +1277,20 @@ static void TSCALL hook_die(void *pl, int arg)
         real_die(pl, arg);
         return;
     }
-    /* Down together (the partner died less than 5 s ago): the game's own death, the restart for both. */
+    /* In a network game (co-op server) player 1 dies by the multiplayer rules (death screen, respawn timer, the
+     * session's respawn points), as the clients do; player 2, which those rules do not know, is always respawned
+     * next to player 1 (the game's death would leave it a dead object without HUD). */
+    BYTE *gm = *(BYTE **)0xfcab34;
+    int net = gm && (*(int *)(gm + 0x3c) == 2 || *(int *)(gm + 0x3c) == 3);
     DWORD now = GetTickCount();
-    if (died_at[!who] && now - died_at[!who] < 5000) {
+    if (net && who == 0) {
+        died_at[0] = now;
+        ts_log("split: player 1 died in a network game: the multiplayer death and respawn");
+        real_die(pl, arg);
+        return;
+    }
+    /* Down together (the partner died less than 5 s ago): the game's own death, the restart for both. */
+    if (!net && died_at[!who] && now - died_at[!who] < 5000) {
         ts_log("split: player %d died while player %d was down: the game's death", who + 1, 2 - who);
         real_die(pl, arg);
         return;
@@ -1388,6 +1423,13 @@ static int msg_hide_view(int v)
 
 static void TSCALL hook_text_draw(BYTE *e, void *arg)
 {
+    /* (the multiplayer texts, "mp*": player 1's death and respawn countdown, the server's warm-up; player 1's
+     * alone in a network game, not drawn in player 2's half) */
+    if (view == 1 && p2) {
+        EStr *nm = *(EStr **)(e + 0x24);
+        if (nm && !IsBadReadPtr(nm, 0x18) && nm->s[0] == 'm' && nm->s[1] == 'p')
+            return;
+    }
     if (msg_owner && view >= 0 && msg_hide_view(view)) {
         EStr *nm = *(EStr **)(e + 0x24);
         static int nn;
@@ -1867,6 +1909,19 @@ static void spawn_p2(BYTE *p1)
     ts_log("split: names now: player 1 \"%s\", player 2 \"%s\"", script_name(p1), script_name(e));
     place_p2(p1);
     p2_body = body_of(e);
+    BYTE *gm = *(BYTE **)0xfcab34;
+    if (!net_local && gm && *(int *)(gm + 0x3c) == 2) {
+        unsigned r = *(unsigned *)(e + 0x2c);
+        *(unsigned *)(e + 0x2c) |= 0x10u;
+        ts_log("split: player 2 networked as a puppet for clients: net id %d, sync flags %08x, role %08x -> %08x (player 1 %08x)",
+               *(int *)(e + 0x18), *(unsigned *)(e + 0x98), r, *(unsigned *)(e + 0x2c), *(unsigned *)(p1 + 0x2c));
+    }
+    if (net_local && gm && *(int *)(gm + 0x3c) == 2) {   /* (a server) */
+        int n = net_hide(e, "player 2") + net_hide(p2_body, "player 2's body");
+        for (int i = 0; i < n_own2; i++)
+            n += net_hide(own2[i], own_cls[1][i]);
+        ts_log("split: player 2 kept out of the network game (%d networked objects of it changed)", n);
+    }
 }
 
 /* The menu asks whether a second pad is there (UI string CoopPad2 = "1"/"0"; the Co-op menu's "Split screen"
@@ -2302,6 +2357,8 @@ static void split_tick(float dt)
                     }
                 if (pl) {
                     BYTE *set = NULL, *rec = ammo_rec(pl, 0, &set);
+                    ts_log("split:   player %d net id %d role %08x; body net id %d role %08x", i + 1, *(int *)(pl + 0x18),
+                           *(unsigned *)(pl + 0x2c), b ? *(int *)(b + 0x18) : -9, b ? *(unsigned *)(b + 0x2c) : 0);
                     ts_log("split:   player %d weapon set %p ammo record %p total %.1f magazine %d", i + 1, (void *)set,
                            (void *)rec, rec ? *(float *)(rec + 8) : -1.0f, rec ? *(int *)(rec + 0xc) : -1);
                 }
@@ -2491,6 +2548,8 @@ void split_install(void)
         }
     fx_off = ts_env("TS_SPLIT_FXSHARED", v, sizeof v) && v[0] == '1';
     hudlog = splitlog > 0;
+    if (ts_env("TS_SPLIT_NETLOCAL", v, sizeof v))
+        net_local = v[0] != '0';
     if (ts_env("TS_SPLIT_MSGNEXT", v, sizeof v))
         msg_next = v[0] != '0';
     fp_noscale = ts_env("TS_SPLIT_FPNOSCALE", v, sizeof v) && v[0] == '1';

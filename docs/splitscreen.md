@@ -276,12 +276,27 @@ player 1 to move, time-power effects showed in one half only, split screen with 
 | Viewer's own body | checked with player 1 moved 18 m away (`TS_SPLIT_ITEMTEST=!#187.8/0.5/102.8`): player 2 looking ahead and down sees no body of its own. Log per view: own body node +4 with 0x10000 set (player 1 `422f2810` in view 0, player 2 `662f2810`/`64212810` in view 1), the partner's cleared (`662e2810`, `422e2810`) | `20261025-171010` `shot100/103.png` and log (`view 0: own body ..`) |
 | Message line per player | done: the pick-up lines are drawn by the HUD's console element `ConsoleText` (class 0xd9f300, draw slot +0x28 = the text draw 0x706430; also `MessageText`). Its draw is skipped in the other player's view for 10 s after a player's own message (owner: player 2's swap, a pick-up by either player, player 1's own objects). Messages from elsewhere stay in both halves | `20261025-172638` `shot109/112.png` ("Получено: Пистолет КМ-33" only in player 2's half), `shot116.png` (gone) |
 
+### Round 12 (2026-10-25, main PC): split screen on a co-op host (no client yet)
+
+Host started by the lab recipe (`AutoTest="host"`, `AutoTestMap="ts2_city_part02"`, through the mod's Co-op menu),
+`TS_SPLIT=1`, player 2 on pad 2.
+
+| Item | Result | Evidence |
+|---|---|---|
+| Split screen in the multiplayer game mode | works: game mode 2, the single-thread frame forced by the split screen (as in single player), both views, HUDs, weapons, player 2 spawned 1.6 m behind player 1; 62-67 frames/s (31-34 per view) | `20261025-173616` `shot100-160.png`, log (`frames/s`) |
+| Player 2 for clients (prepared, needs the client test) | the game already shows a `player` to clients as `player_mp`: the player's create descriptor (vtable +0x38 = `0x40b790`) names its class through vtable +0x334, which in a network game gives the multiplayer class; the join list (`0x6525e0`) and CREATE_ENT (`0x652c00`) take every isSyncMP entity with a net id, and `player` is isSyncMP (+0x98 bit 0; player 2 gets net id ~1560, role 0x1846). The mod adds the server's regular-update bit (role 0x10, which player 1 has and player 2 lacked) so its moves are sent. `TS_SPLIT_NETLOCAL=1` keeps player 2 out of the network game instead (isSyncMP cleared on player 2; its body and weapons are not isSyncMP) | `20261025-175539` log (`player 2 networked as a puppet for clients: net id 1572, sync flags 00000073, role 00001846 -> 00001856 (player 1 0000105e)`), `20261025-174755` (the hidden variant) |
+| Deaths in a network game | player 1 dies by the multiplayer rules (death screen, respawn countdown, the session's respawn points moved by storysync's checkpoints); player 2, which those rules do not know, is always respawned next to player 1 (before: the "both down" rule called the game's death for player 2, which left it a dead object without HUD). The multiplayer texts (`mp*`: death and respawn countdown) are not drawn in player 2's half | `20261025-175539` `shot128-185.png` (player 1's red death screen and countdown only in its half, player 2 keeps its HUD and weapon), log (`player 1 died in a network game`, `player 2 died: respawned next to player 1`) |
+| Needs the client | player 2 as a `player_mp` on the client (position, weapon, death), its shots and damage on the client, time powers of player 2 seen by the client, story sync gates with three players | - |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
   triggers, checkpoints, cutscenes, death and restart see player 1 only. The same audit as for network co-op
   (`player-audit.md`).
-- **Split screen with the network**: not started (round 5 goal 6: later, needs both PCs). What blocks it: the
+- **Split screen with the network**: host side done (round 12), the client test is open.
+- On the co-op host the text "Ожидание сервера." (waiting for the server) shows in both halves; not checked
+  whether it shows without split screen too.
+- Old notes on the network (round 5 goal 6): What blocks it: the
   network co-op runs the multiplayer game mode (2) and the multi-thread frame, split screen needs the
   single-thread frame; player 2 is a campaign `player` spawned locally, which the server's entity replication
   (0x42a CREATE_ENT) would send to clients as a second campaign player; the network layer's per-player records
