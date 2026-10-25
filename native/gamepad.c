@@ -19,7 +19,9 @@
  * - adds default pad bindings to the command contexts (GAME and GAME_DEF: the joystick slots 4/5 when
  *   no command has a pad binding yet; UI: menu navigation next to the built-in keys);
  * - replaces the rumble virtual (slot 0x2c), which the engine's own vibration mixer calls every frame
- *   (JoyVibrOff respected there), with XInputSetState on the player's pad.
+ *   (JoyVibrOff respected there), with XInputSetState on the player's pad;
+ * - in the menus (UI context active): the left stick acts as a 4-way digital direction and held
+ *   directions repeat (see "menus" below).
  * The pad is read only while the game window is in front (it never takes input meant for another
  * program).
  *
@@ -180,6 +182,61 @@ static void stick(SHORT sx, SHORT sy, int dead, float *ox, float *oy)
 }
 
 static float pos(float v) { return v > 0 ? v : 0; }
+
+/* ---- menus ----
+ * The menus get their navigation from the UI command context like the keyboard does: each frame the engine
+ * passes the commands whose "pressed" (flag 4) or "released" edge is set to the element key handlers
+ * (vtable +0xa8: OnKey(id, down, ...), called from 0x700776), so the pad's UI bindings are all they need.
+ * Two things differ from keys: the engine counts any value above 0.0001 as pressed, so a stick would
+ * press a direction at the edge of its dead zone and two directions when held at an angle; and nothing
+ * repeats a held key. While the UI context is active the left stick is therefore a 4-way digital
+ * direction (dominant axis, past half way), and held directions repeat. */
+#define MENU_STICK   0.5f
+#define REPEAT_DELAY 400    /* ms until a held direction repeats */
+#define REPEAT_RATE  110    /* ms between repeats */
+
+static int menu_active(BYTE *im)
+{
+    struct cmd_ctx *c = *(struct cmd_ctx **)(im + 0x40);
+    return c && (DWORD)c->vtbl == VT_UI;
+}
+
+static void menu_stick(float *x, float *y)
+{
+    float ax = fabsf(*x), ay = fabsf(*y);
+    if (ax < MENU_STICK && ay < MENU_STICK) {
+        *x = *y = 0;
+        return;
+    }
+    if (ax > ay) {
+        *x = *x > 0 ? 1.0f : -1.0f;
+        *y = 0;
+    } else {
+        *y = *y > 0 ? 1.0f : -1.0f;
+        *x = 0;
+    }
+}
+
+/* A held direction gets a new press edge: its code reads 0 for one poll every REPEAT_RATE ms after
+ * REPEAT_DELAY (the engine compares each code with its value of the previous frame). */
+static void menu_repeat(float *v, int menu)
+{
+    static const int codes[] = {J_DUP, J_DDOWN, J_DLEFT, J_DRIGHT, J_LY_U, J_LY_D, J_LX_L, J_LX_R, J_LB, J_RB};
+    static DWORD next[sizeof codes / sizeof *codes];
+    DWORD now = GetTickCount();
+    for (unsigned i = 0; i < sizeof codes / sizeof *codes; i++) {
+        if (!menu || v[codes[i]] <= 0) {
+            next[i] = 0;
+            continue;
+        }
+        if (!next[i])
+            next[i] = now + REPEAT_DELAY;
+        else if ((int)(now - next[i]) >= 0) {
+            v[codes[i]] = 0;
+            next[i] = now + REPEAT_RATE;
+        }
+    }
+}
 
 /* ---- bindings ---- */
 static int ctx_id(struct cmd_ctx *c, const char *name)
@@ -361,6 +418,9 @@ static void pad_poll(BYTE *raw)
     float lx, ly, rx, ry;
     stick(g->sThumbLX, g->sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, &lx, &ly);
     stick(g->sThumbRX, g->sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, &rx, &ry);
+    int menu = menu_active(im);
+    if (menu)
+        menu_stick(&lx, &ly);
     rx *= look_speed;
     ry *= invert_y ? -look_speed : look_speed;
     v[J_LX_R] = pos(lx);
@@ -375,6 +435,7 @@ static void pad_poll(BYTE *raw)
     v[J_DDOWN] = (g->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) ? 1.0f : 0.0f;
     v[J_DRIGHT] = (g->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) ? 1.0f : 0.0f;
     v[J_DLEFT] = (g->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) ? 1.0f : 0.0f;
+    menu_repeat(v, menu);
 
     if (padlog) {
         int sticks = (lx > 0.5f) | (lx < -0.5f) << 1 | (ly > 0.5f) << 2 | (ly < -0.5f) << 3 | (rx > 0.5f) << 4
@@ -401,7 +462,8 @@ static void THISCALL hook_rumble(void *raw, float low, float high, float force)
     static WORD last_l, last_r;
     static int last_slot = -1;
     (void)raw;
-    if (padlog) {   /* (here: the command flags of the last frame are still set; they are cleared before the poll) */
+    if (padlog) {   /* (here the held flags of the last frame are still set; they are cleared before the poll. The
+                     * edge flags 2/4 are often cleared again after the evaluation (seen in the menus), so "flags=0x11" is normal.) */
         BYTE *im = *(BYTE **)IM_PTR;
         if (im)
             log_commands(im);
