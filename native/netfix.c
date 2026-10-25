@@ -241,11 +241,317 @@ static void events_install(void)
         ts_log("net: connection events not found (other exe)");
 }
 
+/* ---- GameSpy Transport 2 closes in the log ----
+ * The transport's "closed" callback (0x77f6e0, fastcall connection, reason: 0 local close, 1 remote close, 2
+ * communication error, 3 socket error, 4 out of memory) turns the reason into the UI text of event 6. Logged with
+ * the caller stack, so a lost connection says which side closed it and from where. */
+#define GT2_CLOSED_CB 0x0077f6e0
+static LONG n_closes;
+
+static void __attribute__((cdecl, used)) log_gt2_closed(void *conn, int reason, DWORD esp)
+{
+    static const char *const why[] = {"local close", "remote close", "communication error", "socket error",
+                                      "out of memory"};
+    if (InterlockedIncrement(&n_closes) > 20)
+        return;
+    ts_log("net: transport connection %p closed: %s (%d)", conn, reason >= 0 && reason < 5 ? why[reason] : "?", reason);
+    DWORD ret[16], off[16];
+    NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+    int n = ts_stack_returns(esp, (DWORD)tib->StackBase, ret, off, 16);
+    char line[16 * 10 + 1] = "";
+    for (int i = 0; i < n; i++)
+        sprintf(line + strlen(line), " %08lx", ret[i]);
+    ts_log("net:   stack%s", line);
+}
+
+__attribute__((naked)) static void hook_gt2_closed(void)
+{
+    __asm__ volatile(
+        ".intel_syntax noprefix\n"
+        "pushad\n"
+        "lea eax, [esp + 0x20]\n"
+        "push eax\n"
+        "push edx\n"
+        "push ecx\n"
+        "call _log_gt2_closed\n"
+        "add esp, 12\n"
+        "popad\n"
+        "mov eax, ecx\n"                         /* (the two instructions the jump replaced) */
+        "mov ecx, dword ptr [edx*4 + 0xec9d30]\n"
+        "push 0x0077f6e9\n"
+        "ret\n"
+        ".att_syntax prefix\n");
+}
+
+static void closes_install(void)
+{
+    static const unsigned char orig[9] = {0x8b, 0xc1, 0x8b, 0x0c, 0x95, 0x30, 0x9d, 0xec, 0x00};
+    unsigned char jmp[9] = {0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90};
+    *(DWORD *)(jmp + 1) = (DWORD)hook_gt2_closed - (GT2_CLOSED_CB + 5);
+    if (!ts_patch_bytes(GT2_CLOSED_CB, orig, jmp, sizeof jmp))
+        ts_log("net: transport close callback not found (other exe)");
+}
+
+/* ---- joining a running level: state-machine signals held for a loading client ----
+ * A client that joins a running level loads it for 10-20 s and acknowledges nothing meanwhile; the host keeps its
+ * reliable packets until they are acknowledged, and its send pump (0x77e3c0) closes the connection when a peer has
+ * more than 500 of them ("server closed" on the client; the host logs event 9 / 5). Reliable messages do go to
+ * loading clients (0x697f30 skips only unreliable ones), and every frame the host broadcasts message 0x43a for each
+ * isSyncMP + isSyncSML object whose state machine raised a signal in that frame (base entity frame 0x6442f0: the
+ * 64-bit signal mask at +0x3c in a 16-byte body). On ts2_city_part03 that is ~650 messages a second, one more
+ * unacknowledged packet every frame: the joiner was dropped 5.6-7 s after joining, always (TS_NETDEBUG run
+ * n100pair-20261025-152109: 43a x552-678 per second, unacked 39 -> 526, then the close).
+ * Now the host holds 0x43a for a slot that does not run the level yet (slot flag 1), ORs the masks per object, and
+ * sends one 0x43a per object once that client runs the level (its earlier messages, incl. the join state, are then
+ * all delivered). Other reliable messages still go at once (a few per second). TS_JOINHOLD=0 = stock behaviour.
+ *
+ * TS_NETDEBUG=1 (lab): every second each connection's unacknowledged reliable packets (channel +0xc) and the game
+ * messages sent to loading slots, by id ("R" = reliable). TS_NETQUEUE=<n> (lab) moves the limit of 500. */
+#define PEER_NETWORK_PTR (*(char **)0x1096148)
+#define GAME_MODE_PTR (*(char **)0xfcab34)    /* +0x3c mode, +0x28 slots (stride 0xa4: +0 client id, +8 flags) */
+#define SEND_TO_SLOT_FN 0x0063ea90            /* ecx body, edx flags; (slot, entity, u16 msg id); ret 0xc */
+#define FIND_BY_NET_ID 0x00947c10             /* thiscall (scheduler 0xecb7f8, net id) -> entity or 0; ret 4 */
+#define MSG_SML_SIGNALS 0x43a
+#define HELD_MAX 256
+#define HELD_SLOTS 32
+static int netdebug, joinhold = 1;
+static struct { unsigned short id; unsigned char reliable; int n; } dbg_sends[64];
+static int n_dbg_sends;
+typedef struct { int net_id; DWORD body[4]; } Held;
+static Held held[HELD_SLOTS][HELD_MAX];
+static int n_held[HELD_SLOTS], held_client[HELD_SLOTS], held_msgs[HELD_SLOTS], held_lost[HELD_SLOTS];
+static int sending_held;
+
+static int slot_index(char *slot)
+{
+    char *gm = GAME_MODE_PTR;
+    if (!gm || !slot)
+        return -1;
+    int i = (int)(slot - *(char **)(gm + 0x28));
+    return i >= 0 && i % 0xa4 == 0 && i / 0xa4 < *(int *)(gm + 0x2c) && i / 0xa4 < HELD_SLOTS ? i / 0xa4 : -1;
+}
+
+/* 1 = send now, 0 = held (the call is skipped) */
+static int __attribute__((cdecl, used)) filter_send(DWORD *args, DWORD flags, DWORD *body)
+{
+    char *slot = (char *)args[0], *ent = (char *)args[1];
+    unsigned id = args[2] & 0xffff;
+    if (!slot || (*(int *)(slot + 8) & 1) || sending_held)
+        return 1;
+    if (netdebug) {
+        int rel = (flags & 0x20000) != 0, k;
+        for (k = 0; k < n_dbg_sends && !(dbg_sends[k].id == id && dbg_sends[k].reliable == rel); k++)
+            ;
+        if (k < n_dbg_sends)
+            dbg_sends[k].n++;
+        else if (n_dbg_sends < 64) {
+            dbg_sends[n_dbg_sends].id = (unsigned short)id;
+            dbg_sends[n_dbg_sends].reliable = (unsigned char)rel;
+            dbg_sends[n_dbg_sends++].n = 1;
+        }
+    }
+    int s = slot_index(slot);
+    if (!joinhold || id != MSG_SML_SIGNALS || s < 0 || !ent || !body || (body[0] >> 16) != 16)
+        return 1;
+    int net_id = *(int *)(ent + 0x18), k;
+    if (n_held[s] && held_client[s] != *(int *)slot)
+        n_held[s] = 0, held_msgs[s] = 0, held_lost[s] = 0;   /* (another client in the slot) */
+    if (!n_held[s] && held_client[s] != *(int *)slot)
+        held_msgs[s] = 0, held_lost[s] = 0;
+    held_client[s] = *(int *)slot;
+    held_msgs[s]++;
+    for (k = 0; k < n_held[s] && held[s][k].net_id != net_id; k++)
+        ;
+    if (k == n_held[s]) {
+        if (k == HELD_MAX) {
+            held_lost[s]++;   /* (full: sent as before) */
+            return 1;
+        }
+        held[s][k].net_id = net_id;
+        memcpy(held[s][k].body, body, 16);
+        n_held[s]++;
+    } else
+        for (int w = 1; w < 4; w++)
+            held[s][k].body[w] |= body[w];
+    return 0;
+}
+
+__attribute__((naked)) static void hook_send_to_slot(void)
+{
+    __asm__ volatile(
+        ".intel_syntax noprefix\n"
+        "pushad\n"
+        "lea eax, [esp + 0x24]\n"
+        "push ecx\n"
+        "push edx\n"
+        "push eax\n"
+        "call _filter_send\n"
+        "add esp, 12\n"
+        "test eax, eax\n"
+        "popad\n"                              /* (keeps the flags of the test) */
+        "jz 1f\n"
+        "mov eax, 0x2024\n"                    /* (the instruction the jump replaced) */
+        "push 0x0063ea95\n"
+        "ret\n"
+        "1:\n"
+        "xor eax, eax\n"
+        "ret 12\n"
+        ".att_syntax prefix\n");
+}
+
+static void send_held(char *slot, char *ent, DWORD *body)
+{
+    unsigned fn = SEND_TO_SLOT_FN, flags = 0x20000;
+    void *b = body;
+    __asm__ volatile("pushl $0x43a\n\tpushl %[ent]\n\tpushl %[slot]\n\tcall *%[fn]"   /* (MSG_SML_SIGNALS) */
+                     : "+c"(b), "+d"(flags)
+                     : [slot] "r"(slot), [ent] "r"(ent), [fn] "r"(fn)
+                     : "eax", "memory", "cc");
+}
+
+static char *find_by_net_id(int net_id)
+{
+    char *e;
+    void *sched = (void *)0xecb7f8;
+    __asm__ volatile("pushl %[id]\n\tcall *%[fn]"
+                     : "=a"(e), "+c"(sched)
+                     : [id] "r"(net_id), [fn] "r"(FIND_BY_NET_ID)
+                     : "edx", "memory", "cc");
+    return e;
+}
+
+/* (main thread, every frame) */
+static void held_frame(void)
+{
+    char *gm = GAME_MODE_PTR;
+    int mode = gm ? *(int *)(gm + 0x3c) : 0;
+    for (int s = 0; s < HELD_SLOTS; s++) {
+        if (!n_held[s])
+            continue;
+        char *slot = (mode == 2 || mode == 4) && s < *(int *)(gm + 0x2c) ? *(char **)(gm + 0x28) + s * 0xa4 : NULL;
+        if (!slot || *(int *)slot != held_client[s]) {
+            ts_log("net: client %d left before it ran the level (%d held state-machine messages dropped)",
+                   held_client[s], held_msgs[s]);
+            n_held[s] = 0;
+            continue;
+        }
+        if (!(*(int *)(slot + 8) & 1))
+            continue;
+        int sent = 0;
+        sending_held = 1;
+        for (int k = 0; k < n_held[s]; k++) {
+            char *ent = find_by_net_id(held[s][k].net_id);
+            if (ent)
+                send_held(slot, ent, held[s][k].body), sent++;
+        }
+        sending_held = 0;
+        ts_log("net: client %d runs the level: %d state-machine messages held during its load sent as %d (%d objects "
+               "gone, %d not held)", held_client[s], held_msgs[s], sent, n_held[s] - sent, held_lost[s]);
+        n_held[s] = 0;
+    }
+}
+
+static void netfix_frame(float dt)
+{
+    static DWORD last;
+    (void)dt;
+    held_frame();
+    if (!netdebug)
+        return;
+    DWORD now = GetTickCount();
+    if (now - last < 1000)
+        return;
+    last = now;
+    char *mgr = *(char **)0x1095b6c;
+    if (mgr) {   /* (the AI manager's vehicle-type list: entries that are not live objects) */
+        int n = *(int *)(mgr + 0x1a0), bad = 0;
+        for (int i = 0; i < n && i < 100; i++) {
+            char *o = *(char **)(mgr + 0x1a4 + i * 4);
+            DWORD vt = o && !IsBadReadPtr(o, 0x234) ? *(DWORD *)o : 0;
+            bad += !(vt >= 0xd11000 && vt < 0xe27000);
+        }
+        static int last_n = -1, last_bad = -1;
+        if (n != last_n || bad != last_bad)
+            ts_log("netdebug: AI manager list %d entries, %d not objects", n, bad);
+        last_n = n, last_bad = bad;
+    }
+    char *pn = PEER_NETWORK_PTR;
+    if (!pn)
+        return;
+    char line[512] = "";
+    for (int i = 0; i < 32; i++) {
+        int *conn = (int *)(pn + 0xb94 + i * 0x6c);
+        if (!conn[0] || !conn[1])
+            continue;
+        char *ch = (char *)conn[1];
+        snprintf(line + strlen(line), sizeof line - strlen(line), " [%d] state %d unacked %d sent %d err %d", i, conn[0],
+                 *(int *)(ch + 0xc), *(int *)(ch + 0x24), *(int *)(ch + 0x254));
+    }
+    if (line[0])
+        ts_log("netdebug: connections%s", line);
+    if (n_dbg_sends) {
+        line[0] = 0;
+        for (int i = 0; i < n_dbg_sends; i++)
+            snprintf(line + strlen(line), sizeof line - strlen(line), " %03x%s x%d", dbg_sends[i].id,
+                     dbg_sends[i].reliable ? "R" : "", dbg_sends[i].n);
+        ts_log("netdebug: to loading clients:%s", line);
+        n_dbg_sends = 0;
+    }
+}
+
+static void held_install(void)
+{
+    char v[16];
+    netdebug = ts_env("TS_NETDEBUG", v, sizeof v) && v[0] == '1';
+    joinhold = !(ts_env("TS_JOINHOLD", v, sizeof v) && v[0] == '0');
+    if (!joinhold)
+        ts_log("net: TS_JOINHOLD=0: state-machine messages go to loading clients as in the stock game");
+    if (joinhold || netdebug) {
+        static const unsigned char orig[5] = {0xb8, 0x24, 0x20, 0x00, 0x00};
+        unsigned char jmp[5] = {0xe9};
+        *(DWORD *)(jmp + 1) = (DWORD)hook_send_to_slot - (SEND_TO_SLOT_FN + 5);
+        int ok = ts_patch_bytes(SEND_TO_SLOT_FN, orig, jmp, 5) && ts_tick_install() && ts_frame_add(netfix_frame);
+        if (!ok)
+            ts_log("net: per-peer sender not found (other exe): joins into running levels may drop");
+        if (netdebug)
+            ts_log("net: TS_NETDEBUG %s", ok ? "on" : "failed");
+    }
+    if (ts_env("TS_NETQUEUE", v, sizeof v) && atoi(v) > 0) {
+        static const unsigned char o4[4] = {0xf4, 0x01, 0x00, 0x00};
+        int lim = atoi(v);
+        ts_log("net: TS_NETQUEUE unacked limit 500 -> %d: %s", lim, ts_patch_bytes(0x0077e4d5, o4, &lim, 4) ? "ok" : "failed");
+    }
+}
+
+/* ---- the AI manager's list of vehicle-type targets on a client ----
+ * The AI manager [0x1095b6c] keeps a list of objects of one class family (+0x1a0 count, +0x1a4 entries, at most 40;
+ * added by 0x8671a0 from the class's init 0x8a1d70, removed by 0x867210 when such an object ends). Both refuse in
+ * game mode 3, and the removal also needs the manager's flag +0xa8 bit 2. A client that joins a running level adds
+ * them while its level loads and then ends the ones the server no longer has (destroyed before the join): their
+ * pointers stayed in the list, and the next AI the client initialised read freed memory while building its target
+ * list (0x867440 -> 0x8672a0, crash at 0x8672d3 reading [garbage + 4]; 3 of 4 joins into ts2_city_part03 once the
+ * drops were fixed, runs n100pair-20261025-153042, -153225, -153550). The removal now runs in every mode and
+ * whatever the flag: taking an ending object out of a list is always right. */
+static void ailist_install(void)
+{
+    static const unsigned char je_mode[2] = {0x74, 0x69}, je_flag[2] = {0x74, 0x3a}, nop2[2] = {0x90, 0x90};
+    char v[8];
+    if (ts_env("TS_AILIST", v, sizeof v) && v[0] == '0') {   /* (lab: the stock behaviour) */
+        ts_log("net: TS_AILIST=0: AI manager list as in the stock game");
+        return;
+    }
+    if (!ts_patch_bytes(0x00867226, je_mode, nop2, 2) || !ts_patch_bytes(0x00867255, je_flag, nop2, 2))
+        ts_log("net: AI manager list removal not found (other exe)");
+}
+
 void netfix_install(void)
 {
+    ailist_install();
     saves_install();
     ai_death_install();
     events_install();
+    closes_install();
+    held_install();
     real_sendto = (sendto_t)ts_patch_ws2("sendto", (void *)hook_sendto);
     char v[64];
     if (ts_env("TS_PORT_SHIFT", v, sizeof v) && (port_shift = atoi(v)) != 0)

@@ -193,7 +193,7 @@ static DWORD watchdog_secs;
 
 /* Likely return addresses on a stack: dwords pointing into the exe's code right after a call. Fills
  * at most `max` (no allocation: also used while the main thread is suspended). */
-static int stack_returns(DWORD esp, DWORD stack_top, DWORD *out, DWORD *offs, int max)
+int ts_stack_returns(DWORD esp, DWORD stack_top, DWORD *out, DWORD *offs, int max)
 {
     HMODULE exe = GetModuleHandleA(NULL);
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)((BYTE *)exe + ((IMAGE_DOS_HEADER *)exe)->e_lfanew);
@@ -226,7 +226,7 @@ static DWORD WINAPI watchdog(LPVOID arg)
         c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
         if (SuspendThread(main_thread) == (DWORD)-1)
             return 0;
-        int n = GetThreadContext(main_thread, &c) ? stack_returns(c.Esp, stack_top, ret, off, 24) : -1;
+        int n = GetThreadContext(main_thread, &c) ? ts_stack_returns(c.Esp, stack_top, ret, off, 24) : -1;
         ResumeThread(main_thread);
         ts_log("watchdog: main thread at %08lx esp=%08lx", c.Eip, c.Esp);
         for (int i = 0; i < n; i++)
@@ -247,7 +247,7 @@ static void log_exit(const char *what, UINT code, DWORD esp)
 {
     DWORD ret[24], off[24];
     NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
-    int n = stack_returns(esp, (DWORD)tib->StackBase, ret, off, 24);
+    int n = ts_stack_returns(esp, (DWORD)tib->StackBase, ret, off, 24);
     ts_log("%s(%u) on thread %lu", what, code, GetCurrentThreadId());
     for (int i = 0; i < n; i++)
         ts_log("  [esp+%04lx] %08lx", off[i], ret[i]);
