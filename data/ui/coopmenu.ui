@@ -1,0 +1,132 @@
+// Co-op mod: the Co-op entry of the main menu (written for the mod; same look as the Multiplayer frame).
+// %VERSION% is filled in by build_pak.py.
+name           = CoopMenu
+style          = styMenu
+type           = PreCreateGame
+
+child = [
+   {
+      type      = text
+      text      = COOP_FRAME_COOP
+      posX      = 0, 100%
+      posY      = 6%, 30
+      textScale = 15
+      textAlign = centerX centerY
+      font      = font_main
+   }
+   {
+      type        = background
+      posY        = 60, 355
+
+      child       = [
+         {
+            type        = box
+            posX        = center, 85%
+            posY        = 60,2
+            texture     = bg_selection
+         }
+         {
+            type      = text
+            name      = Hint
+            text      = COOP_HINT_MENU
+            posX      = 8%, 85%
+            posY      = 5, 50
+            textScale = 8
+            textAlign = leftX centerY
+            textColor = 255 255 255 255
+            wordwrap  = yes
+         }
+         {
+            type        = button
+            name        = Host
+            posX        = center, 100%
+            posY        = 130, 30
+            text        = UI_BTN_LAN_SERVER
+         }
+         {
+            type        = button
+            name        = JoinLAN
+            posX        = center, 100%
+            posY        = 160, 30
+            text        = UI_BTN_LAN_CLIENT
+         }
+         {
+            type        = button
+            name        = JoinInternet
+            posX        = center, 100%
+            posY        = 190, 30
+            text        = UI_BTN_IP_CLIENT
+         }
+         {
+            type        = button
+            name        = JoinDirect
+            posX        = center, 100%
+            posY        = 220, 30
+            text        = UI_BTN_DIRECT_CONNECT
+         }
+         {
+            type      = text
+            name      = ModVersion
+            posX      = 8%, 85%
+            posY      = -30, 25
+            textScale = 7
+            textAlign = right centerY
+         }
+      ]
+   }
+   {
+      type        = box
+      border      = true
+      posY        = -65, 40
+      child       = [
+         {
+            type        = esc_button
+            name        = Back
+            text        = UI_BTN_BACK
+            textAlign   = left centerY
+            textScale   = 12
+            posX        = 10, 100
+            posY        = 5, 30
+            XBoxShortCut = B
+         }
+      ]
+   }
+]
+
+ssl = <<<
+
+   override OnInit
+      Element("ModVersion").SetText("COOP_MOD_VERSION,%VERSION%")
+   end
+
+   // CoopAuto (UI string) starts a step by itself; only test builds set it (lab recipe)
+   override OnUpdate
+      if $ui.GetStr("CoopAuto") == "host"
+         $ui.SetStr("CoopAuto", "host_go")
+         $ui.SwitchFrame("CoopHost")
+      else if $ui.GetStr("CoopAuto") == "join"
+         $ui.SetStr("CoopAuto", "join_address")
+         $ui.ShowFrame("AddressInputFrame")
+      end
+   end
+
+   override OnButtonPressed("Host")
+      $ui.SwitchFrame("CoopHost")
+   end
+
+   override OnButtonPressed("JoinLAN")
+      $ui.SwitchFrame("JoinGameLAN")
+   end
+
+   override OnButtonPressed("JoinInternet")
+      $ui.SwitchFrame("JoinGame")
+   end
+
+   override OnButtonPressed("JoinDirect")
+      $ui.ShowFrame("AddressInputFrame")
+   end
+
+   override OnButtonPressed("Back")
+      $ui.BackFrame()
+   end
+>>>

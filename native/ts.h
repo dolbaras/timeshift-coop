@@ -33,6 +33,16 @@ int coopnet_console(const char *text, char *out, int size);   /* "@all/@peers/@s
 typedef void (*coopnet_recv)(int peer, unsigned short sub, const unsigned char *data, int len);
 int coopnet_listen(unsigned short first, unsigned short last, coopnet_recv fn);   /* subs >= 10; 1 = hooks in */
 
+/* coopsession.c: the co-op session (network game on a campaign level), its settings, the version check */
+void coopsession_install(void);   /* before timesync_install: sets the TS_TIMESYNC default */
+int ts_coop_active(void);         /* 1 = co-op session now (any thread; reads game state only) */
+int ts_coop_feature(int flag);    /* COOP_F_* of this session: the host's settings (clients get them on join) */
+#define COOP_F_ACTIVE 1
+#define COOP_F_TIMESYNC 2
+#define COOP_F_STORYSYNC 4
+#define COOP_F_FRIENDLY_FIRE 8           /* (stock friendly fire rule kept) */
+#define COOP_F_MP_RULES 16               /* (stock warm-up and ready system kept) */
+
 /* timesync.c: players' time powers in co-op (one world power for everyone, TS_TIMESYNC) */
 void timesync_install(void);
 

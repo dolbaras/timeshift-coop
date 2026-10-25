@@ -70,7 +70,23 @@ examined.)
   goes through `TryJoin` and the `JoinInfo` frame.
 - **Internet list** (`JoinGame`) and quick match use the GameSpy master server (gone).
 
+## 3a. The mod's Co-op menu
+
+The mod's data (built from the player's own archives by `tools/build_pak.py`, see `building.md`) adds a
+"Co-op" entry to the main menu: host a campaign level (level, difficulty, 2-4 players, LAN or Internet,
+password) or join through the stock LAN list, Internet list or direct connection. The host's choices go
+through the stock server set-up of sections 2 and 8 (CreateGame, CommSettings and ServerModifiers do their
+step by themselves while the UI string `CoopStage` says so); CommSettings then points the server at the
+campaign level (`ServerLocation`, `ServerMapId`) with co-op limits and the player's own multiplayer
+settings are put back at the main menu. The stock map list stays as shipped. In the session the DLL
+(`native/coopsession.c`) switches off warm-up, ready system and friendly fire on campaign levels only and
+checks the mod version of every joining client (section 9c). Not yet run in the game.
+
 ## 4. Automation for tests (no keyboard or mouse)
+
+Since the Co-op menu (section 3a) the automation is the lab recipe `lab/autotest_recipe.py` for
+`build_pak.py` (same profile keys; a campaign `AutoTestMap` starts the Co-op menu's host). The frames
+described below were the first version (`lab/autotest_mod.py`).
 
 A test build changes six frames so that a game started with one profile key hosts or joins by itself
 (each step does exactly what its button would do). Without the key every frame behaves as before.
@@ -672,6 +688,43 @@ Test console (`TS_CONSOLE`): `!ss state`, `!ss class <object>` (its handlers: st
 - Objects with duplicate names (unnamed instances) run their rewritten handlers locally on a client and are
   not replayed.
 - A restart without a restore object loses all story progress of the level (no server-side saves are loaded).
+
+## 9c. The co-op session (`native/coopsession.c`)
+
+Built and checked against the executable only; not yet run in a game.
+
+- **What a co-op session is**: a network game (game mode 2/3/4) on a campaign level (`ts2_` in the level
+  file name). Only the mod's Co-op menu starts one (the stock map list does not offer campaign levels), so
+  every machine knows it from the level alone, at once and without a message: `ts_coop_active()`.
+- **Rules, co-op sessions only** (stock maps keep the stock rules):
+
+  | Rule | Where | What the mod does |
+  |---|---|---|
+  | Friendly fire | MP damage factor `0x4e3fe0` (stdcall victim, attacker id; ret 8; float): same player -> `SelfDamageScale`, other player -> team game and same team -> `bFriendlyFire` | the "other player" branch (`jne 0x4e4142` at `0x4e40a9`) goes through a stub that returns 0.0 through the function's epilogue (`0x4e42fc`): players never hurt each other; self damage stays |
+  | Warm-up | `bWarmUp` read at `0x5ee949` in the server's level start `0x5ee870` (modes 2/4; 0 = start the round at once, `0x5eea40`) | the call to the option store's int getter `0x4027f0` (thiscall store, index, int *out; ret 8) goes through a wrapper that returns 0 |
+  | Ready system | `bReadySystem` read at `0x596cbb` (rules) and `0x5ff66a` (HUD hint "not ready") | same wrapper |
+  | Minimum players, time and score limit | profile keys, read again at every check | set by the Co-op menu for its server, put back at the main menu (`building.md`) |
+
+  `TS_COOP_FF=1` keeps the stock friendly fire rule, `TS_COOP_MPRULES=1` the warm-up and ready system,
+  `TS_COOP=0` switches the whole file off.
+- **Session settings** (`ts_coop_feature(COOP_F_*)`): the host's. Its co-op menu leaves them in UI strings
+  (`CoopSession = host`, `CoopDifficulty`, `CoopMaxPlayers`), read by the DLL when the server's level starts;
+  time powers (`TS_TIMESYNC`, default `1` since this file: timesync.c acts on campaign levels only) and story
+  (`TS_STORYSYNC`, still opt-in: storysync.c acts in every network game) from the environment.
+- **Messages** (mod messages of section 9):
+
+  | Subtype | Direction | Body | Meaning |
+  |---|---|---|---|
+  | `40` | server -> client | `u8 proto (1), u8 flags, u8 difficulty (0-2, 255 none), u8 max players, u8 len, version` | the session's settings and the host's mod version; sent when the client's slot is joined and ready, again every 3 s until answered (5 times), and again after every level change |
+  | `41` | client -> server | `u8 proto, u8 result (0 same version, 1 other), u8 len, version` | the answer |
+
+- **Client**: same version -> `$ui.SetStr("CoopSession", "client")` and the host's difficulty
+  (`$ui.SetVariable("Multiplayer", "Difficulty", ...)`); other version -> `CoopError =
+  "COOP_ERR_VERSION,<host>,<own>"` and `$ui.LoadLevel("menu.lg")` (as the in-game "quit"): the main menu
+  shows "The host plays with co-op mod version X, you have version Y ...". Version strings from the network
+  are reduced to `[0-9A-Za-z.+_-]` before they go into script text.
+- **Open**: a client without the mod (or with a build older than this file) is not refused, only logged
+  by the server ("never answered"); the stock game's reaction to the mod's message id `0x7C01` is not known.
 
 ## 10. Open questions
 

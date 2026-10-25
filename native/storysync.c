@@ -152,7 +152,7 @@ static const DWORD event_sites[3] = {0x8f82bf, 0x8f97c6, 0x905462};   /* calls 0
 #define MAX_PAYLOAD 250
 
 /* ---- settings and logging ---- */
-static int enabled, fail_restart = 1, verbose;
+static int enabled, any_level, fail_restart = 1, verbose;
 /* team restart (host) */
 static int restart_pending, restore_pending, restore_seen_off, restore_cp;
 static DWORD restart_at, restore_at, restore_since;
@@ -169,11 +169,15 @@ static int game_mode(void)
     return gm ? *(int *)(gm + MODE_OFF) : 0;
 }
 
-/* MODE_SERVER / MODE_CLIENT in a network game (as coopnet.c tells one), else 0. */
+static int campaign_name(const char *s);
+
+/* MODE_SERVER / MODE_CLIENT in a network game (as coopnet.c tells one) on a campaign level, else 0
+ * (multiplayer maps keep the game's own rules; TS_STORYSYNC=all: every network map). */
 static int net_role(void)
 {
     int m = game_mode();
-    return enabled && (m == MODE_SERVER || m == MODE_CLIENT) && PEER_NETWORK ? m : 0;
+    return enabled && (m == MODE_SERVER || m == MODE_CLIENT) && PEER_NETWORK && (any_level || campaign_name(LEVEL_NAME))
+           ? m : 0;
 }
 
 static char *slot_at(int i)
@@ -304,7 +308,8 @@ static int rec_event(ClassRec *r, int sym)
 /* Statements that only change what this machine shows its own player. */
 static const char *const local_calls[] = {
     "$Light_zones.", "ShakeCamera", "$tc.SetMode(", "ShowTimeHint(", "ShowSAMMsg(", "ShowMsg(", "PlaySound(",
-    "SelectHolster(", "SetDeathFallHeight(", "StartFastPhysics", "$effect.", "EnableZone(", NULL};
+    "SelectHolster(", "SetDeathFallHeight(", "StartFastPhysics", "$effect.", "EnableZone(",
+    "$snd", "$music.", NULL};   /* (sound actors and music: each machine plays its own ambience) */
 
 /* Calls only the host may make: on a client they are wrapped in "if false ... end". */
 static const char *const host_calls[] = {
@@ -317,8 +322,10 @@ static const char *const host_calls[] = {
     "DelayedDieRemove", "Kill", "FailMission", "AutoSave", "SaveGame", "LoadGame", "LoadLevel", "RestartLevel",
     "Reload", "StartUse", "DisableUse", "EnableUse", "SetGOD", NULL};
 
-/* Events every machine runs for its own copy of the level, never sent. */
-static const char *const always_local[] = {"OnInitLevel", "OnInit", NULL};
+/* Events every machine runs for its own copy of the level, never sent: set-up, and the world time events
+ * (each machine's own world slows/stops; timesync.c keeps the worlds in step). */
+static const char *const always_local[] = {"OnInitLevel", "OnInit", "OnStartTStop", "OnStopTStop", "OnStartTSlow",
+                                           "OnStopTSlow", "OnStartTReverse", "OnStopTReverse", NULL};
 
 static int in_list(const char *const *list, const char *s, int len)
 {
@@ -814,7 +821,8 @@ static int fire_named(const char *obj, const char *ev, int argc, const Arg *args
             replay_sym = sym;
             replay_armed = 1;
         }
-        fire_by_name(&inst, &st, sym, argc, argc ? av : NULL);
+        fire_by_name(&inst, &st, sym, argc, av);   /* (never NULL: a native handler would pop its arguments
+                                                       from the script stack) */
         replay_armed = 0;
         if (st.code)
             SLOG("storysync: %s.%s: %s", obj, ev, st.msg ? st.msg->s : "error");
@@ -1289,8 +1297,9 @@ static int patch_jmp(DWORD at, const unsigned char *expect, int len, void *hook)
 void storysync_install(void)
 {
     char v[16];
-    if (!ts_env("TS_STORYSYNC", v, sizeof v) || v[0] != '1')
+    if (!ts_env("TS_STORYSYNC", v, sizeof v) || (v[0] != '1' && _stricmp(v, "all") != 0))
         return;
+    any_level = _stricmp(v, "all") == 0;
     if (ts_env("TS_STORYSYNC_FAIL", v, sizeof v) && _stricmp(v, "death") == 0)
         fail_restart = 0;
     verbose = ts_env("TS_STORYSYNC_LOG", v, sizeof v) && v[0] == '1';

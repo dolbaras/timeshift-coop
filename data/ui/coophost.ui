@@ -1,0 +1,345 @@
+// Co-op mod: host a co-op game (written for the mod; level list as in the game's Replay Level frame,
+// settings as in its server settings). %LEVEL_LINES% and %MAPID_LINES% are filled in by build_pak.py
+// from the singleplayer entries of the player's gs_map_list.cls (campaign order).
+name           = CoopHost
+style          = styMenu
+type           = PreCreateGame
+
+child = [
+   {
+      type      = text
+      text      = COOP_FRAME_HOST
+      posX      = 0, 100%
+      posY      = 6%, 30
+      textScale = 15
+      textAlign = centerX centerY
+      font      = font_main
+   }
+   {
+      type        = background
+      border      = true
+      posY        = 60, 355
+
+      child       = [
+         {
+            name        = LevelList
+            type        = scroll
+            posX        = 0, 50%
+            posY        = 15, -10
+
+            lines       = 12
+            linesX      = 0, 100%
+            linesY      = 25, -25
+            selectorX   = center, 90%
+            selectorY   = center, 100%
+            ctrlX       = center, 85%
+            ctrlY       = 0 0
+
+            line {
+               type        = text
+               textScale   = 8
+               textAlign   = centerX centerY
+            }
+
+            child = [
+               {
+                  type     = button
+                  texture  = arrow_up
+                  name     = up
+                  posX     = center, 30
+                  posY     = 0, 30
+                  textureMirror  = false
+                  texHighlighted = true
+               }
+               {
+                  type     = button
+                  texture  = arrow_down
+                  name     = down
+                  posX     = center, 30
+                  posY     = -30, 30
+                  textureMirror  = false
+                  texHighlighted = true
+               }
+            ]
+         }
+         {
+            type        = text
+            name        = Preview
+            posX        = -275, -15
+            posY        = 15, 170
+            edged       = true
+         }
+         {
+            type        = select
+            name        = CoopDifficulty
+            posX        = 52%, -15
+            posY        = 195, 30
+            text        = UI_ADVSERV_DIFFICULTY
+            textAlign   = left centerY
+            section     = Multiplayer
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = select
+            name        = CoopMaxPlayers
+            posX        = 52%, -15
+            posY        = 228, 30
+            text        = UI_ADVSERV_MAX_PLAYERS
+            textAlign   = left centerY
+            section     = Multiplayer
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = select
+            name        = CoopNetwork
+            posX        = 52%, -15
+            posY        = 261, 30
+            text        = UI_CREATE_SERVER_NETWORK
+            textAlign   = left centerY
+            section     = Multiplayer
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type          = input
+            text          = UI_PLAYER_SETUP_PASSWORD
+            name          = CoopPassword
+            posX          = 52%, -15
+            posY          = 297, 30
+            section       = Multiplayer
+            typeVal       = String
+            maxChars      = 16
+            isUserSetting = false
+         }
+      ]
+   }
+   {
+      type        = box
+      border      = true
+      posY        = -65, 40
+      child       = [
+         {
+            type        = esc_button
+            name        = Back
+            text        = UI_BTN_BACK
+            textAlign   = left centerY
+            textScale   = 12
+            posX        = 10, 100
+            posY        = 5, 30
+            XBoxShortCut = B
+         }
+         {
+            type        = button
+            name        = Create
+            text        = UI_BTN_CREATE
+            posX        = -110, 100
+            posY        = 5, 30
+            textAlign   = right centerY
+            textScale   = 12
+            XBoxShortCut = A
+            ok          = Yes
+         }
+      ]
+   }
+]
+
+ssl = <<<
+
+   override OnInit
+      FillLevels(Element("LevelList"))
+      Element("CoopDifficulty").AddItem("UI_ADVSERV_DIFF_0", "0")
+      Element("CoopDifficulty").AddItem("UI_ADVSERV_DIFF_1", "1")
+      Element("CoopDifficulty").AddItem("UI_ADVSERV_DIFF_2", "2")
+      Element("CoopMaxPlayers").AddItem("2", "2")
+      Element("CoopMaxPlayers").AddItem("3", "3")
+      Element("CoopMaxPlayers").AddItem("4", "4")
+      Element("CoopNetwork").AddItem("UI_CONNECTION_1", "0")
+      Element("CoopNetwork").AddItem("UI_CREATE_SERVER_INTERNET", "1")
+      Restore("CoopDifficulty", "1")
+      Restore("CoopMaxPlayers", "4")
+      Restore("CoopNetwork", "0")
+      Element("CoopPassword").SetVal("")
+   end
+
+   // the player's last choices (profile keys of the mod)
+   func Restore(elem : string, def : string)
+      var v : string
+      v := $ui.GetUserVar(elem)
+      if v == "null" or v == ""
+         v := def
+      end
+      Element(elem).SetVal(v)
+   end
+
+   func Keep(elem : string)
+      $ui.SetUserVar(elem, Element(elem).GetVal())
+   end
+
+   // CoopAuto (UI string) starts the server by itself with the CoopLevel... UI strings; only test
+   // builds set it (lab recipe)
+   override OnUpdate
+      if $ui.GetStr("CoopAuto") == "host_go"
+         $ui.SetStr("CoopAuto", "")
+         Launch($ui.GetStr("CoopLevel"), $ui.GetStr("CoopDifficulty"), $ui.GetStr("CoopMaxPlayers"), $ui.GetStr("CoopNetwork"), $ui.GetStr("CoopPassword"))
+      end
+   end
+
+   func FillLevels(win : object)
+%LEVEL_LINES%
+   end
+
+   func AddLine(win : object, str : string, level : string, splash : string)
+      win.AddElem("line")
+      win.LastElem().SetText(str)
+      win.LastElem().SetStr("Level", level)
+      win.LastElem().SetStr("Splash", splash)
+   end
+
+   // the level's id in the game's map list (gs_map_list.cls, singleplayer)
+   func MapId(level : string) : string
+%MAPID_LINES%
+      return ""
+   end
+
+   override OnScrollSelection("LevelList")
+      Element("Preview").SetTexture(Element("LevelList").GetCurSel().GetStr("Splash"))
+   end
+
+   override OnScrollAction("LevelList")
+      Create()
+   end
+
+   override OnButtonPressed("Create")
+      Create()
+   end
+
+   override OnButtonPressed("Back")
+      $ui.BackFrame()
+   end
+
+   func Create()
+      Keep("CoopDifficulty")
+      Keep("CoopMaxPlayers")
+      Keep("CoopNetwork")
+      $ui.FlushCfg()
+      Launch(Element("LevelList").GetCurSel().GetStr("Level"), Element("CoopDifficulty").GetVal(), Element("CoopMaxPlayers").GetVal(), Element("CoopNetwork").GetVal(), Element("CoopPassword").Element("InputText").GetText())
+   end
+
+   // Hand the choices to the game's own server set-up: CreateGame, CommSettings and ServerModifiers
+   // run their "Next"/"Create" steps by themselves while CoopStage says so (see their OnUpdate).
+   func Launch(level : string, diff : string, maxp : string, net : string, pwd : string)
+      if MapId(level) == ""
+         $ui.ShowErrorMsg("UI_SERVER_NO_MAP_SELECTED")
+         return
+      end
+      var pname : string
+      pname := $ui.GetUserVar("PlayerName")
+      $ui.SetStr("CoopLevel", level)
+      $ui.SetStr("CoopMapId", MapId(level))
+      $ui.SetStr("CoopDifficulty", diff)
+      $ui.SetStr("CoopMaxPlayers", maxp)
+      $ui.SetStr("CoopNetwork", net)
+      $ui.SetStr("CoopPassword", pwd)
+      $ui.SetStr("CoopServerName", "[COOP]" + pname)
+      $ui.SetVariable("Multiplayer", "Difficulty", "int", diff)
+      $ui.SetStr("CoopSession", "host")
+      $ui.SetStr("CoopStage", "host_create")
+      PreCreateGame("Create")
+      $ui.SwitchFrame("CreateGame")
+   end
+>>>

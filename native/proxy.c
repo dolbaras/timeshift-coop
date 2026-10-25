@@ -310,6 +310,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         testmode_install();
         console_install();
         coopnet_install();
+        coopsession_install();
         timesync_install();
         aisync_install();
         storysync_install();
