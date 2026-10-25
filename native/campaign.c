@@ -956,6 +956,23 @@ int campaign_console(const char *text, char *out, int size)
         }
         return snprintf(out, size, "not in a co-op session with the story on (or TS_CAMPAIGN is off)"), 1;
     }
+    if (!strcmp(cmd, "pos")) {   /* "!cp pos <object> [object2]": positions of named objects (lab) */
+        char a2[128] = "";
+        sscanf(text + 3, "%*s %*s %127s", a2);
+        int n = 0;
+        for (int k = 0; k < 2; k++) {
+            const char *nm = k ? a2 : a1;
+            float pos[3];
+            if (!nm[0])
+                continue;
+            char *e = find_ent(nm);
+            if (e && ent_pos(e, pos))
+                n += snprintf(out + n, size - n, "%s at %.2f %.2f %.2f; ", nm, pos[0], pos[1], pos[2]);
+            else
+                n += snprintf(out + n, size - n, "%s: none; ", nm);
+        }
+        return 1;
+    }
     if (!strcmp(cmd, "where")) {   /* "!cp where": this machine's player position (lab) */
         float pos[3] = {0, 0, 0};
         int ok = ent_pos(PLAYER, pos);
