@@ -96,6 +96,71 @@ STRINGS = [
         "czech": "Kooperační mod {STRING}",
         "hungarian": "Kooperatív mod {STRING}",
     }),
+    # Video options (PC): screen mode, applied at the next start (native/display.c)
+    ("COOP_VIDEO_DISPLAY", {
+        "english": "Screen mode",
+        "russian": "Режим экрана",
+        "german": "Bildschirmmodus",
+        "french": "Mode d'affichage",
+        "italian": "Modalità schermo",
+        "spanish": "Modo de pantalla",
+        "polish": "Tryb ekranu",
+        "czech": "Režim obrazovky",
+        "hungarian": "Képernyőmód",
+    }),
+    ("COOP_VIDEO_DISPLAY_HINT", {
+        "english": "Full screen, full screen without a frame (quick switching to other programs) or a window. "
+                   "Takes effect at the next start of the game.",
+        "russian": "Полный экран, полный экран без рамки (быстрое переключение на другие программы) или окно. "
+                   "Вступает в силу при следующем запуске игры.",
+        "german": "Vollbild, rahmenloses Vollbild (schneller Wechsel zu anderen Programmen) oder Fenster. "
+                  "Wirkt beim nächsten Spielstart.",
+        "french": "Plein écran, plein écran sans bordure (passage rapide aux autres programmes) ou fenêtre. "
+                  "Pris en compte au prochain lancement du jeu.",
+        "italian": "Schermo intero, schermo intero senza bordi (passaggio rapido ad altri programmi) o finestra. "
+                   "Ha effetto al prossimo avvio del gioco.",
+        "spanish": "Pantalla completa, pantalla completa sin bordes (cambio rápido a otros programas) o ventana. "
+                   "Se aplica en el próximo inicio del juego.",
+        "polish": "Pełny ekran, pełny ekran bez ramki (szybkie przełączanie do innych programów) lub okno. "
+                  "Działa od następnego uruchomienia gry.",
+        "czech": "Celá obrazovka, celá obrazovka bez rámečku (rychlé přepínání do jiných programů) nebo okno. "
+                 "Projeví se při příštím spuštění hry.",
+        "hungarian": "Teljes képernyő, keret nélküli teljes képernyő (gyors váltás más programokra) vagy ablak. "
+                     "A játék következő indításakor lép életbe.",
+    }),
+    ("COOP_VIDEO_FULL", {
+        "english": "Full screen",
+        "russian": "Полный экран",
+        "german": "Vollbild",
+        "french": "Plein écran",
+        "italian": "Schermo intero",
+        "spanish": "Pantalla completa",
+        "polish": "Pełny ekran",
+        "czech": "Celá obrazovka",
+        "hungarian": "Teljes képernyő",
+    }),
+    ("COOP_VIDEO_BORDERLESS", {
+        "english": "Borderless",
+        "russian": "Без рамки",
+        "german": "Rahmenlos",
+        "french": "Sans bordure",
+        "italian": "Senza bordi",
+        "spanish": "Sin bordes",
+        "polish": "Bez ramki",
+        "czech": "Bez rámečku",
+        "hungarian": "Keret nélkül",
+    }),
+    ("COOP_VIDEO_WINDOW", {
+        "english": "Window",
+        "russian": "Окно",
+        "german": "Fenster",
+        "french": "Fenêtre",
+        "italian": "Finestra",
+        "spanish": "Ventana",
+        "polish": "Okno",
+        "czech": "Okno",
+        "hungarian": "Ablak",
+    }),
 ]
 
 

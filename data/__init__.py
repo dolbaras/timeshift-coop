@@ -7,5 +7,6 @@ beyond the short anchors the edits need.
 RECIPES = [
     "coop_rules",     # co-op rules in network sessions: failed-autosave menu answered, AI replicated
     "coop_menu",      # the Co-op menu: main menu entry, host frame, the stock server set-up driven by it
+    "coop_display",   # screen mode (full screen / borderless / window) in the Video options
     "coop_strings",   # the menu's texts in every language the game ships
 ]

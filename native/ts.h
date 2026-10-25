@@ -68,6 +68,10 @@ void split_install(void);
 void d3dex_install(void);
 struct IDirect3D9 *d3dex_create(UINT sdk, struct IDirect3D9 *(WINAPI *create9)(UINT));   /* testmode.c's Direct3DCreate9 hook */
 
+/* display.c: screen mode from the Video options (profile key COOP_DisplayMode: borderless / window) */
+void display_install(void);
+void display_on_d3d(void *d3d);
+
 /* testmode.c: window, render adapter and focus handling for test instances */
 void testmode_install(void);
 void testmode_wrap_dinput(void *dinput);

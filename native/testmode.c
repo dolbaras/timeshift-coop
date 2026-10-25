@@ -796,8 +796,10 @@ static IDirect3D9 *WINAPI hook_Direct3DCreate9(UINT sdk)
 {
     IDirect3D9 *d3d = d3dex_create(sdk, real_Direct3DCreate9);   /* (Direct3D 9Ex with TS_D3D9EX=1) */
     ts_log("Direct3DCreate9(%u) -> %p, %u adapters", sdk, (void *)d3d, d3d ? IDirect3D9_GetAdapterCount(d3d) : 0);
-    if (d3d)
+    if (d3d) {
         compat_on_d3d(d3d);
+        display_on_d3d(d3d);   /* (before the test hooks: those run first when they are on) */
+    }
     if (d3d && (adapter_mode[0] || background)) {
         void *p = ts_patch_vtable(d3d, 16, (void *)hook_D3DCreateDevice);
         if (p)
