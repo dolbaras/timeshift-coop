@@ -5,9 +5,10 @@ side on wide screens and top and bottom on others. This is a prototype, off unle
 `TS_SPLIT=1` is set. The code is `native/split.c`; the static research behind it is in the private notes
 (`work/re/splitscreen.md`).
 
-Status (2026-10-25, prototype, main PC, `ts2_city_part02`, single player): both views render on alternate frames
-into their halves with a HUD each; player 2 is spawned next to player 1 and moves, turns and fires with pad 2.
-Not ready for players: see "Open problems".
+Status (2026-10-25, prototype, main PC, `ts2_city_part02`/`part03`, single player): both views render on alternate
+frames into their halves with a HUD each; player 2 is spawned next to player 1 with its own first-person weapons,
+moves, turns and fires with pad 2, has the script name `player2`, cannot hurt player 1, respawns next to player 1
+instead of ending the game, and stays through a level change. Not ready for players: see "Open problems".
 
 ## Why it has to be built
 
@@ -70,23 +71,47 @@ Player 2 is a second instance of the campaign class `player`, spawned next to pl
 uninterrupted play (`TS_SPLIT_P2DELAY`) and placed with the player's own vtable +0x210 (position, direction).
 The spawn is `0x655460(no transform, "player", "player", 0)`: the object name names a placed object to build
 from, so player 1's own name serves as the template; a name of nothing placed gives no object. Its constructor
-takes both player pointers, so they are put back to player 1 right after the spawn, and its scene node gets the
-name `player2` (the single-player init names it `player`; its script instance has no name in the log, so `$player` should stay
-player 1; not checked through the console). Player 1 is one object for the whole game: it
-survives level changes. Player 2 should be removed with the level and made again in the next one (not tested yet).
+takes both player pointers, so they are put back to player 1 right after the spawn.
 
-The player's init spawns its own objects, and a second player cannot get all of them: the first-person weapons
-(`wpn_plr_pistol`, ...) and the hands (`wpn_plr_hands`) are made from a placed template (`nameTpl`) that
-apparently only one object can use. The spawn returns no object, and the engine then writes through it
-(`0x447a5c`) or skips the rest of the init (later a NULL at player +0x478, `0x40b958`). For player 2 the mod
-replaces these spawns (calls at `0x447a2e`, `0x447a55`, `0x442868`): a failed `wpn_plr_X` becomes
-`wpn_mp_X`, the network players' class of the same weapon (parent `wpn_plr_X`, the AI's third-person model as
-template), and the hands become an empty holster. Player 2's body (`player_ghost`, template `main_char`) is
-made normally.
+**Script name.** The spawn makes player 2's script instance (entity +0x80: +4 name, +0xc entity) with the name
+`player`, which the script manager refuses ("object 'player' already exist, new one added as unnamed"). The mod
+gives the instance the name `player2` and puts it into the manager's name table the way the engine's own insert
+does (manager `[0xebedec]` +0x14: an array sorted by name, byte-wise compare `0x428b20`; insert `0x8fb000`).
+Through the test console `return $player` gives `player` and `return $player2` gives `player2`, and natives work
+on both (`$player2.SetupWeapon(4,0,0)`, `$player2.SelectHolster(0,1)`, `$player2.Kill()`).
 
-Every frame, player 2's update (player vtable +0x13c, `0x4098c0`) runs with the globals swapped to player 2:
-both player pointers, player 2's own camera object (the player's camera code writes `[0xfcabc4]`), its own command
-context, and the input manager's look state (+0x28..+0x3b, +0x64..+0x73).
+**Own weapons.** The player's init spawns its first-person weapons (`wpn_plr_*`, at `0x447a2e`/`0x447a55`), the
+hands (`wpn_plr_hands`, `0x442868`) and the third-person body (`player_ghost` "main_char", with its `wpn_mp_*`
+weapons). For first-person weapon templates the world's node creation (`0x95dcf0(world, template, transform)`,
+called at `0x6551be`) copies the template's shared geometry (template +0xb8, `0x961f30`) but refuses when that
+geometry is marked in use (+0xbc, checked at `0x95dd3a`): player 1's weapons hold the mark, so a second player got
+no weapons and the engine crashed writing through the NULL (`0x447a5c`) or skipped the rest of the init (`0x40b958`).
+While player 2 is made, the mod lifts the mark for the call and puts it back, so player 2 gets its own
+`wpn_plr_*` weapons and hands (log: `node for template "wpn_plr_pistol" geometry ... in use ... -> ...`). The
+earlier stand-in (the network class `wpn_mp_*`) is kept as a fallback for a spawn that still fails.
+
+**Everything of player 2 runs as player 2.** Its weapons check the local player while they animate and fire. The
+mod hooks the task scheduler's message dispatch (stdcall `0x946e40(task, msg, a, b)`, entered by a jump at its
+start; the trampoline holds the first 10 bytes): every update and message of player 2 and of the objects made at
+its spawn (weapons, hands, holster) runs with the globals swapped to player 2 (nested calls swap once).
+
+**Friendly fire.** A hit on player 1 is message `0x4e3`, delivered after the shot, outside the shooter's update; its
+record holds the shooter's scheduler id at +8 (`0x947c10` finds the object). Hits by player 2 or its weapons go
+nowhere. Player 2 is not "the" local player to the hit system: a kill of player 2 arrives as event -98 in the
+player's event handler (vtable +0x22c, `0x40b120`), which calls the death directly, again with the shooter's id at
++8; one by player 1 or its weapons goes nowhere.
+
+**Death and respawn.** Player 2's death (vtable +0x2e8, `0x410cc0`; also the end of the script's `Kill`) would run
+the single-player death: the "you died" screen and the restart for both. Player 2 is put next to player 1 again
+instead, with its damage value (+0x468) cleared.
+
+**Level change.** Player 1 is one object for the whole game and survives level changes; player 2 does too (its
+script name answers after the change). When the script tick resumes after a level load, player 2 is put next to
+player 1 again once the delay has passed.
+
+The swap (also around player 2's update, player vtable +0x13c, `0x4098c0`): both player pointers, player 2's own
+camera object (the player's camera code writes `[0xfcabc4]`), its own command context, and the input manager's
+look state (+0x28..+0x3b, +0x64..+0x73).
 
 Player 2's command context is a copy of the `GAME` context with its own command entries, so it has the same
 bindings, including the pad bindings of `gamepad.c`. The engine fills it with its own command evaluation
@@ -108,7 +133,9 @@ Player 1's raw input, context and look state are restored afterwards.
 | `TS_SPLIT_LAYOUT=v/h` | side by side / top and bottom (default: side by side when the screen is wider than 3:2) |
 | `TS_SPLIT_MT=1` | keep the engine's worker threads (the split then stays off and says so in the log) |
 | `TS_SPLIT_P2DELAY=s` | seconds after player 1 appears until player 2 is spawned (default 5) |
-| `TS_SPLITLOG=1` | frame phases, threads, globals and the game state in the log |
+| `TS_SPLITLOG=1` | frame phases, threads, globals and the game state in the log (2: also the players' weapon sets) |
+| `TS_SPLIT_MSGLOG=1` | tests: messages to the players and player 2's events in the log |
+| `TS_SPLIT_P2FACE=1` | tests: player 2 is placed 2.5 m in front of player 1, facing it |
 
 Pad assignment is `gamepad.c`'s: player 1 gets the first connected pad (or `[Gamepad] Pad=`), player 2 the next one.
 
@@ -130,20 +157,43 @@ in this order, once per frame; the quad call at `0x770f42` is made once per fram
 
 Without `TS_SPLIT` the same level load runs as before (control run `20261025-071304`).
 
+### Round 2 (2026-10-25, main PC; driver `lab/split_run.ps1`, console commands `lab/split_cmds*.txt`, pads `lab/split_p2moves*.json`)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Player 2's weapons | real first-person weapons and hands (template in-use mark lifted at the spawn); after `$player2.SetupWeapon(4,0,0)` the HUD of player 2's half shows the assault rifle and 210 rounds; RT fires (fire messages to player 2's weapon at the weapon's rate, bullet marks on the wall in its view) | `20261025-074222` log (node lines), `20261025-080547` `shot141.png` |
+| First-person model of player 2 | **not drawn** in player 2's half (player 1's is drawn in player 1's half) | `20261025-074935` `shot124.png` |
+| `$player`, `$player2` | `return $player` -> `player`, `return $player2` -> `player2`; natives on `$player2` work | `20261025-074935` |
+| Friendly fire | before: player 1 got a hit message (`0x4e3`) with player 2 as the shooter for each of player 2's shots that hit it (`20261025-081949` log); now each one is dropped (`friendly hit on player 1 by <player 2> dropped`, 8 per burst). Enemies still hit player 1 (shooter ids of AI soldiers), and in some runs they killed it ("you died") | `20261025-082306`, `20261025-083424` |
+| Player 2's death | before: `$player2.Kill()` ended the game for both ("you died", `20261025-080936` `shot170.png`); now: `player 2 died: respawned next to player 1`, also for kills by enemies | `20261025-081604`, `20261025-083424` |
+| Level change | `$ui.LoadLevel("ts2_city_part03.lg")` with player 2 present: no crash, `return $player2` still answers, player 2 is placed again in the new level and has its own view there | `20261025-083954` `shot235.png`, `20261025-083424` |
+| Pause menu | Start on pad 1 opens the pause menu over the whole screen, Start closes it, the split comes back | `20261025-083424` `shot155.png` |
+| Bodies | each player's body is **not visible** to the other; clearing bit 0x800 of the body node (+4, set by the player's init on "player_3d") per view did not show it | `20261025-081604` `shot136.png` |
+
 ## Open problems
 
-- **Player 2's first-person weapon** is the network weapon (`wpn_mp_*`), whose third-person model hangs in front
-  of player 2's camera as a large dark shape. The first-person templates allow one object. Needed: a
-  first-person model per player (a copy of the template, or the weapon model of player 1 drawn for the other
-  view), or hiding the model in player 2's view.
-- **Global screen effects**: the damage/blood screen and the red tint appear in both halves (they are global
-  render state); time powers' screen effects and HDR adaptation are global too. They need to be kept per player
-  and swapped per frame (as in Jericho).
-- **Friendly fire**: player 2's shots most likely hit player 1 (see test 3); to be checked and turned off.
+- **Player 2's first-person model is not drawn.** Its weapons exist and fire, but nothing of them shows in its
+  half. The render prep (`0x67f9b0`) only handles scene nodes whose visibility bit is set (world +0x50) and that are
+  enabled (node +8 bit 0x200000), and only those get their animation advanced (`0x951090`); the first-person pass
+  (`0x680730`) draws render bucket 3 (`0x9a1fe0(rend+0x124, 3, 3, 1)`). Next step: log player 2's weapon nodes in
+  that loop (bits, bucket) against player 1's.
+- **Bodies.** Neither player sees the other's body. The hide is not the node bit 0x800; to be found the same way
+  (render prep, bucket choice), then shown per view with the one-frame-lag rule from Jericho.
+- **Per-view screen effects: not done.** Hit/blood overlays are HUD widgets and follow the view (blood only in
+  player 1's half while it was hit, `20261025-081604` `shot136.png`), but the red tint and blur of the damage and
+  death effects, the time-power effects and HDR adaptation are global and show in both halves. Their parameters
+  still have to be found and kept per player.
+- **Player 2's damage.** After a respawn it dies again after a few enemy hits within a second (respawned at the
+  same place near the enemies); its life value is not understood (+0x468 is a damage value, not the life). Health
+  pick-ups and time energy for player 2 are untested; the HUD's ammo counter in player 2's half did not drop while
+  it fired (it may read player 1's weapon set).
+- **Respawn placement**: next to player 1 by a fixed offset, snapped by the engine's placement; on a roof (part 3
+  start) player 2 ended on the street below.
+- **Player 1 is not covered**: player 1's death still ends the game for both (single-player rules).
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
   triggers, checkpoints, cutscenes, death and restart see player 1 only. The same audit as for network co-op
   (`player-audit.md`).
-- Player 2's death, health pick-ups, time-power energy, and saving are untested.
+- Saving and loading with player 2 are untested.
 - The pause menu and loading screens are full screen (UI command context); cutscenes with the scene camera are
   full screen. Player 2 has no menu control (only player 1's pad and keyboard drive the menus).
 - Each view runs at half the frame rate; no frame cap yet.

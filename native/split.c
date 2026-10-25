@@ -19,7 +19,10 @@
  *   (vtable +0x13c) runs with the globals swapped to it: the two player pointers, its own camera object
  *   (the player's camera code writes [0xfcabc4]) and its own command context, which the engine's own
  *   command evaluation fills from pad 2 (a second pass of 0x6595e0 per frame with the raw input codes of
- *   player 2: gamepad.c writes pad 2 there, the keyboard and mouse read as idle).
+ *   player 2: gamepad.c writes pad 2 there, the keyboard and mouse read as idle). Every message and update
+ *   of player 2 and of its own weapons runs inside that swap (scheduler dispatch 0x946e40). It gets its own
+ *   first-person weapons (template in-use mark lifted at its spawn), the script name `player2`, no damage
+ *   from player 1 and none to it, and a respawn next to player 1 instead of the single-player death.
  * - Sound: the listener update runs in the game update, outside the render span, so it follows player 1.
  *
  *   TS_SPLIT=1           on (prototype; off unless set)
@@ -28,7 +31,9 @@
  *   TS_SPLIT_LAYOUT=     auto (default: side by side when the screen is wider than 3:2), v (side by side), h
  *   TS_SPLIT_MT=1        keep the engine's worker threads (default: single-thread frame in split mode)
  *   TS_SPLIT_P2DELAY=s   seconds after player 1 appears until player 2 is spawned (default 5)
- *   TS_SPLITLOG=1        frame phases, threads and globals of the first frames in the log
+ *   TS_SPLITLOG=1        frame phases, threads and globals of the first frames in the log (2: + weapon sets)
+ *   TS_SPLIT_MSGLOG=1    tests: messages to the players and player 2's events in the log
+ *   TS_SPLIT_P2FACE=1    tests: player 2 is placed 2.5 m in front of player 1, facing it
  */
 #define COBJMACROS
 #include <windows.h>
@@ -213,6 +218,7 @@ static BYTE *ctx2;              /* player 2's command context (a copy of GAME wi
 static BYTE *raw2;              /* player 2's raw input block */
 static DWORD imf2_a[5], imf2_b[4];
 static int p2_failed;
+static DWORD p2_born;
 static LONG logged;
 
 /* the picture of each view and the composite */
@@ -735,6 +741,30 @@ static void TSCALL hook_die(void *pl, int arg)
     ts_log("split: player 2 died: respawned next to player 1");
 }
 
+/* The player's event handler (vtable +0x22c, 0x40b120(this, event*), ret 4; a switch on the event code, word +4):
+ * hits on player 2 arrive here (player 1's come as message 0x4e3). TS_SPLIT_MSGLOG logs player 2's events. */
+typedef void (TSCALL *event_t)(void *, BYTE *);
+static event_t real_event;
+
+static void TSCALL hook_event(void *pl, BYTE *ev)
+{
+    if (msglog && p2 && pl == p2 && ev && !IsBadReadPtr(ev, 32)) {
+        static int n;
+        DWORD *d = (DWORD *)ev;
+        if (n++ < 200)
+            ts_log("split: p2 event %d: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx", *(short *)(ev + 4), d[0], d[1], d[2],
+                   d[3], d[4], d[5], d[6], d[7]);
+    }
+    /* Friendly fire on player 2: a hit is event -98 with the shooter's scheduler id at +8. */
+    if (p2 && pl == p2 && ev && *(short *)(ev + 4) == -98 && is_p1_object(find_task((void *)0xecb7f8, *(int *)(ev + 8)))) {
+        static int n;
+        if (n++ < 8)
+            ts_log("split: friendly hit on player 2 dropped");
+        return;
+    }
+    real_event(pl, ev);
+}
+
 /* The destructor clears both player pointers: player 2's must leave them on player 1. */
 static void *TSCALL hook_dtor(void *pl, int flags)
 {
@@ -864,6 +894,7 @@ static void spawn_p2(BYTE *p1)
     if (!make_context())
         ts_log("split: no command context for player 2 (no pad input)");
     p2 = e;
+    p2_born = GetTickCount();
     ts_log("split: player 2 spawned %p (script name \"%s\"; player 1 %p \"%s\")", (void *)e, script_name(e), (void *)p1,
            script_name(p1));
     /* (single player names the object "player" in its init: player 2 gets its own name back) */
@@ -928,11 +959,21 @@ static void split_tick(float dt)
      * the start of the game), so a gap between ticks restarts the count. */
     static DWORD last_tick;
     DWORD now = GetTickCount();
+    static int placed;
+    if (now - last_tick > 500)
+        placed = 0;   /* (a level load: the tick stopped) */
     if (!in_play() || cinematic() || now - last_tick > 500)
         p1_since = now;
     last_tick = now;
     if (p1 && !p2 && p2_failed < 3 && now - p1_since >= (DWORD)p2_delay * 1000)
         spawn_p2(p1);
+    /* Player 2 survives a level change like player 1 (both are objects of the game, not of the level): it is put
+     * next to player 1 again once the new level is in play. */
+    if (p1 && p2 && !placed && now - p1_since >= (DWORD)p2_delay * 1000) {
+        placed = 1;
+        if ((int)(now - p2_born) > 2000)   /* (not the one just spawned and placed) */
+            place_p2(p1);
+    }
 }
 
 /* ---- install ---- */
@@ -984,6 +1025,7 @@ void split_install(void)
         n += patch_slot(PLAYER_VTBL, SLOT_UPDATE, (void *)hook_update, (void **)&real_update)
              + patch_slot(PLAYER_VTBL, SLOT_DTOR, (void *)hook_dtor, (void **)&real_dtor)
              + patch_slot(PLAYER_VTBL, 0x2e8 / 4, (void *)hook_die, (void **)&real_die)
+             + patch_slot(PLAYER_VTBL, 0x22c / 4, (void *)hook_event, (void **)&real_event)
              + patch_slot(IM_VTBL, SLOT_EVAL, (void *)hook_eval, (void **)&real_eval);
     if (stage >= 3)
         for (int i = 0; i < 5; i++) {   /* (weapons: 0x447a2e, 0x447a55; hands 0x442868; body: 0x4074b4, 0x4074f9) */
