@@ -1112,18 +1112,23 @@ static void trail_add(int who, BYTE *pl)
         trail[who].n++;
 }
 
-/* The newest spot at least 4 samples (2 s) old and 1.5 m away from where the partner is now. */
-static int trail_pick(int who, const float *now_pos, float *out)
+/* The newest spot at least 4 samples (2 s) old and `away` m from where the partner is now. */
+static int trail_pick_away(int who, const float *now_pos, float *out, float away)
 {
     for (int age = 4; age < trail[who].n; age++) {
         float *q = trail[who].p[(trail[who].head - 1 - age + 2 * TRAIL) % TRAIL];
         float dx = q[0] - now_pos[0], dy = q[1] - now_pos[1], dz = q[2] - now_pos[2];
-        if (dx * dx + dy * dy + dz * dz >= 1.5f * 1.5f) {
+        if (dx * dx + dy * dy + dz * dz >= away * away) {
             memcpy(out, q, 12);
             return 1;
         }
     }
     return 0;
+}
+
+static int trail_pick(int who, const float *now_pos, float *out)
+{
+    return trail_pick_away(who, now_pos, out, 0.8f);
 }
 
 /* The newest spot of one's own trail at least 2 s old (ground one stood on) within 25 m of the partner. */
@@ -1358,7 +1363,7 @@ static void split_tick(float dt)
     /* (player 2 comes in on ground player 1 walked on: once player 1 has moved 1.5 m from a spot it stood on
      * 2 s before; the same after a level change) */
     float spot[3], *p1pos = p1 && *(BYTE **)(p1 + 0x230) ? (float *)(*(BYTE **)(p1 + 0x230) + 0x68) : NULL;
-    int walked = p1pos && trail_pick(0, p1pos, spot);
+    int walked = p1pos && trail_pick_away(0, p1pos, spot, 0.8f);
     if (p1 && !p2 && p2_failed < 3 && now - p1_since >= (DWORD)p2_delay * 1000 && walked)
         spawn_p2(p1);
     /* Player 2 survives a level change like player 1 (both are objects of the game, not of the level): it is put
