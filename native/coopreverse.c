@@ -423,30 +423,18 @@ __attribute__((used)) void crw_tick(void)
         host_stop("time up");
 }
 extern void crw_tick_thunk(void) __asm__("crw_tick_thunk");
-__asm__(".text
-"
-        ".globl crw_tick_thunk
-"
-        "crw_tick_thunk:
-"
-        "  pushl %eax
-"
-        "  pushl %ecx
-"
-        "  pushl %edx
-"
-        "  call crw_tick
-"
-        "  popl %edx
-"
-        "  popl %ecx
-"
-        "  popl %eax
-"
-        "  movl 0xfcace8, %eax
-"        /* the 5 bytes the call replaced */
-        "  ret
-");
+__asm__(".text\n"
+        ".globl crw_tick_thunk\n"
+        "crw_tick_thunk:\n"
+        "  pushl %eax\n"
+        "  pushl %ecx\n"
+        "  pushl %edx\n"
+        "  call crw_tick\n"
+        "  popl %edx\n"
+        "  popl %ecx\n"
+        "  popl %eax\n"
+        "  movl 0xfcace8, %eax\n"        /* the 5 bytes the call replaced */
+        "  ret\n");
 
 /* ---- server ---- */
 static void send_state(int i)
