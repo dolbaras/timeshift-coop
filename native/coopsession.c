@@ -28,6 +28,9 @@
  *   wrapper that reads 0. TS_COOP_MPRULES=1 keeps them.
  *   (Minimum players, time and score limit are profile keys: the co-op menu sets them for its server and
  *   puts the player's own values back at the main menu; see mod/docs/building.md.)
+ * - No multiplayer score bar (match time, frags) on the HUD: the HUD element (type scoreBar) hides itself when
+ *   its check 0x5b2b90, called at 0x5b2c80, returns 0; in a co-op session it does. (A hud.ui script cannot
+ *   do it: the element sets its own visibility every frame.)
  *
  * Messages (coopnet.c, reliable, subtypes 40-49):
  *   40 server -> client  u8 proto (1), u8 flags (COOP_F_*), u8 difficulty (0-2, 255 = not set),
@@ -70,6 +73,9 @@
 #define SITE_WARMUP 0x5ee949
 #define SITE_READY 0x596cbb
 #define SITE_READY_HINT 0x5ff66a
+/* HUD score bar: its update 0x5b2bf0 shows it in a network game when 0x5b2b90 (no arguments) returns non-zero */
+#define SCOREBAR_WANTED 0x5b2b90
+#define SITE_SCOREBAR 0x5b2c80
 
 #define SUB_SESSION 40
 #define SUB_ACK 41
@@ -167,6 +173,12 @@ static int TSCALL opt_rule_off(void *store, int index, int *out)
     if (r && out && rules_off && ts_coop_active())
         *out = 0;
     return r;
+}
+
+/* The HUD score bar is wanted outside co-op only. */
+static int score_bar_wanted(void)
+{
+    return ts_coop_active() ? 0 : ((int (*)(void))SCOREBAR_WANTED)();
 }
 
 static int patch_call(DWORD site, DWORD target, void *hook)
@@ -446,8 +458,9 @@ void coopsession_install(void)
     int ok_rules = patch_call(SITE_WARMUP, OPT_GETINT, (void *)opt_rule_off)
                    + patch_call(SITE_READY, OPT_GETINT, (void *)opt_rule_off)
                    + patch_call(SITE_READY_HINT, OPT_GETINT, (void *)opt_rule_off);
+    int ok_hud = patch_call(SITE_SCOREBAR, SCOREBAR_WANTED, (void *)score_bar_wanted);
     int ok_tick = ts_frame_add(frame), ok_net = coopnet_listen(SUB_SESSION, SUB_LAST, on_message);
-    ts_log("coopsession: on, version %s (friendly fire %s %d, warm-up/ready %s %d/3, session messages %s)", TS_VERSION,
-           ff_off ? "off" : "stock", ok_ff, rules_off ? "off" : "stock", ok_rules,
+    ts_log("coopsession: on, version %s (friendly fire %s %d, warm-up/ready %s %d/3, score bar off %d, session messages %s)",
+           TS_VERSION, ff_off ? "off" : "stock", ok_ff, rules_off ? "off" : "stock", ok_rules, ok_hud,
            ok_tick && ok_net ? "on" : "OFF: no script tick or mod messages");
 }
