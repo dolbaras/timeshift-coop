@@ -30,7 +30,21 @@
  *   80 client -> server  {u8 1, u8 what (1 = start, 0 = stop), u8 tenths of a second}
  *   81 server -> client  {u8 1, u8 on, u8 yours, u8 tenths left, i32 owner}   (repeated every second while on)
  *
- * Switches: TS_COOP_REVERSE=1, TS_COOP_REVERSE_SECONDS=<s>, TS_COOP_REVERSE_COST=<energy per s>, TS_COOP_REVERSE_LOG=1.
+ * Real rewind on the host (TS_COOP_REWIND=1, with TS_COOP_REVERSE=1; NOT YET RUN): the engine's own time recorder.
+ * It takes a snapshot of every isSyncTR object every 0.1 s through the save serializer [0x1095f94] (0x5849c0, flags
+ * 0x800000 save / 0x1000000 load in [0xfcace8]) and plays them back during a reverse (0x584170 asks, 0x584720
+ * broadcasts 0x3ff and 0x584bf0 sets the playback flag 0x400000; 0x584870 ends with 0x400). Players are not
+ * isSyncTR (plr_comm), so nobody's body is rewound. The recorder code tests "game mode 1" in nine places
+ * (0x583912 ... 0x585b97); on a co-op host they read a fake game-mode object with mode 1, so the host records. The
+ * host's own reverse key then runs the engine's reverse (energy, duration, effect as in the campaign); a client's
+ * request starts the same playback through 0x4417f0 (mode 2, the host's player) and ends it through 0x441a70. The
+ * host's world rewinds; replicated objects (dynamic actors, physics, doors, buttons, AI) reach the clients through
+ * their normal updates; the clients fire the reverse events of the puzzle table (their own force fields) as in the
+ * quick variant. After a rewind, a client inside a closed container trap (*|dom_mis_fail, levels 11 15 18 20) dies
+ * (message 82); the host's own trap check is the level's script (FailMission = team restart).
+ *
+ * Switches: TS_COOP_REVERSE=1, TS_COOP_REWIND=1, TS_COOP_REVERSE_SECONDS=<s>, TS_COOP_REVERSE_COST=<energy per s>,
+ * TS_COOP_REVERSE_LOG=1.
  * Test console: "!rv state", "!rv start [s]" (as if this machine's player pressed reverse), "!rv stop".
  */
 #include <windows.h>
@@ -58,6 +72,17 @@
 #define FX_MGR 0x1096f18
 #define FX_SLOT(mode) (*(char **)(FX_MGR + 0x14f4 + ((mode) + 3) * 4))
 #define MODE_REVERSE 2
+#define REC (*(char **)0xfc8400)             /* the time recorder (TR task) */
+#define TR_SAVE (*(char **)0x1095f94)        /* the TR serializer (save manager subclass, vtable 0xd9cfac) */
+#define REC_FRAMES 0x700ad0                  /* recorded snapshots */
+#define REC_FLAGS 0x700ae0                   /* 8 = playback asked, 0x10 = recording off */
+#define GAME_FLAGS (*(volatile unsigned *)0xfcace8)
+#define GF_PLAYBACK 0x400000                 /* reverse playback runs */
+#define DOM_LOCKS 0x88
+#define DOM_UPDATE 0x6c2dd0
+static int (TSCALL *dom_is_belong)(void *, void *) = (void *)0x6c3d60;
+static const DWORD fn_rev_start = 0x4417f0;  /* eax = 2, [esp+4] = the player; ret 4 (the world part of a power start) */
+static void (TSCALL *rev_end)(void *, int, int) = (void *)0x441a70;   /* (player, mode 2, 0): stops the playback */
 
 typedef struct { int refs, len, cap; char s[1]; } StrHdr;
 typedef StrHdr *String;
@@ -75,6 +100,7 @@ static const DWORD fn_fx_start = 0x665f70;   /* esi = FX_MGR, edi = slot, [esp+4
 
 #define SUB_REQ 80
 #define SUB_STATE 81
+#define SUB_TRAP 82                          /* server -> client {u8 1}: trapped in a closed container after a rewind */
 #define SUB_LAST 89
 #define PROTO 1
 #define NONE (-1)
@@ -112,6 +138,12 @@ static int owner = NONE;
 static DWORD until, last_repeat;
 /* owner side */
 static DWORD drain_last;
+/* the stock rewind on the host (TS_COOP_REWIND=1, see the header) */
+static int stock;                            /* switched on */
+static int stock_run;                        /* (host) the engine's reverse playback runs now */
+static int stock_ours;                       /* (host) ... started by this file for a client (we end it) */
+static DWORD stock_since, trap_until;
+static int trap_kill;                        /* (client) the host says: trapped in a container */
 static LONG n_logged;
 #define RLOG(...) do { if (InterlockedIncrement(&n_logged) <= 400) ts_log(__VA_ARGS__); } while (0)
 #define VLOG(...) do { if (verbose) RLOG(__VA_ARGS__); } while (0)
@@ -208,17 +240,172 @@ static void apply(int want, int mine)
     }
     if (want) {
         snprintf(on_level, sizeof on_level, "%s", LEVEL_NAME);
-        int n = fire_all("OnStartTReverse");
-        fx_start();
+        int n = stock_run ? 0 : fire_all("OnStartTReverse");   /* (stock rewind: the engine fires them) */
+        if (!stock_run || stock_ours)
+            fx_start();
         RLOG("coopreverse: reverse on%s (%d puzzle object(s))", mine ? " (mine)" : "", n);
     } else {
-        int n = strcmp(on_level, LEVEL_NAME) == 0 ? fire_all("OnStopTReverse") : 0;
+        int n = !stock_run && strcmp(on_level, LEVEL_NAME) == 0 ? fire_all("OnStopTReverse") : 0;
         fx_stop();
         RLOG("coopreverse: reverse off (%d puzzle object(s))", n);
     }
     on = want;
     yours = want && mine;
     drain_last = GetTickCount();
+}
+
+/* ---- the stock rewind on the host ---- */
+static int playing(void)
+{
+    char *r = REC;
+    return r && ((*(int *)(r + REC_FLAGS) & 8) || (GAME_FLAGS & GF_PLAYBACK));
+}
+
+/* The host may use the engine's recorder now: the server of a co-op session, the recorder and its serializer exist,
+ * recording is on and holds enough snapshots (the engine wants 5). */
+static int stock_ready(void)
+{
+    char *r = REC;
+    return stock && game_mode() == MODE_SERVER && r && TR_SAVE && *(int *)(r + REC_FRAMES) >= 5
+           && !(*(int *)(r + REC_FLAGS) & 0x10);
+}
+
+/* Called from the patched game-mode reads of the recorder code (0x583900-0x585c00): 1 = this host records. */
+__attribute__((used)) int crw_record(void) __asm__("crw_record");
+__attribute__((used)) int crw_record(void)
+{
+    return stock && game_mode() == MODE_SERVER && ts_coop_active();
+}
+
+int crw_fake_gm[0x40 / 4] __asm__("crw_fake_gm");   /* a game-mode object reading "single player" (+0x3c = 1) */
+extern void crw_gm_eax(void) __asm__("crw_gm_eax");
+extern void crw_gm_ecx(void) __asm__("crw_gm_ecx");
+__asm__(".text\n"
+        ".globl crw_gm_eax\n"
+        "crw_gm_eax:\n"                  /* replaces `mov eax, [0xfcab34]` */
+        "  pushl %ecx\n"
+        "  pushl %edx\n"
+        "  call crw_record\n"
+        "  popl %edx\n"
+        "  popl %ecx\n"
+        "  testl %eax, %eax\n"
+        "  jnz 1f\n"
+        "  movl 0xfcab34, %eax\n"
+        "  ret\n"
+        "1:\n"
+        "  movl $crw_fake_gm, %eax\n"
+        "  ret\n"
+        ".globl crw_gm_ecx\n"
+        "crw_gm_ecx:\n"                  /* replaces `mov ecx, [0xfcab34]` (eax kept: 0x583a67 compares with it) */
+        "  pushl %eax\n"
+        "  pushl %edx\n"
+        "  call crw_record\n"
+        "  testl %eax, %eax\n"
+        "  popl %edx\n"
+        "  popl %eax\n"
+        "  jnz 2f\n"
+        "  movl 0xfcab34, %ecx\n"
+        "  ret\n"
+        "2:\n"
+        "  movl $crw_fake_gm, %ecx\n"
+        "  ret\n");
+
+/* Container traps (their OnStopTReverse fails the mission when the player is inside a closed container after a
+ * rewind): on the host the engine runs them for the host's player; a client inside one dies instead (respawn). */
+static const char *const traps[] = {
+    "ts2_zepcrashsite_part03", "clonecontainer_3|dom_mis_fail", "clonecontainer_4|dom_mis_fail",
+    "clonecontainer_6|dom_mis_fail", "clonecontainer_7|dom_mis_fail", NULL,
+    "ts2_guardfactory_part02", "s3d_Container_1|dom_mis_fail", "s3d_Container_2|dom_mis_fail",
+    "s3d_Container_3|dom_mis_fail", "s3d_Container_4|dom_mis_fail", "s3d_Container_5|dom_mis_fail",
+    "s3d_Container_6|dom_mis_fail", "s3d_Container_7|dom_mis_fail", "s3d_Container_8|dom_mis_fail",
+    "s3d_Container_9|dom_mis_fail", "s3d_Container_10|dom_mis_fail", "s3d_Container_11|dom_mis_fail",
+    "s3d_Container_12|dom_mis_fail", "s3d_Container_16|dom_mis_fail", "s3d_Container_18|dom_mis_fail", NULL,
+    "ts2_guardfactory_part05", "clonecontainer_1|dom_mis_fail", "clonecontainer_2|dom_mis_fail",
+    "clonecontainer_3|dom_mis_fail", "clonecontainer_4|dom_mis_fail", "clonecontainer_5|dom_mis_fail", NULL,
+    "ts2_zep_factory_part2", "clone1|dom_mis_fail", "clone2|dom_mis_fail", "clone3|dom_mis_fail",
+    "clone4|dom_mis_fail", NULL,
+    NULL};
+
+static void trap_check(void)
+{
+    char base[0x110];
+    level_base(LEVEL_NAME, base, sizeof base);
+    const char *const *p = traps;
+    while (*p && _stricmp(*p, base) != 0) {
+        while (*p)
+            p++;
+        p++;
+    }
+    if (!*p)
+        return;
+    for (p++; *p; p++) {
+        String nm = 0;
+        ObjPtr inst = 0;
+        str_ctor(&nm, *p, -1, 0);
+        mgr_find_obj(MGR, &inst, &nm);
+        if (nm && --nm->refs == 0)
+            eng_free(nm);
+        if (!inst)
+            continue;
+        char *dom = *(char **)((char *)inst + 0xc);
+        inst_release(&inst);
+        if (!dom || (*(void ***)dom)[0x134 / 4] != (void *)DOM_UPDATE || *(int *)(dom + DOM_LOCKS) <= 0)
+            continue;
+        for (int i = 0; slot_at(i); i++) {
+            char *s = slot_at(i), *ent = *(char **)(s + 4);
+            if (*(int *)s == 0 || !slot_joined(s) || !ent || !(dom_is_belong(dom, ent) & 0xff))
+                continue;
+            unsigned char b = PROTO;
+            coopnet_send(i, SUB_TRAP, &b, 1);
+            RLOG("coopreverse: client in slot %d trapped in %s after the rewind: it dies", i, *p);
+        }
+    }
+}
+
+/* During the engine's playback an entity's frame returns before its network update (0x6440ed: playback flag, entity
+ * +0x98 bit 6 clear -> return), so clients would see the rewound puzzle actors only jump at the end. The host
+ * therefore runs the network update (0x6931e0, esi = the entity) of the level's rewind actors itself every frame of a
+ * playback. */
+static const char *const rewind_actors[] = {
+    "ts2_skyscraper_part2", "Kran_actor", "Conveyer_actor", NULL,
+    "ts2_zepcrashsite_part01", "bridge_puzle_actor", NULL,
+    "ts2_zepcrashsite_part02", "Lift_actor", NULL,
+    "ts2_zep_factory_part1", "Actor_train", "Actor_ghost_train", NULL,
+    "ts2_zepride2_part01", "cage1_actor", "cage2_actor", NULL,
+    NULL};
+static const DWORD fn_net_update = 0x6931e0;
+
+static void push_rewind_actors(void)
+{
+    char base[0x110];
+    level_base(LEVEL_NAME, base, sizeof base);
+    const char *const *p = rewind_actors;
+    while (*p && _stricmp(*p, base) != 0) {
+        while (*p)
+            p++;
+        p++;
+    }
+    if (!*p)
+        return;
+    for (p++; *p; p++) {
+        String nm = 0;
+        ObjPtr inst = 0;
+        str_ctor(&nm, *p, -1, 0);
+        mgr_find_obj(MGR, &inst, &nm);
+        if (nm && --nm->refs == 0)
+            eng_free(nm);
+        if (!inst)
+            continue;
+        char *e = *(char **)((char *)inst + 0xc);
+        inst_release(&inst);
+        int net = e ? *(int *)(e + 0x18) : -1;
+        if (!e || IsBadReadPtr(e, 0x30) || !(*(int *)(e + 0x2c) & 1) || net == -1 || net == -2 || net == -3)
+            continue;
+        __asm__ volatile("call *%[fn]"
+                         : "+S"(e)
+                         : [fn] "m"(fn_net_update)
+                         : "eax", "ecx", "edx", "memory", "cc", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7");
+    }
 }
 
 /* ---- server ---- */
@@ -250,6 +437,20 @@ static void host_start(int who, float secs, const char *why)
     }
     if (secs <= 0.5f)
         return;
+    if (stock_ready()) {   /* the engine's own reverse, started for a client: the host's world rewinds */
+        int a = MODE_REVERSE;
+        char *pl = PLAYER;
+        __asm__ volatile("pushl %[p]\n\tcall *%[fn]"
+                         : "+a"(a)
+                         : [p] "r"(pl), [fn] "m"(fn_rev_start)
+                         : "ecx", "edx", "memory", "cc", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7");
+        if (!playing()) {
+            RLOG("coopreverse: %s: the engine did not start its playback (%d snapshots)", why, *(int *)(REC + REC_FRAMES));
+            return;
+        }
+        stock_run = stock_ours = 1;
+        stock_since = GetTickCount();
+    }
     owner = who;
     until = GetTickCount() + (DWORD)(secs * 1000.f);
     apply(1, who == 0);
@@ -261,6 +462,12 @@ static void host_stop(const char *why)
 {
     if (!on)
         return;
+    if (stock_run && stock_ours && playing())
+        rev_end(PLAYER, MODE_REVERSE, 0);   /* (ends the engine's playback) */
+    if (stock_run) {
+        trap_until = GetTickCount() + 1500;
+        stock_run = stock_ours = 0;
+    }
     apply(0, 0);
     owner = NONE;
     broadcast();
@@ -289,7 +496,7 @@ static void request(int start, float secs)
 
 static void on_message(int peer, unsigned short sub, const unsigned char *b, int len)
 {
-    if (!active() || len < 3 || b[0] != PROTO)
+    if (!active() || len < 1 || b[0] != PROTO || (sub != SUB_TRAP && len < 3))
         return;
     if (sub == SUB_REQ && game_mode() == MODE_SERVER) {
         if (b[1])
@@ -298,6 +505,8 @@ static void on_message(int peer, unsigned short sub, const unsigned char *b, int
             host_stop("client stopped (energy)");
     } else if (sub == SUB_STATE && game_mode() == MODE_CLIENT && len >= 8)
         apply(b[1] != 0, b[2] != 0);
+    else if (sub == SUB_TRAP && game_mode() == MODE_CLIENT)
+        trap_kill = 1;   /* (run in the script tick) */
 }
 
 /* ---- the reverse key (called from the thunk at 0x40d491, ebx = the player): 1 = consumed ---- */
@@ -315,6 +524,8 @@ __attribute__((used)) int crev_key(char *pl)
         VLOG("coopreverse: reverse key refused, a slow/stop power runs");
         return 1;
     }
+    if (stock_ready())
+        return 0;   /* (the host's own key: the engine's reverse with the recorder; the frame announces it) */
     request(1, affordable(pl));
     return 1;
 }
@@ -359,6 +570,31 @@ static void frame(float dt)
         return;
     }
     DWORD now = GetTickCount();
+    if (trap_kill) {
+        char res[120];
+        trap_kill = 0;
+        ts_script_run("$player.Kill()", res, sizeof res);
+        RLOG("coopreverse: trapped in a container after the host's rewind: killed -> %s", res);
+    }
+    if (stock && game_mode() == MODE_SERVER) {
+        if (!on && playing() && !timesync_busy()) {   /* the host's own key started the engine's reverse */
+            stock_run = 1;
+            stock_ours = 0;
+            stock_since = now;
+            owner = 0;
+            until = now + 60000;   /* (the engine ends it) */
+            apply(1, 0);
+            broadcast();
+            RLOG("coopreverse: the host's reverse (engine playback, %d snapshots)", *(int *)(REC + REC_FRAMES));
+        } else if (on && stock_run && !playing() && now - stock_since > 300)
+            host_stop("engine playback ended");
+        if (on && stock_run && playing())
+            push_rewind_actors();
+        if (trap_until && (int)(now - trap_until) < 0)
+            trap_check();
+        else
+            trap_until = 0;
+    }
     if (on && strcmp(on_level, LEVEL_NAME) != 0) {   /* a level change while a reverse ran */
         on = yours = 0;
         owner = NONE;
@@ -406,9 +642,11 @@ int coopreverse_console(const char *text, char *out, int size)
         request(0, 0.f);
         return snprintf(out, size, "reverse stop asked"), 1;
     }
-    snprintf(out, size, "coopreverse %s, active %d, on %d, yours %d, owner %d, %.1f s at %.2f energy/s, energy %.2f",
+    snprintf(out, size, "coopreverse %s, active %d, on %d, yours %d, owner %d, %.1f s at %.2f energy/s, energy %.2f;"
+             " stock rewind %d (ready %d, running %d, recorder %p, serializer %p, snapshots %d, flags %x, playback %d)",
              enabled ? "enabled" : "off", active(), on, yours, owner, (double)rev_seconds, (double)rev_cost,
-             PLAYER ? (double)*(float *)(PLAYER + ENERGY) : -1.0);
+             PLAYER ? (double)*(float *)(PLAYER + ENERGY) : -1.0, stock, stock_ready(), stock_run, (void *)REC,
+             (void *)TR_SAVE, REC ? *(int *)(REC + REC_FRAMES) : -1, REC ? *(int *)(REC + REC_FLAGS) : 0, playing());
     return 1;
 }
 
@@ -435,6 +673,27 @@ void coopreverse_install(void)
         return;
     }
     enabled = 1;
+    if (ts_env("TS_COOP_REWIND", v, sizeof v) && v[0] == '1') {
+        /* the recorder code's game-mode reads (mov eax/ecx, [0xfcab34]) -> "single player" on a co-op host */
+        static const DWORD sites_eax[] = {0x583912, 0x583952, 0x58398c, 0x5839d6, 0x584679, 0x5846b0, 0x585b97};
+        static const DWORD sites_ecx[] = {0x583a61, 0x5840b0};
+        static const unsigned char want_eax[5] = {0xa1, 0x34, 0xab, 0xfc, 0x00};
+        static const unsigned char want_ecx[6] = {0x8b, 0x0d, 0x34, 0xab, 0xfc, 0x00};
+        int ok = 0, n = 0;
+        crw_fake_gm[0x3c / 4] = 1;
+        for (int i = 0; i < (int)(sizeof sites_eax / sizeof sites_eax[0]); i++, n++) {
+            unsigned char r[5] = {0xe8};
+            *(DWORD *)(r + 1) = (DWORD)crw_gm_eax - (sites_eax[i] + 5);
+            ok += ts_patch_bytes(sites_eax[i], want_eax, r, 5);
+        }
+        for (int i = 0; i < (int)(sizeof sites_ecx / sizeof sites_ecx[0]); i++, n++) {
+            unsigned char r[6] = {0xe8, 0, 0, 0, 0, 0x90};
+            *(DWORD *)(r + 1) = (DWORD)crw_gm_ecx - (sites_ecx[i] + 5);
+            ok += ts_patch_bytes(sites_ecx[i], want_ecx, r, 6);
+        }
+        stock = ok == n;
+        ts_log("coopreverse: stock rewind on the host %s (%d/%d recorder sites)", stock ? "on (NOT YET RUN)" : "off", ok, n);
+    }
     ts_log("coopreverse: on (NOT YET RUN: %.1f s per reverse, %.2f energy/s, %d puzzle objects in the table)",
            (double)rev_seconds, (double)rev_cost, N_REV);
 }

@@ -356,7 +356,7 @@ What it covers, per reverse puzzle:
 | 11, 15, 18, 20 | container traps `*\|dom_mis_fail`, `start_room_door2` | `OnStopTReverse` + `IsBelong($player)` -> `FailMission` | **left out on purpose** (without a real rewind they would fail the mission for nothing) |
 | 8, 23 | `hide_dom`, `hide_dom_planer1` | show zeppelin parts for a real rewind | left out |
 
-Per-object rewind (design for the "needs rewind" rows): record only the objects a per-level table names (the actors
+Per-object rewind (design for the "needs rewind" rows; now the fallback, see "Real rewind" below): record only the objects a per-level table names (the actors
 above: `Kran_actor`, `Conveyer_actor`, `bridge_puzle_actor`, `Lift_actor`, `Actor_train`, `cage1_actor`,
 `cage2_actor`, the level 2 and 5 propeller/trap objects once identified live), on the host, 10 times a second for
 the last 10 s: animation clip name and time, position and orientation (`dynamic` actors play animations, so the
@@ -370,6 +370,68 @@ covered by it: physics objects and AI (the engine's own recorder does those; ena
 the game-mode test at `0x5846b0` - is the full variant, L, with unknown effects on replicated players). Estimate
 for the per-object rewind: RE of the animation time API 0.5 day, recorder + playback + event guard 1-2 days, live
 tuning per puzzle 1 day: **M (3-4 days)**.
+
+### Real rewind: the engine's own recorder on the host (`coopreverse.c`, `TS_COOP_REWIND=1`, **not yet run**)
+
+Checked first, as asked: the stock recorder can be switched on for the host, so no new recorder was written.
+
+How the single-player reverse works (static, patch 1.2):
+
+| Part | Where | Notes |
+|---|---|---|
+| Objects | `[0x1095f94]` TR serializer (a save-manager subclass, vtable `0xd9cfac`) and `[0xfc8400]` recorder task (7 MB ring), both made by `0x583d50` from a level-system init (`0x4fd5a0`, vtable `0xd8cf9c`) [V]; whether they exist in a network game is [L] (the mod checks both pointers before it uses them) |
+| Recording | every 0.1 s (`0x584960`, period `[0xdc90ec]`) `0x5849c0` serializes the world through the save path with `[0xfcace8]` flag `0x800000`; the serializer's virtuals (`0x583900` save, `0x583940` load, `0x583980`, `0x5839b0`) send each object to the TR ring instead of a save file. Recorded: every class with `isSyncTR` (57 classes set it: `dynamic`, `phys_rb`, doors, buttons, items, `ai_brain`, vehicles, turrets, `domain` ...) [V]. Players are not (`plr_comm` and `player_ghost` have no `isSyncTR`): nobody's body is rewound, as in the campaign |
+| Mode tests | `cmp [gm+0x3c],1` in nine places of the recorder code: `0x583912`, `0x583952`, `0x58398c`, `0x5839d6`, `0x583a61`, `0x5840b0`, `0x584679`, `0x5846b0` (record start), `0x585b97` [V]; in a network game each takes the "do not record" way |
+| Playback | key path `0x40d4d1`: controller mode 2, duration `+0x2b0`, `0x584170(player)` asks for playback (recorder flag 8, at least 5 snapshots); at the next snapshot tick `0x584720` broadcasts `0x3ff` and `0x584bf0` sets `[0xfcace8]` `0x400000` (playback runs) and broadcasts the global state change (message 6, `[0x1095f90]` bit `0x40`); snapshots are loaded back through the serializer's load path (flag `0x1000000`); the end `0x584870` broadcasts `0x400` and restarts recording. World part of a power: start `0x4417f0` (eax = 2, the player), end `0x441a70` (player; mode 2; 0) -> `0x5847f0` |
+| Entities during playback | the entity frame `0x6440ed`: with `0x400000` set, an entity whose `+0x98` bit 6 is clear returns before its network update (`0x6931e0`) [V] - so replicated puzzle objects would not send their positions while they run backwards |
+
+What the mod does on a co-op host with `TS_COOP_REWIND=1` (and `TS_COOP_REVERSE=1`):
+- the nine mode reads go through a thunk that hands the recorder a fake game-mode object with mode 1 while this
+  machine is the server of a co-op session (clients never record);
+- the host's own reverse key runs the engine's reverse unchanged (energy, duration, effect, the scripts' own
+  `OnStartTReverse`/`OnStopTReverse`); a client's request starts the same playback through `0x4417f0` and ends it
+  through `0x441a70` after the client's affordable time (the client pays its energy, as in the quick variant);
+  one power at a time with timesync as before;
+- clients are told (message 81) and fire their own copies of the puzzle table's reverse events (force fields etc.)
+  with the reverse effect: their players are pushed by their own domains;
+- every frame of a playback the host runs the network update of the level's rewind actors itself (`0x6931e0`):
+  `Kran_actor`, `Conveyer_actor` (5), `bridge_puzle_actor` (9), `Lift_actor` (10), `Actor_train`,
+  `Actor_ghost_train` (19), `cage1_actor`, `cage2_actor` (23);
+- container traps: the host's own check is the level's script (as in the campaign: trapped = mission failed = team
+  restart); for 1.5 s after a rewind a client inside a closed trap (`*|dom_mis_fail` with a lock, levels 11, 15, 18,
+  20) dies (message 82) and respawns at the checkpoint.
+
+Coverage with the real rewind (everything that the campaign's recorder covers, on the host):
+
+| Level | Puzzle | Real rewind | Open [G] |
+|---|---|---|---|
+| 2 | bridge zone `tc_domain_bridge` | the recorder rewinds whatever the zone is about | which object; whether needed at all |
+| 5 | crane, conveyor, propellers, traps, shaft collision, force fields | yes (crane/conveyor pushed every frame; force fields and the collision by the scripts' events: host by the engine, clients by the table) | multi-part actors: does the base network update carry the animation pose, or only the root transform (232 classes use the base write `0x645720`, which serializes the entity's motion component `+0x34`) |
+| 9 | bridge `bridge_puzle_actor` | yes (pushed) | as 5 |
+| 10 | lift `Lift_actor` | yes (pushed) | a client standing on the lift while it rewinds |
+| 11, 15, 18, 20 | container traps | doors and containers rewind on the host (doors, buttons `isSyncMP`), client traps handled | the trap domains' lock state is local per machine (domains are not `isSyncMP`): only the host's counts, which is what the mod checks |
+| 14, 16, 17, 19, 21 | force fields, kill zones, wind | yes (scripts' events) | - |
+| 19 | conveyor / train hints | yes (`Actor_train` pushed) | which conveyor object |
+| 23 | rope cages | yes (pushed) | - |
+
+What can go wrong (live test): the TR system may not exist on a server (then `stock_ready` stays false and the
+quick variant runs - logged as "stock rewind ... (n snapshots)"); serializing the whole world every 0.1 s on the host
+costs frame time (the campaign does the same on one PC); loading snapshots back may delete or recreate objects
+(projectiles, corpses, AI killed during the window) without the network create/remove messages -> objects that
+clients no longer see or see twice; AI rewound on the host jump on clients (aisync follows positions); the
+reverse playback's own effects (camera, sound `0x81e300`) play on the host's view also when a client owns the
+reverse. Fallback if the stock recorder misbehaves in a network game: the per-object recorder of the design above
+(only the rewind actors, clip/time + transform, M).
+
+Realistic live-test need (N100 pair; the main PC as client for one round):
+- 1 session: does the host record (`snapshots` count in `!rv state` grows), host's own reverse on level 14 and 5
+  (crane), frame time with recording;
+- 1 session: client-owned reverse on 5, 9, 10, 23 with frames on both machines (does the client see the actor move
+  back during the playback, or only a jump at the end; does the client's player on the lift/bridge survive);
+- 1 session: containers on 15 (host trapped -> team restart; client trapped -> client dies), AI killed during the
+  window (resurrected on the host: seen on the client?), level change right after a reverse;
+- expected fixes after that: 1-2 days (object create/remove after a rewind, per-actor pose if only transforms
+  replicate). Total about 2 days of tests and fixes before reversal can be called done.
 
 ### Seats and vehicles (`campaign.c`, `TS_CAMPAIGN_SEATS`)
 
@@ -463,6 +525,11 @@ Generic tests (run once, on the level named):
 | T-R2 one power | 14 | during a reverse press slow on the host; during a host slow press reverse on the client | `timesync: local slow refused, a co-op reverse runs`; `coopreverse: ... refused (a slow/stop power runs)` |
 | T-R3 energy, early end | 21 | client reverses, presses again after 2 s | client energy down ~0.24 then regenerating; host's energy unchanged; wind back to 25 at once (`Propellers_dom_WIND`) |
 | T-R4 force fields without reverse | 21 | `$Propellers_mortal_Cine.Unlock()` on the host, client stands in the wind domain | the client is pushed as the host is (SetSpeed now runs on clients) |
+| T-W1 host records | 5 | `TS_COOP_REWIND=1` on the host; after 10 s `!rv state` | `stock rewind 1 (ready 1 ... snapshots` growing; no frame-time drop that players feel |
+| T-W2 host's own rewind | 5 | host presses the crane button, then reverse | the crane moves back on the host and on the client (during the playback, not only at the end); `coopreverse: the host's reverse (engine playback ...)`; client `reverse on` |
+| T-W3 client's rewind | 9, 10, 23 | the bridge / lift / cages, then the client presses reverse | host `client's reverse key: reverse for ...`, the host's world plays back, the client sees the actor return; the client's player on the lift is not thrown off |
+| T-W4 traps | 15 | host and client each stand in a container while a reverse ends | host trapped -> team restart; client trapped -> `trapped in s3d_Container_n ... it dies`, respawn at the checkpoint |
+| T-W5 side effects | 14 | kill a soldier, reverse over it; fire during a reverse | the soldier is back on both machines (or the mismatch is logged); no duplicate or missing projectiles on the client; level change after a reverse works |
 | T-S1 zeppelin seats | 8 | host `!ss fire Check_Point_1 OnUnlocked` | host on `tur05`, `rebel_hmg1` gone, client on `tur04` (`campaign: seat ... taken`), both turrets fire; zeppelin moving on both |
 | T-S2 armoured-car ride | 19 | host `!ss fire actor_start_chase OnUnlocked`, wait for the route, then the end | the client stands on the car's roof while it drives and can shoot; set down at `Bronik_Exitpos` at the end |
 | T-L2 late join state | 14 | host waits 60 s after the level start (past `Start_cine`), then the client joins | host `client 1 joined 6x s into the level`; the client can move ~3 s after it runs the level |
@@ -478,7 +545,7 @@ lock outlives the host's.
 | Step | Work | Effort | Unblocks |
 |---|---|---|---|
 | 1 | Live pass of campaign.c (T-C1..T-C8) and the probes T-B, T-R, T-V, T-A, T-L | 1 day | decides G2, G6, G11 |
-| 2 | Time reversal: quick variant written (coopreverse.c, section 3a: 3, 5 partly, 14, 16, 17, 19 partly, 21); per-object rewind for the rest | live test + M | 2?, 5, 9, 10, 19, 23 |
+| 2 | Time reversal: quick variant and the real rewind (stock recorder on the host) written (section 3a); per-object rewind only as fallback | ~2 days of live tests and fixes (T-W1..T-W5) | 2?, 3, 5, 9, 10, 11, 14-21, 23 |
 | 3 | Seats written (zeppelin turrets per player, armoured-car ride, section 3a); quads and a spectator fallback if T-S fails | live test + M | 8, 9, 12, 19, 23 |
 | 4 | G6 forwarding if T-B fails | S-M | many levels |
 | 5 | AI `"player"` -> nearest player (G7): written (section 3a) | live test | 3, 7, 14, 18, 24 |
