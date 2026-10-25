@@ -125,9 +125,13 @@ __attribute__((naked)) static void *spawn_entity(void *xform, const char *name, 
             "ret");
 }
 
-/* The player's weapon spawns (0x4478e0 calls 0x655460 at two places). A second `player` gets no object for most
- * first-person weapon classes (wpn_plr_pistol and on: the spawn returns NULL, and the engine then writes through
- * it at 0x447a5c); for player 2 the network players' class of the same weapon (wpn_mp_*) is tried then. */
+/* The player's own spawns: weapons (0x4478e0 calls 0x655460 at 0x447a2e/0x447a55), hands (0x442868) and body
+ * (0x4074b4/0x4074f9). A second `player` gets no object for the first-person weapons and hands: their classes
+ * are made from a placed template (nameTpl = wpn_plr_pistol, ...) that apparently only one object can use (likely
+ * the check at 0x95dd3a, not traced). The
+ * engine then writes through the NULL (0x447a5c) or skips the rest of the init (+0x478 stays NULL, 0x40b958).
+ * For player 2 the network players' class of the same weapon is used instead (wpn_mp_*: parent wpn_plr_*, the
+ * AI's third-person model as template), and an empty holster for the hands. */
 static int spawning_p2;
 
 __attribute__((used)) void *__cdecl split_weapon_spawn(void *xform, const char *name, const char *cls, int id)
@@ -136,12 +140,18 @@ __attribute__((used)) void *__cdecl split_weapon_spawn(void *xform, const char *
     const char *used = cls;
     char alt[64];
     if (!r && spawning_p2 && cls && strncmp(cls, "wpn_plr_", 8) == 0 && strlen(cls) < sizeof alt - 1) {
-        snprintf(alt, sizeof alt, "wpn_mp_%s", cls + 8);
+        /* (the hands have no network class: an empty weapon object stands in, enough for the init) */
+        snprintf(alt, sizeof alt, strcmp(cls, "wpn_plr_hands") == 0 ? "wpn_plr_holster" : "wpn_mp_%s", cls + 8);
         r = spawn_entity(xform, name, alt, id);
         used = alt;
     }
-    if (splitlog || (spawning_p2 && used != cls))
-        ts_log("split: weapon spawn%s class \"%s\" -> %p", spawning_p2 ? " (player 2)" : "", used ? used : "(null)", r);
+    if (!r && spawning_p2 && cls && strcmp(cls, "player_ghost") == 0 && name) {
+        r = spawn_entity(xform, NULL, cls, id);   /* (the body without its placed template) */
+        ts_log("split: player 2 body from template \"%s\" failed, without a template: %p", name, r);
+    }
+    if (splitlog || spawning_p2)
+        ts_log("split: spawn%s class \"%s\" name \"%s\" -> %p", spawning_p2 ? " (player 2)" : "", used ? used : "(null)",
+               name ? name : "(null)", r);
     return r;
 }
 
@@ -645,10 +655,9 @@ static void split_tick(float dt)
         if (p2 && !p1)
             ts_log("split: player 1 gone, player 2 kept until the engine removes it");
     }
-    /* Spawned only after p2_delay seconds of uninterrupted play. The tick does not run in the main menu and while a
-     * level loads, and player 1 survives level changes (one object from the start of the game), so a gap between
-     * ticks restarts the count: spawned at the first tick of a level, player 2's weapons were not made (the
-     * spawn returned no object and the engine crashed, 0x447a5c). */
+    /* Spawned only after p2_delay seconds of uninterrupted play (not during the level's opening frames). The tick
+     * does not run in the main menu and while a level loads, and player 1 survives level changes (one object from
+     * the start of the game), so a gap between ticks restarts the count. */
     static DWORD last_tick;
     DWORD now = GetTickCount();
     if (!in_play() || cinematic() || now - last_tick > 500)
@@ -702,15 +711,14 @@ void split_install(void)
     int n = patch_slot(R_VTBL, SLOT_FSTART, (void *)hook_fstart, (void **)&real_fstart)
             + patch_slot(R_VTBL, SLOT_FEND, (void *)hook_fend, (void **)&real_fend)
             + ts_patch_bytes(QUAD_CALL, want, rep, 5);
-    int skip = ts_env("TS_SPLIT_SKIP", v, sizeof v) ? atoi(v) : 0;   /* (bisecting: 1 update, 2 dtor, 4 eval, 8 tick) */
     if (stage >= 3)
-        n += (skip & 1 ? 0 : patch_slot(PLAYER_VTBL, SLOT_UPDATE, (void *)hook_update, (void **)&real_update))
-             + (skip & 2 ? 0 : patch_slot(PLAYER_VTBL, SLOT_DTOR, (void *)hook_dtor, (void **)&real_dtor))
-             + (skip & 4 ? 0 : patch_slot(IM_VTBL, SLOT_EVAL, (void *)hook_eval, (void **)&real_eval));
-    if (skip & 8)
-        stage = stage >= 3 ? 2 : stage;
+        n += patch_slot(PLAYER_VTBL, SLOT_UPDATE, (void *)hook_update, (void **)&real_update)
+             + patch_slot(PLAYER_VTBL, SLOT_DTOR, (void *)hook_dtor, (void **)&real_dtor)
+             + patch_slot(IM_VTBL, SLOT_EVAL, (void *)hook_eval, (void **)&real_eval);
     if (stage >= 3)
-        for (DWORD at = 0x447a2e; at; at = at == 0x447a2e ? 0x447a55 : 0) {
+        for (int i = 0; i < 5; i++) {   /* (weapons: 0x447a2e, 0x447a55; hands 0x442868; body: 0x4074b4, 0x4074f9) */
+            static const DWORD sites[5] = {0x447a2e, 0x447a55, 0x442868, 0x4074b4, 0x4074f9};
+            DWORD at = sites[i];
             unsigned char w[5] = {0xe8}, r[5] = {0xe8};
             *(DWORD *)(w + 1) = 0x655460 - (at + 5);
             *(DWORD *)(r + 1) = (DWORD)spawn_trampoline - (at + 5);
