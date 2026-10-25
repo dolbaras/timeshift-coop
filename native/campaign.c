@@ -954,6 +954,11 @@ int campaign_console(const char *text, char *out, int size)
         }
         return snprintf(out, size, "not in a co-op session with the story on (or TS_CAMPAIGN is off)"), 1;
     }
+    if (!strcmp(cmd, "where")) {   /* "!cp where": this machine's player position (lab) */
+        float pos[3] = {0, 0, 0};
+        int ok = ent_pos(PLAYER, pos);
+        return snprintf(out, size, "player %s at %.2f %.2f %.2f", ok ? "" : "(none)", pos[0], pos[1], pos[2]), 1;
+    }
     if (!strcmp(cmd, "putin")) {   /* "!cp putin <domain> [flag]": this machine's player into the middle of a domain (lab) */
         char *dom = find_ent(a1), *pl = PLAYER;
         char *node = pl ? *(char **)(pl + ENT_NODE) : NULL;
