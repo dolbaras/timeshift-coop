@@ -316,7 +316,69 @@ targets among several players.
 
 With `--sync-ai` (`isSyncMP = Yes` in `ai_brain.cls`) the host behaved the same **(observed)**: soldiers
 present and attacking, the same script errors at the same moments as without it, no new errors. What clients
-receive is the next test.
+receive is the next test (section 8a).
+
+## 8a. Co-op on a campaign level: what syncs
+
+What the game's own netcode already carries when a client joins a server that runs a campaign level, measured
+2026-10-25 **(observed)** with the section 8 test build, level `ts2_city_part02`, both instances on one test PC
+(the server, and a second copy that joins it by address with shifted ports). Six sessions: four with
+`isSyncMP = Yes` on `ai_brain.cls` (`--sync-ai`), one with the shipped AI data, plus one first exploratory run.
+Players and AI were moved and turned with the test console (`$player.Transport(<object>)`,
+`$player.DoRotateView(<object>, time)`), positions read from memory, and the rendered frames of both instances
+taken at the same moment.
+
+Where the numbers come from: the local player's position is at `[0x1095b30] + 0xb0` (3 floats); on the
+server, the client slot table `[0xfcab34] + 0x28` (stride `0xa4`, `+4` = the player entity of that slot; slot 0 =
+the server's own player, slot 1 = the first client) gives the remote `player_mp` and its position at `+0xb0`; on
+a client, slot 0 is the server and its `+4` is the host's `player_mp`. An AI's position on each machine was taken
+by moving that machine's player onto it (`Transport("<ai name>")`) and reading the player's position.
+
+### Summary
+
+| Feature | Syncs? | Evidence | What the mod must add |
+|---|---|---|---|
+| Remote player body and position | **Yes, both ways** | Client moved 50 m by `Transport`: its `player_mp` on the server followed within 0.03 m; the same for the host as seen on the client. Frames: each sees the other's white suit standing where expected; the host shows with a red name tag ("Default", its `PlayerName`). | Nothing for movement. A way for scripts to address remote players (below). |
+| Naming / listing remote players in script | **No** | `player_mp` objects have an empty name (`string(p)` = `""`); `foreach p : @player_mp`, `@player_ghost`, `@plr_model` iterate *every* object of the level (these are not script classes, the class filter is ignored); `@player` lists only the local `player`. A domain's `IsBelong()` does see the remote body (listed as `""` plus its `wpn_mp_pistol`). | Native: name the remote players (e.g. `player_mp<slot>`) or a native that returns them, so C3/C10 of `player-audit.md` can be written. |
+| AI movement and animation | **No** (with or without `isSyncMP` on `ai_brain`) | Same position and view direction on both machines: on the server the soldiers fight and fall, on the client the same soldiers stand frozen in their first pose for minutes; positions differ by 3-15 m (e.g. police3: server 196-207, client stays at 191-194). The shipped data and `--sync-ai` gave the same frozen picture. | Find why the AI regular update does not move client proxies (the AI classes have the update code, `netcode.md` section 4); else mirror AI transforms/animations over mod messages. |
+| AI death | **Only with `isSyncMP`**, and it **crashes the client** | With `--sync-ai`, `Die()` on the server made `IsLive()` false on the client too (the figure kept standing); without it the client still said `true`. With `--sync-ai` and no fix the client crashed 1-4 minutes after joining, when AI died on the server: `AccessViolation at 0x8496D7 (read 0)` (2 of 3 unpatched sessions; the first, exploratory one ran 8 minutes without). | Native fix (below), then death animation/ragdoll on the client (the proxy stays standing). AIs that died before the client joined still count as alive there (`slo_*`): the join state must carry deaths. |
+| Client shooting AI | **Yes** (damage reaches the server) | The client fired (input written in memory, ammo 15 -> 4 / 112 -> 96) at a soldier it saw (the frozen proxy); the soldier, alive on the server just before, was dead there right after, with no other shooter left (rebels removed by script, host far away with `SetGOD`). Twice, once with and once without `isSyncMP`. Without it the client did not learn of the death. | Make the client aim at where the AI really is (AI movement sync); show the death on the client. |
+| AI shooting the client | **Not seen** | ~1 minute next to live hostile soldiers (server side 8 m away, host elsewhere): client health stayed full; one earlier session showed the red damage tint once while soldiers fought rebels. AI target natives take names and remote players have none (`SetTarget("player")` = the host, audit D7). | Check AI target selection over `player_mp` (C10 of the audit); probably native. |
+| Pickups / dropped weapons | **Yes** | Weapons dropped by AI killed on the server appeared on the client's ground (`isSyncMP` items). | - |
+| Time powers | **No** (each machine only) | Client `StartTControl("tslow", true)`: the client's flags `[0xfcace0]` = 0x41 and world scale 0.2 with the blue effect on its screen; the server stayed 0x40 / 1.0, no effect. Host `tslow`/`tstop`: server 0x41 / 0.2 and its grey screen; the client stayed 0x40 / 1.0, no effect. Host-side slow-down of AI cannot be seen on the client while AI do not move there. | Mod message: a client asks the host to run the power, the host broadcasts flags/effect to every client (as `netcode.md` section 5 says). |
+| Level triggers (audit D1) | **Local only** | Client alone entered `dom_farm_first_room` (its `OnEnter` creates `ai_house_first_room_2`): the client ran it (the soldier existed on the client), the server did not (`unknown object`), although `IsBelong` on the server saw the client's body inside. Then the host entered: the server created the soldier and the client got a second, unnamed replica next to its own local copy (`object ... already exist, new one added as unnamed`). | C1 (host-only story handlers on clients: client-run `$farm.Create` makes local, non-networked duplicates) and C4 (a client's entry forwarded to the host) of `player-audit.md`, both native. |
+| Level scripts on the client (audit D2) | **Yes, they run** | The client's log shows the same domain handlers and their errors as the server's (`dom_BRIDGE.OnEnter`, `dom_kill_mech_and_street_guys.OnEnter`, ...). | C1. |
+| Mission failure (`$player.FailMission`) | MP death, session stays | On the client: red death screen, kill feed "Client2", score -1, respawn in 3 s; on the host the same for "Default"; both still connected, server mode unchanged. No mission-failed menu. | C6/C7 (team restart) of the audit. |
+| Level exit (audit D5) | not reached | `dom_reload` is locked; unlocking it on the client and moving to the object inside it left the player just outside the domain. | Next test. |
+| Respawn | MP rules | After a death both respawn at the single `start_pos` (+4 m) with the MP pistol. | C6. |
+
+### The client crash with replicated AI
+
+Stack (client): net handler `0x6fba90` -> dispatch `0x946ec4` -> AI message handler `0x83a510` (case `0x439`, NOTIFY)
+-> AI NOTIFY receiver `0x859090` -> state change `[ai+0x290]->vtbl[1](state, 0)` at `0x8590d9` -> death state
+handler `0x8496c0`, whose first statement reads its third argument (hit info), NULL on a client:
+`0x8496cb mov edi,[esp+0x2c]` / `0x8496d7 mov eax,[edi]`.
+
+Experiment (lab only, the running client patched in memory): the 23 bytes at `0x8590d9` rewritten to pass a pointer
+to a zeroed 4 KB block instead of NULL (`8b 89 90 02 00 00 8b 40 08 8b 11 68 <block> 50 ff 52 04 c2 04 00`). With it
+the client survived several AI deaths (by script and by its own shots) for the rest of two sessions (8-9 minutes each). The mod needs the same in its
+DLL (or a NULL check at `0x8496c0`) before AI replication can be switched on. Without `isSyncMP` no crash happened
+(one session with AI deaths).
+
+### Script facts found on the way
+
+- `string(obj)` turns an object into its name (`"" + obj` is a type error).
+- Console snippets cannot declare `var` locals (only class members do); counting has to go through `$ui.SetStr`.
+- `$player.Transport()` to a domain does nothing; to an AI, locator or other placed object it works.
+- `IsAnyoneInside` needs an argument (`IsAnyoneInside(ent : object)`).
+- Script `Terminate()` on a domain removes it on that machine only (used to keep the client from creating local AI).
+
+### Test input for unattended instances
+
+Test windows run with `TS_BACKGROUND=1` and ignore synthetic input even when brought to the front (a SendInput
+click and a key reached the window but the game did not react). Firing worked by writing 1.0 into the raw input
+value of the left mouse button, `[[0xfcabb4] + 0x3c] + 0x10 + 0x100 * 4`, in a loop for the length of a burst
+(the background instance never acquires the mouse, so nothing overwrites it).
 
 ## 9. Mod messages (the mod's own data between the machines)
 

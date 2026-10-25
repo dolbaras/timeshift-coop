@@ -171,6 +171,28 @@ __attribute__((naked)) static void save_check(void)
         ".att_syntax prefix\n");
 }
 
+/* ---- AI deaths on a client ----
+ * With the AI classes replicated (isSyncMP on ai_brain, which the shipped data leaves off) a client sets an AI's
+ * new state from the server's message in 0x859090 through [ai+0x290]->vtbl[1](state, hitInfo) with hitInfo NULL
+ * (0x8590e7 push 0); the death state handler 0x8496c0 reads it (0x8496d7) and the client crashed 1-4 minutes into
+ * a campaign level (2026-10-25, N100, two copies). The call now passes a zeroed block of its own ("no hit info"),
+ * the same bytes rewritten that kept a client alive through many AI deaths in that test. */
+#define AI_STATE_CALL 0x008590d9
+static unsigned char no_hit_info[4096];
+
+static void ai_death_install(void)
+{
+    /* mov ecx,[ecx+0x290]; mov edx,[ecx]; mov eax,[eax+8]; mov edx,[edx+4]; push 0; push eax; call edx; ret 4; nop */
+    static const unsigned char orig[23] = {0x8b, 0x89, 0x90, 0x02, 0x00, 0x00, 0x8b, 0x11, 0x8b, 0x40, 0x08, 0x8b,
+                                           0x52, 0x04, 0x6a, 0x00, 0x50, 0xff, 0xd2, 0xc2, 0x04, 0x00, 0x90};
+    /* mov ecx,[ecx+0x290]; mov eax,[eax+8]; mov edx,[ecx]; push no_hit_info; push eax; call [edx+4]; ret 4 */
+    unsigned char repl[23] = {0x8b, 0x89, 0x90, 0x02, 0x00, 0x00, 0x8b, 0x40, 0x08, 0x8b, 0x11, 0x68, 0, 0, 0, 0,
+                              0x50, 0xff, 0x52, 0x04, 0xc2, 0x04, 0x00};
+    *(DWORD *)(repl + 12) = (DWORD)no_hit_info;
+    if (!ts_patch_bytes(AI_STATE_CALL, orig, repl, sizeof repl))
+        ts_log("net: AI state call not found (other exe)");
+}
+
 static void saves_install(void)
 {
     /* push ecx; mov eax,[0xfcab34]; cmp dword [eax+0x3c],1; je +2 */
@@ -184,6 +206,7 @@ static void saves_install(void)
 void netfix_install(void)
 {
     saves_install();
+    ai_death_install();
     real_sendto = (sendto_t)ts_patch_ws2("sendto", (void *)hook_sendto);
     char v[64];
     if (ts_env("TS_PORT_SHIFT", v, sizeof v) && (port_shift = atoi(v)) != 0)
