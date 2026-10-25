@@ -564,6 +564,26 @@ static int name_match(const char *pat, const char *s)
     return n && pat[n - 1] == '*' ? strncmp(pat, s, n - 1) == 0 : strcmp(pat, s) == 0;
 }
 
+/* (host) a seat for a client that was still loading the level when its seat event ran (live: lost otherwise) */
+static unsigned char seat_later[16][120];
+static int seat_later_len[16];
+static void seat_later_step(void)
+{
+    for (int i = 0; i < 16; i++) {
+        char *s = slot_at(i);
+        if (!seat_later_len[i] || !s)
+            continue;
+        if (*(int *)s == 0 || !slot_joined(s)) {
+            seat_later_len[i] = 0;
+            continue;
+        }
+        if (coopnet_send(i, SUB_SEAT, seat_later[i], seat_later_len[i]) > 0) {
+            CLOG("campaign: seat sent to the client in slot %d now that it runs the level", i);
+            seat_later_len[i] = 0;
+        }
+    }
+}
+
 void campaign_story_event(const char *obj, const char *ev, const char *arg0)
 {
     if (!use_seats || role() != MODE_SERVER || !obj || !ev)
@@ -589,7 +609,10 @@ void campaign_story_event(const char *obj, const char *ev, const char *arg0)
                 b[0] = PROTO;
                 b[1] = (unsigned char)len;
                 memcpy(b + 2, s->seat[k], len);
-                coopnet_send(i, SUB_SEAT, b, 2 + len);
+                if (coopnet_send(i, SUB_SEAT, b, 2 + len) <= 0 && i < 16) {   /* (still loading: when it runs the level) */
+                    memcpy(seat_later[i], b, 2 + len);
+                    seat_later_len[i] = 2 + len;
+                }
                 CLOG("campaign: %s.%s: client in slot %d takes %s (%s -> %s)", obj, ev, i, s->seat[k], ssl, res);
             } else if (s->act == A_RIDE_ON || s->act == A_RIDE_OFF) {
                 int len = (int)strlen(s->vehicle);
@@ -864,6 +887,8 @@ static void frame(float dt)
     }
     if (use_latejoin)
         latejoin_step(now);
+    if (use_seats)
+        seat_later_step();
     if (now - last < 250)
         return;
     last = now;
