@@ -173,6 +173,34 @@ __attribute__((used)) void *__cdecl split_weapon_spawn(void *xform, const char *
  * copy of the template's shared geometry (+0xb8, 0x961f30), but refuses when that geometry is marked in use
  * (+0xbc, checked at 0x95dd3a). While player 2 is made, the mark is lifted for the call. */
 typedef void *(TSCALL *mknode_t)(void *, void *, void *);
+/* Player 2's copies of first-person geometry: the geometry's +0xbc names the node that owns it (player 1's
+ * weapon node, the "in use" value); for view 1 player 2's node is made the owner (frame start to frame end). */
+#define MAX_GEO 32
+static struct { BYTE *geo, *node2; DWORD saved; } geo2[MAX_GEO];
+static int n_geo2, geo_swapped;
+static DWORD geo_upd_saved[MAX_GEO];
+static int geo_upd_on;
+
+/* While player 2's own objects update (inside the swap), its nodes own the shared first-person geometry too:
+ * the weapons pose it then (tests: TS_SPLIT_NOGEO=1 turns all owner swaps off). */
+static int no_geo_owner;
+static void geo_owner_p2(int on)
+{
+    if (no_geo_owner || geo_swapped || on == geo_upd_on)
+        return;
+    for (int i = 0; i < n_geo2; i++) {
+        if (on) {
+            geo_upd_saved[i] = *(DWORD *)(geo2[i].geo + 0xbc);
+            *(DWORD *)(geo2[i].geo + 0xbc) = (DWORD)geo2[i].node2;
+        } else
+            *(DWORD *)(geo2[i].geo + 0xbc) = geo_upd_saved[i];
+    }
+    geo_upd_on = on;
+}
+/* The other player's first-person objects are hidden for a view (node +4 bit 0: the render prep skips the node,
+ * 0x9a1331): both players' weapon nodes share one geometry, and the last one animated in a frame would pose it. */
+static struct { BYTE *node; DWORD saved; } fp_hidden[2 * MAX_OWN];
+static int n_fp_hidden;
 static void *TSCALL hook_mknode(void *world, BYTE *tpl, void *xform)
 {
     BYTE *geo = tpl ? *(BYTE **)(tpl + 0xb8) : NULL;
@@ -180,8 +208,11 @@ static void *TSCALL hook_mknode(void *world, BYTE *tpl, void *xform)
     if (spawning_p2 && geo && mark)
         *(DWORD *)(geo + 0xbc) = 0;
     void *r = ((mknode_t)0x95dcf0)(world, tpl, xform);
-    if (spawning_p2 && geo && mark)
+    if (spawning_p2 && geo && mark) {
         *(DWORD *)(geo + 0xbc) = mark;
+        if (r && n_geo2 < MAX_GEO)
+            geo2[n_geo2].geo = geo, geo2[n_geo2++].node2 = r;
+    }
     if (spawning_p2 || (splitlog && mark))
         ts_log("split: node for template \"%s\" geometry %p in use %08lx -> %p", tpl ? (char *)(tpl + 0x30) : "?",
                (void *)geo, mark, r);
@@ -326,6 +357,19 @@ static void restore_globals(void)
     PLAYER_A = saved_pa;
     PLAYER_B = saved_pb;
     CANVAS_W = saved_canvas;
+    if (splitlog > 1 && n_geo2 > 4) {   /* (tests: the owner of one geometry at each frame end, the first frames) */
+        static int n;
+        if (n++ < 24)
+            ts_log("split: frame end view %d geometry %p owner %08lx (p2 node %p, saved %08lx)", view, (void *)geo2[4].geo,
+                   *(DWORD *)(geo2[4].geo + 0xbc), (void *)geo2[4].node2, geo2[4].saved);
+    }
+    if (geo_swapped)
+        for (int i = 0; i < n_geo2; i++)
+            *(DWORD *)(geo2[i].geo + 0xbc) = geo2[i].saved;
+    for (int i = 0; i < n_fp_hidden; i++)   /* (bit 0 back as it was; the rest as the frame left it) */
+        *(DWORD *)(fp_hidden[i].node + 4) = (*(DWORD *)(fp_hidden[i].node + 4) & ~1u) | (fp_hidden[i].saved & 1u);
+    n_fp_hidden = 0;
+    geo_swapped = 0;
     if (shown_node)
         *(DWORD *)(shown_node + 4) = (*(DWORD *)(shown_node + 4) & ~0x10000u) | (shown_flags & 0x10000u);
     shown_node = NULL;
@@ -362,8 +406,16 @@ static void TSCALL hook_fstart(void *r)
         half_rect(0, w, h, &hr);
         if (stage >= 2 && hr.bottom > hr.top)
             CANVAS_W = CANVAS_H * (float)(hr.right - hr.left) / (float)(hr.bottom - hr.top);
-        if (view == 1 && p2)
+        if (view == 1 && p2) {
             PLAYER_A = PLAYER_B = p2;
+            if (!no_geo_owner) {
+                for (int i = 0; i < n_geo2; i++) {
+                    geo2[i].saved = *(DWORD *)(geo2[i].geo + 0xbc);
+                    *(DWORD *)(geo2[i].geo + 0xbc) = (DWORD)geo2[i].node2;
+                }
+                geo_swapped = 1;
+            }
+        }
         /* The other player's body is drawn in this view. The render prep skips nodes with +4 bit 0x10000 in the
          * main view (view entry flags 0, 0x9a1389): the local player's body has it, and both players are local
          * here. */
@@ -374,6 +426,17 @@ static void TSCALL hook_fstart(void *r)
             if (n) {
                 shown_flags = *(DWORD *)(n + 4);
                 *(DWORD *)(n + 4) &= ~0x10000u;
+            }
+            n_fp_hidden = 0;
+            BYTE **objs = view == 0 ? own2 : own1;
+            int no = view == 0 ? n_own2 : n_own1;
+            for (int i = 0; i < no && n_fp_hidden < 2 * MAX_OWN; i++) {
+                BYTE *fn = objs[i] ? *(BYTE **)(objs[i] + 0x230) : NULL;
+                if (!fn || IsBadReadPtr(fn, 8))
+                    continue;
+                fp_hidden[n_fp_hidden].node = fn;
+                fp_hidden[n_fp_hidden++].saved = *(DWORD *)(fn + 4);
+                *(DWORD *)(fn + 4) |= 1;
             }
         }
     } else
@@ -583,10 +646,13 @@ static void TSCALL hook_eval(void *imv)
  * calls (player 2's update sends messages to its weapons) swap once. */
 static struct { int depth; BYTE *pa, *pb, *cam, *ctx1; int with_ctx; DWORD a1[5], b1[4]; } as2;
 
+static void geo_owner_p2(int on);
+
 static void p2_enter(void)
 {
     if (as2.depth++)
         return;
+    geo_owner_p2(1);
     BYTE *im = IM;
     as2.pa = PLAYER_A, as2.pb = PLAYER_B, as2.cam = CAM;
     as2.ctx1 = im ? *(BYTE **)(im + 0x40) : NULL;
@@ -606,6 +672,7 @@ static void p2_leave(void)
 {
     if (--as2.depth)
         return;
+    geo_owner_p2(0);
     BYTE *im = IM;
     if (as2.with_ctx && im) {
         *(BYTE **)(im + 0x40) = as2.ctx1;
@@ -907,6 +974,7 @@ static void spawn_p2(BYTE *p1)
      * +0x34: player 1's own "player" serves as the template; a name of nothing placed gives no object) */
     spawning_p2 = 1;
     n_own2 = 0;
+    n_geo2 = 0;
     BYTE *e = spawn_entity(NULL, "player", "player", 0);
     spawning_p2 = 0;
     /* its constructor took both player pointers, its init may have used the camera */
@@ -1027,6 +1095,7 @@ void split_install(void)
     if (ts_env("TS_SPLIT_LAYOUT", v, sizeof v) && (v[0] == 'v' || v[0] == 'h'))
         layout_cfg = v[0];
     keep_mt = ts_env("TS_SPLIT_MT", v, sizeof v) && v[0] == '1';
+    no_geo_owner = ts_env("TS_SPLIT_NOGEO", v, sizeof v) && v[0] == '1';   /* (tests: without the owner swap) */
     splitlog = ts_env("TS_SPLITLOG", v, sizeof v) ? atoi(v) : 0;
     msglog = ts_env("TS_SPLIT_MSGLOG", v, sizeof v) && v[0] == '1';
     allow_ff = ts_env("TS_SPLIT_FF", v, sizeof v) && v[0] == '1';   /* (tests: friendly fire on) */
