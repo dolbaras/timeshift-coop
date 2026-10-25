@@ -720,10 +720,12 @@ a level rebuilt under the same name (team restart) clears the class table on bot
 | T6 level exit | whole session changes level; client cannot | host `$ui.LoadLevel("ts2_city_part03.lg")` and `!ss exit` -> both on part03, client still joined; client `$ui.LoadLevel` refused | 083706, 083145 |
 | T7 team restart | level restarts for everybody at the checkpoint | host `FailMission` -> both reload part03 and stand at `Check_Point_2`; on part02 (no restore object) restart from the level start | 083706, 084558, 090615 |
 | Time powers with story on | unchanged | host slow -> client `0x41`; client stop -> host `0x42` | 084558, 090615 |
+| Stock map `multiplayer1` with `TS_STORYSYNC=1`, `TS_TIMESYNC=1` | both modules idle | storysync role 0, no classes, nothing sent; timesync "co-op powers off"; V on the host spends energy on the stock chrono grenade, no world power; client joined and played (its first load of the map spent > 80 s building its shader cache, the next took 9 s) | n100pair-20261025-102207 (101905) |
 
 Not run: the natural exit through a reload domain (`LOAD_LEVEL` caught at `0x8aa0e3`): `$dom_reload1.Unlock()`
-alone did not leave the level and the host's player could not be put inside the exit domain; the `OnEye` report
-(22); plain multiplayer maps with `TS_STORYSYNC=1` (storysync now acts only in co-op sessions).
+alone did not leave the level, and the host's player could not be put inside the exit domain (a reload object
+is not a scene entity: its `+0x230` is not a node; reading it as one crashed a test build); the `OnEye` report
+(22). Both go through code paths shared with the tested ones (the server map change, the occupancy report).
 
 ### Not covered yet
 
