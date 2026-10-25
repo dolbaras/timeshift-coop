@@ -80,7 +80,7 @@ A test build changes six frames so that a game started with one profile key host
 | `AutoTest = "host"` | MainMenu -> MultiPlayer -> `PreCreateGame("Create")` -> CreateGame (Next) -> CommSettings (`SaveValues`) -> ServerModifiers (Create) -> WaitCreate |
 | `AutoTest = "join"` | MainMenu -> MultiPlayer -> AddressInputFrame -> WaitJoin with `AutoTestAddress` |
 | `AutoTestAddress = "192.168.0.10"` | (join) the server address, as typed into "Direct connect" |
-| `AutoTestMap = "<value>"` | (host, optional) value for the CreateGame `ServerLocation` select |
+| `AutoTestMap = "<value>"` | (host, optional) value for the CreateGame `ServerLocation` select; with the co-op test patch also a campaign level and co-op server limits (section 8) |
 
 How it is built:
 
@@ -182,7 +182,92 @@ borderless modes are a job for the mod's display settings (as in the Jericho mod
 | `TS_SHOTDIR=<dir>`, `TS_SHOTS=s1,s2,...` | rendered frames saved by the DLL as `<dir>\shotNNN.bmp` at those seconds, and whenever a file `<dir>\shot.req` appears (window captures of the game return blank or stale pictures) |
 | `TS_CONSOLE=<port>` | the script console: e.g. `$mp_rules_sys.Ready()`, `$mp_rules_sys.Spectate()` (the host then follows the other players' views), `return $ui.GetGameInfo("IsServer")` |
 
-## 8. Open questions
+## 8. Campaign levels on a server
+
+The game's own LAN server runs a campaign level (first step of a campaign co-op that reuses the native
+netcode). Checked on the host only (one PC, 2026-10-25, level `ts2_city_part02`); clients are not tested
+yet.
+
+### How the server picks its level
+
+- `CreateServer("End")` reads the profile key `ServerLocation` (default `multiplayer1.lg`) and loads that
+  level as the server's map; joining clients are told the same file name. The name is not checked against
+  the map list: any level file loads this way.
+- `ServerLocation` is written by the CreateGame frame: `AcceptMap()` looks up the id of the map selected in
+  the `ServerLocation` select in `gs_map_list.cls` and stores that map's name. The select (filled by
+  `LoadMaps()`) only offers the entries of the `multiplayer` list. Writing `ServerLocation` into the profile
+  by hand is therefore not enough when the menu is used: the select overwrites it.
+- So a data patch adds the campaign levels to the `multiplayer` list of `gs_map_list.cls` (a `.cls` member
+  of the `ps` block, patched like the menu frames, data-format.md section 7). Map ids are looked up in one
+  table for all maps (menu, multiplayer, singleplayer), so an added entry must not take a multiplayer map's
+  id: it reuses the id of the level's own `singleplayer` entry (`ts2_city_part01` = 30 ... `ts2_cityfinal_part01`
+  = 53), which points at the same level name.
+- `$ui.LoadLevel(...)` is not a way to change the server's level: it is the single-player path and ends the
+  session (clients see "server shut down").
+
+### Steps and keys
+
+Test build (lab tool `coopexp_mod.py`, packed over `patch.s3darc` like the automation patch): the six
+automation frames of section 4, the 24 campaign levels as entries "Co-op: <level>" in the multiplayer list,
+and the co-op rule defaults below. Profile keys for a host that starts by itself:
+
+```
+AutoTest    = "host"
+AutoTestMap = "ts2_city_part02"
+```
+
+The CreateGame step selects the map, CommSettings saves the server settings and, because `AutoTestMap` is
+set, also writes `ServerMinPlayers = 1`, `ServerTimeLimit = 0`, `ServerFragLimit = 0` into the profile
+(`$ui.SetUserVar`), then the server is created as usual. By hand with the same patch: Multiplayer -> LAN
+server -> map "Co-op: ts2_city_part02" -> settings -> Create (the menu's minimum-players control cannot go
+below 2, see the rules below).
+
+Measured on the 4-core test PC: main menu 24-28 s after the process start, the campaign level started 7-10 s
+later (35-38 s after the start).
+
+### What runs **(observed)**
+
+| Check | Result |
+|---|---|
+| Server mode | `return $ui.GetGameInfo("IsServer")` -> `Yes`, `IsMultiplayer` -> `Yes`; the engine's game mode is "server" (2), level `ts2_city_part02.lg`, the MP-session flag is set |
+| Local player | the campaign class `player` (`$player`), with the MP HUD (score, match clock, radar) and the time-power HUD |
+| Spawn | multiplayer spawn points are level objects whose name starts with `start_pos`; this level has one, so there is one spawn point, at the single-player start (same x/z as in a single-player load; the server placed the player about 4 m higher, on the structure above it). Respawns use the same point |
+| AI | present and active: soldiers attack, the idle host was shot dead twice within four minutes |
+| Mission scripts | run on the server: SAM messages, tutorial hints ("press F to use the chronoshift"), objectives; the level's own behaviour scripts log the same errors at the same moment as in a single-player load of the level (`$rebel_city2_play_start_rebel2_v2_CR.OnBhvEnd`, `Time_to_Fall_v2` missing: a level bug, not a server effect) |
+| Death | multiplayer rules: red screen, "respawn in N s", click to respawn now; no checkpoint menu |
+| Saving | `$saves_mng.CanSave()` returns true on the server, but neither the level's autosave (single player shows "Saving game..." at the start) nor `$saves_mng.AutoSave(1)` from the console wrote a save file |
+
+### Multiplayer rules and how to switch them off
+
+With the shipped settings the host stays in warm-up: "one more player is needed to start" (profile
+`ServerMinPlayers = 2`); with one player allowed, a 2-minute warm-up with "select READY to end the warm-up"
+follows (game options `bWarmUp`, `bReadySystem`, both on by default), then the round runs with the profile's
+time and score limits (at the time limit the server changes the map).
+
+| Rule | Where it comes from | Off for co-op |
+|---|---|---|
+| Minimum players | profile `ServerMinPlayers`, read again at every check | `1` (the CommSettings control has `minVal = 2`, so only the profile or `$ui.SetUserVar("ServerMinPlayers", 1)`) |
+| Time limit, score limit | profile `ServerTimeLimit` (minutes), `ServerFragLimit` | `0` = none (the clock then counts up) |
+| Warm-up, ready system | game options `bWarmUp`, `WarmUpTime`, `bReadySystem`; their defaults are `defVal` in `gs_mp_modifier.cls` (class `Params`, group `UI_MISC_GROUP`) and a game type in its `Modifiers` list can override them | data patch `defVal = "No"`; at run time `$mp_rules_sys.Ready()` ends the warm-up for that player |
+| Friendly fire | game option `bFriendlyFire` (same file, `UI_WEAPON_GROUP`) | data patch `defVal = "No"` (no effect seen yet: needs a second player) |
+
+Profile values changed at run time with `$ui.SetUserVar` take effect at once (the rules read them on every
+check): setting `ServerMinPlayers` to 1 in a waiting server started the warm-up, `Ready()` then started the
+match ("Game started") without reloading the level. With the patched defaults and the profile values above
+the match runs from the moment the level is loaded. `$ui.GetVariable(...)` does not read these values (it
+returned 0 or `multiplayer1`); `$ui.GetUserVar(key)` reads profile keys.
+
+### Open on the host
+
+- About 18 s after the level start (when the start camera hands over to the player) an empty menu opens on
+  the host: the "Ver 1.02" menu background with a single highlighted bar and the mouse cursor, no text.
+  `$ui.CloseMenu()` closes it and the game goes on; `$ui.BackFrame()` shows another empty menu. It does not
+  open on multiplayer maps. Not identified yet (not the in-game menus `InGameMenu`/`InGameMulti`, which show
+  their texts when opened from the console, and not the script autosave).
+- Rebel soldiers of the level (friendly in the campaign) and players on a server: which faction a
+  multiplayer player belongs to was not checked.
+
+## 9. Open questions
 
 - On one test PC with two GPUs (game window on the integrated Intel GPU) the Direct3D device is lost at
   every map load (also a map loaded offline from the console, once already the main menu level) and
