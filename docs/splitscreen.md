@@ -252,6 +252,14 @@ player 1 to move, time-power effects showed in one half only, split screen with 
 | First-person pistol missing in a half | the weapon pass (`0x680730`) takes its vertical angle from WPN_FOV and the horizontal one from the picture's shape (+0x154, the half's): in a side-by-side half the pistol at the lower right fell outside (the rifle was cut). For a split view the weapon pass now keeps the whole screen's horizontal angle with the matching vertical one (at its projection rebuild, the call at `0x680917`): the weapon is drawn smaller, in its usual place. `TS_SPLIT_FPNOSCALE=1` turns it off | `20261025-154504` (no split: the pistol), `20261025-155515` (split, missing), `20261025-160120` `shot105.png` (both pistols) |
 | `ts2_zepride1_part01` | split screen works on the zeppelin (player 1 at the gun turret, player 2 in the cabin, each with its HUD; the ship's status widget in both halves) | `20261025-160329` `shot100-195.png` |
 
+### Round 9 (2026-10-25, main PC; the zeppelin's right half, HUD layout in a half)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Zeppelin right half "two pictures" | not a second render target: the dark column with the green screen is the cabin's own geometry (the same column stands at the right of the picture without split screen, `20261025-161607`, and moves with player 2's view when it turns, `20261025-161201`). The real defect was the HUD: the zeppelin status widget and the hints were laid out for the whole screen and landed at a half's right edge (cut, and looking like a second picture's HUD). | `20261025-161607` (no split), `20261025-161201` `shot102-120.png` |
+| HUD laid out for the half | the HUD's elements are laid out once when the HUD is made (element vtable +0xbc = `0x6ffc30`, each element a share of its parent, the HUD frame takes the canvas). It is now laid out again for the half's canvas when split screen starts drawing (and back for the whole screen when it stops), and the half's canvas is kept between frames. In both halves now: the radar (missing before in side-by-side halves), the zeppelin status widget next to it, the hint ("Новое задание.") whole inside the half | `20261025-162434` `shot100/120/160/180.png`, `20261025-162851` `shot140.png`, `20261025-163139` `shot110.png`, `20261025-163337` `shot110.png` |
+| Player 1's HUD on the zeppelin deck at the start | the same without split screen: the time/weapon panel is not shown there (only the zeppelin status and the radar) | `20261025-161607` `shot095-135.png` |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
@@ -265,8 +273,6 @@ player 1 to move, time-power effects showed in one half only, split screen with 
   and send it to clients as a `player_mp` puppet (as remote players are), with its position from the host's
   player 2. The menu's split screen starts a single-player game, so it never meets a network session.
 - The pick-up message line ("Received: pistol") and other HUD messages are one widget: they show in both halves.
-- HUD texts near a half's right edge are cut there (`ts2_zepride1_part01`: a button hint), and the radar is
-  missing in side-by-side halves (see below).
 - The line of sight of a joining spot is not checked (only the floor level).
 - The pause menu and loading screens are full screen (UI command context); cutscenes with the scene camera are
   full screen. Player 2 has no menu control (only player 1's pad and keyboard drive the menus).
@@ -275,8 +281,8 @@ player 1 to move, time-power effects showed in one half only, split screen with 
   update and the globals cannot simply be held for the render span; the swap would have to be limited to the
   frame start, the HUD update and the frame end (see the research notes), and live camera reads in the render job
   checked.
-- HUD: in the side-by-side layout the radar is missing from both halves (it shows in top and bottom); the
-  narrow canvas may place it off screen. Not looked into.
+- `ts2_city_part01`: in the first split-screen frames after the opening (`20261025-153629` `shot215.png`) neither
+  half has a HUD or a first-person weapon; not checked whether the level keeps them hidden there without split.
 - The player's double-tap state (input manager +0xa4/+0xa5) and the rumble of pad 2 are not handled.
 
 ## Combining with network co-op (notes)

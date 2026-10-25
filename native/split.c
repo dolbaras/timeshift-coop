@@ -320,6 +320,39 @@ static unsigned frame_no;
 static int swapped;
 static BYTE *saved_cam, *saved_pa, *saved_pb;
 static float saved_canvas;
+/* The HUD canvas of the half's shape is kept between frames too while split screen draws: widgets placed by a
+ * share of the canvas (the vehicle health widget at 50 %, hints 85 % wide) are laid out in their updates,
+ * outside the frame; with the whole screen's canvas there they landed at the right edge of a half and were cut.
+ * The whole canvas comes back at the first frame without split screen. */
+static float canvas_full, canvas_half;
+static int canvas_kept;
+/* The HUD's elements are laid out once, when the HUD is made: each keeps its place as a share of its parent, the
+ * HUD frame itself takes the canvas (element vtable +0xbc = 0x6ffc30, parent +0x40, first child +0x44, next
+ * +0x48, rectangle +0x4c..+0x58). Laid out for the whole screen's canvas, everything placed by a share (the
+ * vehicle health at 50 %, the radar and hints at the right) landed outside a half's canvas: cut or missing. The
+ * HUD is laid out again for the half's canvas when split screen starts drawing, and for the whole one when it
+ * stops. The HUD frame is found from a HUD widget (split_hud_update). */
+static BYTE *hud_root;
+static DWORD hud_root_vt;
+
+static void relayout(BYTE *e, int depth)
+{
+    if (!e || depth > 12 || IsBadReadPtr(e, 0x5c))
+        return;
+    ((void (TSCALL *)(void *))(*(void ***)e)[0xbc / 4])(e);
+    for (BYTE *c = *(BYTE **)(e + 0x44); c && !IsBadReadPtr(c, 0x4c); c = *(BYTE **)(c + 0x48))
+        relayout(c, depth + 1);
+}
+
+static void hud_relayout(const char *why)
+{
+    if (!hud_root || IsBadReadPtr(hud_root, 0x5c) || *(DWORD *)hud_root != hud_root_vt) {
+        hud_root = NULL;
+        return;
+    }
+    relayout(hud_root, 0);
+    ts_log("split: HUD laid out again for %s (canvas %.1f wide)", why, CANVAS_W);
+}
 static BYTE *shown_node;        /* the other player's body node, shown for this view */
 static DWORD shown_flags;
 static BYTE *body_of(BYTE *pl);
@@ -487,7 +520,6 @@ static void restore_globals(void)
     CAM = saved_cam;
     PLAYER_A = saved_pa;
     PLAYER_B = saved_pb;
-    CANVAS_W = saved_canvas;
     if (splitlog > 1 && n_geo2 > 4) {   /* (tests: the owner of one geometry at each frame end, the first frames) */
         static int n;
         if (n++ < 24)
@@ -536,8 +568,16 @@ static void TSCALL hook_fstart(void *r)
          * frame, 0x671dcb). */
         RECT hr;
         half_rect(0, w, h, &hr);
-        if (stage >= 2 && hr.bottom > hr.top)
-            CANVAS_W = CANVAS_H * (float)(hr.right - hr.left) / (float)(hr.bottom - hr.top);
+        if (stage >= 2 && hr.bottom > hr.top) {
+            float half = CANVAS_H * (float)(hr.right - hr.left) / (float)(hr.bottom - hr.top);
+            int changed = !canvas_kept || half != canvas_half;
+            if (!canvas_kept || CANVAS_W != canvas_half)   /* (the game's own value, or a new one it set) */
+                canvas_full = CANVAS_W;
+            canvas_kept = 1;
+            CANVAS_W = canvas_half = half;
+            if (changed)
+                hud_relayout("a half");
+        }
         if (view == 1 && p2) {
             PLAYER_A = PLAYER_B = p2;
             if (!no_geo_owner) {
@@ -581,8 +621,15 @@ static void TSCALL hook_fstart(void *r)
                 *(DWORD *)(fn + 4) |= 1;
             }
         }
-    } else
+    } else {
         pic_ok[0] = pic_ok[1] = 0;   /* (back to the whole screen: the old halves are stale) */
+        if (canvas_kept) {
+            if (CANVAS_W == canvas_half)
+                CANVAS_W = canvas_full;
+            canvas_kept = 0;
+            hud_relayout("the whole screen");
+        }
+    }
     if (splitlog && view >= 0 && logged < 60) {
         logged++;
         ts_log("split: frame start view %d thread %lu cam %p pa %p pb %p p2 %p cores %d", view, GetCurrentThreadId(),
@@ -1719,6 +1766,18 @@ static int hudlog, hud_view1 = 1;   /* (frame_no & 1 at a widget update when the
 
 __attribute__((used)) void __cdecl split_hud_update(int i, void *w, float dt)
 {
+    if (!hud_root) {   /* (the HUD frame: the top of a HUD widget's parents) */
+        BYTE *e = w;
+        for (int k = 0; e && k < 12 && *(BYTE **)(e + 0x40); k++)
+            e = *(BYTE **)(e + 0x40);
+        if (e && e != w) {
+            hud_root = e;
+            hud_root_vt = *(DWORD *)e;
+            ts_log("split: HUD frame %p", (void *)e);
+            if (canvas_kept)
+                hud_relayout("a half");
+        }
+    }
     int next = (int)(frame_no & 1);
     if (hudlog && i == 10 && hudlog++ < 6)
         ts_log("split: HUD weapon panel update: frame %u, next view %d, view span %d", frame_no, next, swapped);
@@ -2127,7 +2186,7 @@ static void split_tick(float dt)
     int gap = now - last_tick > 500;   /* (a level load: the tick stopped) */
     static int apart;   /* (the players pulled apart at a level start) */
     if (gap)
-        placed = 0, support_tries = 0, support_check = 0, place_retry = 0, apart = 0;
+        placed = 0, support_tries = 0, support_check = 0, place_retry = 0, apart = 0, hud_root = NULL;
     if (!in_play() || cinematic() || gap)
         p1_since = now;
     last_tick = now;
