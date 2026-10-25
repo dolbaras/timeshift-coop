@@ -1,5 +1,5 @@
 /*
- * Direct3D 9Ex for the game (TS_D3D9EX=1; off until checked on both test PCs).
+ * Direct3D 9Ex for the game (on by default; TS_D3D9EX=0 keeps plain Direct3D 9).
  *
  * Why: a plain Direct3D 9 device is "lost" when another program enters or leaves exclusive full screen
  * (or the display mode changes), and the game never resets it: its present step (0x79bf50) only skips
@@ -17,6 +17,12 @@
  *   is a twin).
  * - managed vertex and index buffers become D3DPOOL_DEFAULT + D3DUSAGE_DYNAMIC (lockable, kept on the GPU).
  * TS_D3DCENSUS=1 logs what the game creates (by kind and pool), also without 9Ex.
+ *
+ * Checked 2026-10-25 on the main PC (Intel UHD 630, windowed): with 9Ex the menus, a campaign level (co-op
+ * host on ts2_city_part02) and its autosave look as before, and the game kept drawing while another program
+ * (lab/fsgrab) held exclusive full screen on the other monitor for 3 s; without it the device was lost and
+ * never came back (runs 20261025-101131, -101516, -101356). The game creates ~940 managed textures and a few
+ * managed buffers by its main menu.
  */
 #include <windows.h>
 #include <d3d9.h>
@@ -659,8 +665,8 @@ void d3dex_install(void)
 {
     char v[8];
     InitializeCriticalSection(&lock);
-    on = ts_env("TS_D3D9EX", v, sizeof v) && v[0] == '1';
+    on = !(ts_env("TS_D3D9EX", v, sizeof v) && v[0] == '0');
     census = (ts_env("TS_D3DCENSUS", v, sizeof v) && v[0] == '1') || on;
     if (on)
-        ts_log("d3dex: on (TS_D3D9EX=1)");
+        ts_log("d3dex: on (TS_D3D9EX=0 turns it off)");
 }
