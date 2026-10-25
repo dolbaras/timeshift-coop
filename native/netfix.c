@@ -503,9 +503,30 @@ static void held_frame(void)
  * and a connection below the minimum is put at it. */
 static int rate_min = 16000, rate_max = 96000;
 
+/* The limit of 500 unacknowledged reliable packets (0x77e4d2) in co-op sessions: a client that loads a level for
+ * 30 s (the main PC with its Intel GPU, over the LAN) sends nothing meanwhile, and a host in a fight sends ~40
+ * packets a second with reliable content (new tracers 0x42a, notifies 0x439, 0x002): the join was dropped after
+ * 24 s, the second join (shorter load) went through (lead's runs 20261025-193624 / N100 20261025-193530, again in
+ * 20261025-195002: unacked +40 a second while the client sent nothing). In co-op sessions the limit is 10000
+ * (a 4-minute load at that rate); stock maps keep 500. TS_NETQUEUE=<n> sets it for every session (lab). */
+static int queue_coop = 10000, queue_fixed, queue_now = 500;
+
+static void queue_set(int lim)
+{
+    if (lim == queue_now)
+        return;
+    int cur = queue_now;
+    if (ts_patch_bytes(0x0077e4d5, &cur, &lim, 4)) {
+        queue_now = lim;
+        ts_log("net: unacknowledged packet limit %d", lim);
+    }
+}
+
 static void rate_frame(void)
 {
     char *pn = PEER_NETWORK_PTR;
+    if (!queue_fixed)
+        queue_set(ts_coop_active() ? queue_coop : 500);
     if (!rate_min || !pn || !ts_coop_active())
         return;
     for (int i = 0; i < 32; i++) {
@@ -588,7 +609,7 @@ static void held_install(void)
     }
     if (!joinhold)
         ts_log("net: TS_JOINHOLD=0: state-machine messages go to loading clients as in the stock game");
-    if (joinhold || netdebug || rate_min) {
+    if (1) {   /* (the frame hook also sets the send rates and the packet limit) */
         static const unsigned char orig[5] = {0xb8, 0x24, 0x20, 0x00, 0x00};
         unsigned char jmp[5] = {0xe9};
         *(DWORD *)(jmp + 1) = (DWORD)hook_send_to_slot - (SEND_TO_SLOT_FN + 5);
@@ -602,9 +623,8 @@ static void held_install(void)
         }
     }
     if (ts_env("TS_NETQUEUE", v, sizeof v) && atoi(v) > 0) {
-        static const unsigned char o4[4] = {0xf4, 0x01, 0x00, 0x00};
-        int lim = atoi(v);
-        ts_log("net: TS_NETQUEUE unacked limit 500 -> %d: %s", lim, ts_patch_bytes(0x0077e4d5, o4, &lim, 4) ? "ok" : "failed");
+        queue_set(atoi(v));
+        queue_fixed = 1;
     }
 }
 

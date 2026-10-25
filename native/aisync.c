@@ -483,13 +483,8 @@ static int show_shot(char *ai, int atk, char **cache)
 static volatile int replaying;
 static DWORD replay_info[0x20];
 
-static void log_pjl_fn(char *o, void *ctx)
-{
-    (void)ctx;
-    DWORD vt = *(DWORD *)o;
-    if (vt == 0xd97ea8 || vt == 0xd9a1c8 || vt == 0xd9a648)
-        ts_log("aisync: projectile %p vt %06lx role %08x net %d", o, vt, *(unsigned *)(o + E_ROLE), *(int *)(o + E_NETID));
-}
+static void pjl_reset(void);
+static void pjl_track(void);
 
 static int show_shot_full(char *ai, AiState *s)
 {
@@ -512,14 +507,11 @@ static int show_shot_full(char *ai, AiState *s)
     replay_info[19] = 0x2002;
     unsigned char rec[12] = {0x14, 0x40, 0x0c, 0x00, s->atk, 1, 0x3f, 0x01};
     *(DWORD **)(rec + 8) = replay_info;
+    pjl_reset();
     replaying = 1;
     ((wshot_t)WPN_SHOT)(w, rec);
     replaying = 0;
-    static int checked;
-    if (fire_debug && checked < 3) {   /* (lab: the projectiles here, their role bits: no authority bit 4 expected) */
-        checked++;
-        for_each_obj(log_pjl_fn, NULL);
-    }
+    pjl_track();
     return 1;
 }
 
@@ -554,6 +546,94 @@ static int gate_install(void)
     return ok == 2;
 }
 
+/* The replayed shot's projectile: a local object without authority does not run its own flight and end, so its
+ * tracer stayed in the air for good and a fight left a sheaf of hundreds of lines (split-net run 20261025-192307,
+ * client shot157). The projectile is caught where the dispatcher 0x7f7ee0 creates it (the call at 0x7f80c3 after
+ * the create 0x655460, eax = the object) and ended (vtbl+0xc0) PJL_LIFE ms later. */
+#define PJL_LIFE 300
+#define PJL_MAX 64
+static char *volatile pjl_new;
+static struct { char *o; DWORD vt, t; } pjls[PJL_MAX];
+static int n_pjls;
+static LONG n_pjl_logged;
+
+__attribute__((naked)) static void pjl_catch(void)
+{
+    __asm__ volatile(
+        ".intel_syntax noprefix\n"
+        "cmp dword ptr [_replaying], 0\n"
+        "je 1f\n"
+        "mov dword ptr [_pjl_new], eax\n"
+        "1:\n"
+        "mov ebx, dword ptr [ebx + 8]\n"   /* (the two instructions the call replaced) */
+        "test ebx, ebx\n"
+        "ret\n"
+        ".att_syntax prefix\n");
+}
+
+static int pjl_catch_install(void)
+{
+    static const unsigned char orig[5] = {0x8b, 0x5b, 0x08, 0x85, 0xdb};
+    unsigned char call[5] = {0xe8};
+    *(DWORD *)(call + 1) = (DWORD)pjl_catch - (0x7f80c3 + 5);
+    return ts_patch_bytes(0x7f80c3, orig, call, 5);
+}
+
+static void pjl_end_fn(char *o, void *ctx)
+{
+    DWORD now = *(DWORD *)ctx;
+    for (int i = 0; i < n_pjls; i++)
+        if (pjls[i].o == o && *(DWORD *)o == pjls[i].vt && now - pjls[i].t >= PJL_LIFE) {
+            ((void (TSCALL *)(void *, float))(*(void ***)o)[0xc0 / 4])(o, 0.0f);
+            pjls[i].o = NULL;
+        }
+}
+
+static int shot_frame_in;
+
+/* (client, every frame) */
+static void pjl_expire(void)
+{
+    if (shot_frame_in && --shot_frame_in == 0)
+        ts_shot_next();
+    if (!n_pjls)
+        return;
+    DWORD now = GetTickCount();
+    int due = 0;
+    for (int i = 0; i < n_pjls; i++)
+        due |= now - pjls[i].t >= PJL_LIFE;
+    if (!due)
+        return;
+    for_each_obj(pjl_end_fn, &now);   /* (only objects that still exist are ended) */
+    int w = 0;
+    for (int i = 0; i < n_pjls; i++)
+        if (pjls[i].o && now - pjls[i].t < PJL_LIFE + 2000)
+            pjls[w++] = pjls[i];
+    n_pjls = w;
+}
+
+static void pjl_reset(void)
+{
+    pjl_new = NULL;
+}
+
+static void pjl_track(void)
+{
+    char *o = pjl_new;
+    pjl_new = NULL;
+    if (!o)
+        return;
+    if (n_pjls < PJL_MAX) {
+        pjls[n_pjls].o = o;
+        pjls[n_pjls].vt = *(DWORD *)o;
+        pjls[n_pjls++].t = GetTickCount();
+    } else
+        ((void (TSCALL *)(void *, float))(*(void ***)o)[0xc0 / 4])(o, 0.0f);   /* (full: no tracer this time) */
+    if (fire_debug && InterlockedIncrement(&n_pjl_logged) <= 5)
+        ts_log("aisync: replayed projectile %p vt %06lx role %08x, ended after %d ms", o, *(unsigned long *)o,
+               *(unsigned *)(o + E_ROLE), PJL_LIFE);
+}
+
 static int fire_full = 1;
 
 static void fire_frame(char *ai)
@@ -569,7 +649,7 @@ static void fire_frame(char *ai)
         ts_log("aisync: shot of %s shown here: %s (server count %d)", ai_name(ai),
                ok == 2 ? "effects, projectile" : ok ? "effects" : "no weapon", s->shots_seen);
         if (ok && fire_debug > 1)
-            ts_shot_next();   /* (TS_FIREDEBUG=2: the frame with the shot) */
+            shot_frame_in = 4;   /* (TS_FIREDEBUG=2: a frame 4 frames after the shot) */
     }
 }
 
@@ -1147,6 +1227,7 @@ static void frame(float dt)
             dead_list_apply();
         for_each_ai(corpse_check);
         for_each_ai(fire_frame);
+        pjl_expire();
         if (ts_coop_active()) {
             dead_ask_tick();
             names_client();
@@ -1355,7 +1436,7 @@ void aisync_install(void)
         fire_full = v[0] == '2' ? 1 : v[0] == '1' ? 0 : -1;
     if (engine_mode && fire_full >= 0 && fire_install() != (int)(sizeof wpn_vtables / sizeof wpn_vtables[0]))
         ts_log("aisync: AI weapons not found (other exe): no AI shots on clients");
-    else if (engine_mode && fire_full > 0 && !gate_install()) {
+    else if (engine_mode && fire_full > 0 && (!gate_install() || !pjl_catch_install())) {
         ts_log("aisync: projectile dispatchers not found (other exe): AI shots on clients without projectiles");
         fire_full = 0;
     }

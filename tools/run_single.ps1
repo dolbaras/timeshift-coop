@@ -8,7 +8,8 @@ param(
     [string] $Adapter = "window",     # "window": the secondary monitor's GPU; "": the game's choice
     [switch] $NoMod,                  # no proxy DLL (the game as installed)
     [string] $Args = "",              # extra command line for TimeShift.exe
-    [string] $Ini = ""                # more profile keys or overrides, "KEY=value;KEY2=value2"
+    [string] $Ini = "",               # more profile keys or overrides, "KEY=value;KEY2=value2"
+    [string] $ProxyDll = ""           # another build of the proxy DLL (default: native\build; not $Dll: names ignore case)
 )
 $ErrorActionPreference = "Stop"
 $mod = Split-Path $PSScriptRoot
@@ -44,7 +45,7 @@ foreach ($k in $set.Keys) {
 
 $dll = Join-Path $bin "dinput8.dll"
 if ($NoMod) { Remove-Item $dll -ErrorAction SilentlyContinue }
-else { Copy-Item (Join-Path $mod "native\build\dinput8.dll") $dll -Force }
+else { Copy-Item $(if ($ProxyDll) { $ProxyDll } else { Join-Path $mod "native\build\dinput8.dll" }) $dll -Force }
 
 $env:TS_LOG = Join-Path $run "ts_coop.log"
 $env:TS_WINPOS = "$($wa.X + $bw / 2),$($wa.Y + $cap + $bw / 2)"

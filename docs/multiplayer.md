@@ -523,6 +523,14 @@ to it looking at a soldier, frames saved right after each shot shown (`TS_FIREDE
 | Whole shot | 40 of 40 shots "effects, projectile"; client frames `shot7811`-`shot7920` show `police3` firing with yellow/red tracers leaving its weapon towards the host, several per frame (the stock look of AI fire); no crash | n100pair-20261025-164556, -164115 |
 | Local projectiles | `wpn_ai_tracer` role `0x40`, net -1 (no authority); the server's replicas role `0x43` with net ids | n100pair-20261025-164556 |
 
+**Tracer lifetime.** A replayed projectile is a local object without authority: it does not run its own flight and
+end, so every replayed tracer stayed in the air; in a long fight the client saw a sheaf of hundreds of lines
+(split-net run `20261025-192307`, client `shot157`). The projectile is now caught where the dispatcher creates it
+(the call after the create at `0x7f80c3`, a stub keeps `eax` while a replay runs) and ended (vtbl `+0xc0`) 300 ms
+later: 1-3 tracers per frame around a firing soldier (`n100pair-20261025-202038`, frames taken 4 frames after each
+shot shown), the stock look. Shots of misses are replayed as the server fired them (the server's count includes
+every shot).
+
 Not checked: the shot sound (test instances are muted); a separate muzzle-flash sprite is not distinguishable in
 the frames (the muzzle is small at that distance), the tracers start at the muzzle.
 
@@ -941,6 +949,15 @@ instead of 8-13 s, unacknowledged packets stayed below 50 (`n100pair-20261025-17
 second. It now sends one empty unreliable mod message (sub 3) every frame in a co-op session (`TS_ACKPUMP=0` off);
 after cause 3 this matters little, it is kept as a cheap margin.
 
+**5. Slow loads over a real network (two PCs).** With 1-4 fixed, a join from the main PC (Intel UHD 630, 30-43 s
+to load part03/part02) into the N100's part03 was still dropped after 24 s (lead's runs `20261025-193624`, N100
+`20261025-193530`; again in `20261025-195002`): that client sends nothing while it loads, and the host in a fight
+sends ~40 packets a second with reliable content (new replicated tracers `0x42a`, notifies `0x439`, `0x002`), so
+the 500-packet limit of cause 1 was reached anyway (+40 a second, TS_NETDEBUG). The held `0x43a` table was not the
+problem (12 943 messages held for ~100 objects). Fix: in co-op sessions the limit is 10000 (patched at `0x77e4d5`
+while a co-op session runs, 500 on stock maps; `TS_NETQUEUE=<n>` lab override). Peak unacknowledged packets in the
+two-PC series below: 548-685 on part03, 205-429 on part02, each back to a few once the client ran the level.
+
 Not the cause (measured before): the server's 5 s silence check in `0x769850` (raised to 30 s, joins still dropped),
 the mod's own messages (already only to clients that run the level), AI replication (`TS_AISYNC=0` dropped too).
 
@@ -951,6 +968,8 @@ the mod's own messages (already only to clients that run the level), AI replicat
 | All four fixed, `TS_NETDEBUG=1`, AI fire on: part03 / part02 | **10 of 10 / 10 of 10** stay, no crash; the client runs the level 0-1 s after its load (before: 8-13 s); peak unacknowledged packets 12-88 (before: 300-526); 40 AI shots shown on the client in each | n100pair-20261025-172957 .. -174531 (part03), -174715 .. -180245 (part02) |
 | Join after a level change (host part02 -> `!ss exit ts2_city_part03`, the client joins part03 22-29 s later) | stays, "joined the host's co-op session" 0.5 s after its load; 8737 held state-machine messages sent as 92 | n100pair-20261025-180455, -181044 |
 | Team restart with a client (T7 client side): part02 -> exit -> part03 -> `AutoSave(2)` -> host `FailMission` | both reload part03 and stay connected; host at -169.62 -11.88 -145.22, client at -168.63 -11.88 -145.09 (= `Check_Point_2`); client frame `shot247` in the station | n100pair-20261025-181337 (frames `shots-20261025-181337`) |
+
+| **Two PCs over the LAN** (host N100, client main PC `work\game_mp`, client 45 s after the host, 30-43 s load), causes 1-5 fixed | **part03 10 of 10, part02 10 of 10** stay, no crash; client runs the level 0-2 s after its load; 40 AI shots shown on the client in each | `work\runs\20261025-202534` .. `-205012` (part03), `-205256` .. `-211736` (part02); host logs in `<run>\host` |
 
 Test tools: `TS_NETDEBUG=1` logs every second each connection's state, rate and limits, unacknowledged packets,
 sequence numbers and the packets received, and the messages sent to loading slots by id; `TS_NETQUEUE=<n>` moves the
