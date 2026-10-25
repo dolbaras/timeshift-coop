@@ -807,7 +807,7 @@ Second round, 2026-10-25 afternoon **(observed)**:
 | T8 natural level exit | the host's player walks into the exit; everybody loads the next level | `$dom_reload.Unlock()` (in the level a rebel's `OnBhvEnd("RUN_TO_EXIT")` unlocks it), `!ss goto dom_reload` put the host's player into the domain (bounds 205.3 -7.3 -16.0 .. 209.6 -5.3 -11.7, a tunnel under the street): 1 s later "level change to ts2_city_part03 requested" from the reload domain's `LOAD_LEVEL`, then the server's map change; host and client on part03, the client still joined (`IsServer` No), both at the level start (frames `shots-20261025-124159`) | n100pair-20261025-124159, 124850 (113324: host only, the client had dropped) |
 | T9 `OnEye` report | a client's look trigger is held back, reported (22), run once by the host | `!ss fire look_door_knock OnEye 1` on the client (its own detection path): the host ran the handler and created `ai_house_third_room_1`; on the client the soldier exists under its name and lives (the verbose story log was off in that run, so the held-back and reported lines are not in it) | n100pair-20261025-124159 |
 | Default on, no `TS_STORYSYNC` anywhere | as with `TS_STORYSYNC=1` | log "TS_STORYSYNC=1 (default for co-op sessions)" on both; roles 2/3; T1 (client entry -> host created `ai_house_first_room_2`, named on the client, alive), T4 (`AutoSave(2)` -> "checkpoint 2"), T5 (client `FailMission`, respawn), time powers (host V: host `0x41`, client `0x4041`; client G: host `0x42`, client `0x4042`), T8 (natural exit, both on part03), T6 (client `$ui.LoadLevel` refused), T7 (host `FailMission` -> "restarted at checkpoint 2") | n100pair-20261025-124850 |
-| T7 again (fix) | both at `Check_Point_2` after the restart | in 124850 both stood at the level start after the restart: the restore ran 3 s after the level start, before the players existed (they spawn ~6 s in on the N100). The restore now waits for the host's player (+2 s) and a client's replays wait for its player (up to 30 s): host at -169.62 -11.88 -145.22 = `Check_Point_2`. The client of that run had dropped while loading (section 9d), so its side is not confirmed yet | n100pair-20261025-125817 |
+| T7 again (fix) | both at `Check_Point_2` after the restart | in 124850 both stood at the level start after the restart: the restore ran 3 s after the level start, before the players existed (they spawn ~6 s in on the N100). The restore now waits for the host's player (+2 s), a client's replays wait for its player (up to 30 s), 4 s after the restore a host's player more than 10 m away is put at the checkpoint, and a lower checkpoint id after a restore is ignored (the restarted level's own `AutoSave(1)` had moved the respawn points back). Host alone: at -169.62 -11.88 -145.22 = `Check_Point_2` (125817, 132139). With a client in the session (part02 -> natural exit -> part03 -> `AutoSave(2)` -> `FailMission`): the client lost the connection while reloading part03 (section 9d) and the host was then at the level start, not at the checkpoint; the client side of T7 is therefore not confirmed | n100pair-20261025-125817, 132139, 134709, 135403 |
 
 ### Not covered yet
 
@@ -854,7 +854,7 @@ direct connection); results at the end of this section.
   |---|---|---|---|
   | `40` | server -> client | `u8 proto (1), u8 flags, u8 difficulty (0-2, 255 none), u8 max players, u8 len, version` | the session's settings and the host's mod version; sent when the client's slot is joined and ready, and as the answer to every `42` |
   | `41` | client -> server | `u8 proto, u8 result (0 same version, 1 other), u8 len, version` | the answer |
-  | `42` | client -> server | `u8 proto, u8 0` | "send me `40`": a client that runs the level and has no session info asks every 3 s (20 times at most) |
+  | `42` | client -> server | `u8 proto, u8 0` | "send me `40`": a client that runs the level and has no session info asks every 3 s (20 times at most); after a level change in the session it asks once more (checked: n100pair-20261025-140028, "client 1 answers" on part03 too) |
 
   The first version repeated `40` every 3 s from the moment the client's slot was joined; such messages went to a
   client that was still loading the level (section 9d).
@@ -880,15 +880,28 @@ the stock message "server closed" (`UI_ERROR_SERVER_CLOSED`, frame `ClientFrame`
 still loading; on the client `event 6 (connection lost), reason: UI_NET_ERR_CLOSED_BY_THE_HOST` at the end of its
 load. No kick (`PEER_NETWORK` `+0x20`) is called.
 
-| Variant (client 20 or 45 s after the host; most runs: the host kills and creates a soldier while the client loads) | Joins | Lost |
+| Variant, `ts2_city_part02` unless named (client 20 or 45 s after the host; most runs: the host kills and creates a soldier while the client loads) | Joins | Lost |
 |---|---|---|
 | Build before this work (`ea109c3`) | 3 | 1 |
 | This work before the fix below | 13 | 4 |
-| Mod messages only to clients whose slot says they run the level (slot flag 1; coopnet.c), clients ask for names/the dead after the session info | 9 | 2 (in both the host had sent nothing to the client: not caused by mod messages) |
+| Mod messages only to clients whose slot says they run the level (slot flag 1; coopnet.c), clients ask for names/the dead after the session info | 8 | 1 (the host had sent nothing to the client then: not caused by mod messages) |
 | The same with `TS_AISYNC=0` | 4 | 0 |
 
+| Join into `ts2_city_part03` (client 20 s after the host, nothing else done) | 9 | **9**: with this work, with `TS_AISYNC=0` (2), with the build before this work (1) |
+
+On part03 every join was dropped, always 5.6-7 s after the host's "client 1 joined" and while the client was still
+loading (its level start came 8 s later, then "connection lost" at once). A client that is already in the session
+when the host changes to part03 (story level exit, team restart) stays: that path is fine. So the drop is the stock
+game's, depends on the level (part03 has many more networked objects than part02), and the mod's AI replication
+only makes it more likely on part02. It is not the server's 5 s silence check in the network update (`0x769850`,
+per peer flag 8 and 16-bit stamp `+0x52`, `cmp ax, 0x1388` at `0x7699b2`): raised to 30 s, part03 joins were still
+dropped at 5.7 s (3 of 3, patch removed again). The close starts in the lower transport (`0x77e500` -> event 4 ->
+`0x77eac0`; the per-connection transfer time-outs of 20/30/60 s are in `0x77ec90`), then `0x76a560` reports
+`event 9`/`event 5` on the host and sends "closed by remote" to the client.
+
 So it is older than this work, the mod's own messages to a loading client made it more frequent, and the rest
-appears together with the mod's AI replication. The engine sends regular updates only to clients whose slot has
+appears together with the mod's AI replication on part02 and always on part03. **Late joining into a running
+level is therefore not usable yet**; joining at the start and staying through level changes is. The engine sends regular updates only to clients whose slot has
 flag 1 (`0x63c1d0`), so the AI updates themselves do not reach a loading client; what else differs during the load
 (entity creation messages of adopted AI, which carry motion components) is the next thing to measure, e.g. by logging
 the sizes of `0x63ea90` sends per peer during a join. The stock game's own limit: `PEER_NETWORK +0x44` (`0x768300`)

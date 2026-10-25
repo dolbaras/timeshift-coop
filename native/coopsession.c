@@ -104,6 +104,8 @@ static int srv_flags, srv_difficulty = 255, srv_maxplayers;
 static char srv_version[VER_MAX + 1];
 static int handled_seq, client_applied, client_left, client_warned, client_asks;
 static DWORD client_asked_at;
+static int client_reask, reask_seq;          /* (after a level change in the session: ask once more, so the new
+                                                level's server records this client's answer) */
 
 /* server: one record per client id */
 static struct { int id, sends, acked, warned; DWORD at; } peers[MAX_PEERS];
@@ -382,7 +384,9 @@ static void server_tick(void)
 static void client_tick(void)
 {
     char out[256], ssl[300];
-    if (!got_session && *(void **)0x1095b30 && client_asks < MAX_ASKS
+    if (client_reask && session_seq != reask_seq)
+        client_reask = 0;   /* (the host answered: handled below like any session message) */
+    if ((!got_session || client_reask) && *(void **)0x1095b30 && client_asks < MAX_ASKS
         && (!client_asks || GetTickCount() - client_asked_at >= ASK_MS)) {   /* (in the level: its player exists) */
         unsigned char b[2] = {PROTO, 0};
         coopnet_send(-1, SUB_ASK, b, 2);
@@ -450,7 +454,11 @@ static void frame(float dt)
         if (role == MODE_SERVER || role == MODE_DEDICATED)
             host_session_start();
         else if (role == MODE_CLIENT && got_session) {
-            /* a level change inside the same session: the host's info stays valid */
+            /* a level change inside the same session: the host's info stays valid; ask once more (the host's
+             * records start again with the level, and its first send went to this client while it loaded) */
+            client_reask = 1;
+            reask_seq = session_seq;
+            client_asks = 0;
             CLOG("coopsession: next level \"%.80s\" in the host's session", LEVEL_NAME);
         } else if (role == MODE_CLIENT)
             CLOG("coopsession: joined a co-op server on \"%.80s\", waiting for its session info", LEVEL_NAME);

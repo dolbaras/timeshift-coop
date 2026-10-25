@@ -62,6 +62,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "ts.h"
 
@@ -158,6 +159,9 @@ static const DWORD event_sites[3] = {0x8f82bf, 0x8f97c6, 0x905462};   /* calls 0
 static int enabled, any_level, fail_restart = 1, verbose;
 /* team restart (host) */
 static int restart_pending, restore_pending, restore_seen_off, restore_cp;
+static int restore_check;                    /* (host) the checkpoint whose restore is checked once more */
+static DWORD restore_check_at;
+static float restore_check_pos[3];
 static DWORD restart_at, restore_at, restore_since;
 static char restore_level[0x104];
 static char pending_ssl[300];                /* (host) SSL for the next script tick */
@@ -1154,6 +1158,10 @@ static void checkpoint(int id)
     float pos[3];
     char cpn[32];
     const char *from = "the host's player";
+    if (id < last_cp) {   /* (a restarted level's own early checkpoint must not undo the restore) */
+        SLOG("storysync: checkpoint %d ignored (the session is at checkpoint %d)", id, last_cp);
+        return;
+    }
     snprintf(cpn, sizeof cpn, "Check_Point_%d", id);
     if (named_pos(cpn, pos))
         from = cpn;
@@ -1259,15 +1267,43 @@ static void restore_step(void)
         snprintf(ssl, sizeof ssl, "$%s.Unlock()", cpn);
         ts_script_run(ssl, res, sizeof res);
         SLOG("storysync: restarted at checkpoint %d (%s -> %s)", restore_cp, ssl, res);
+        restore_check = restore_cp;
+        restore_check_at = GetTickCount() + 4000;
+        memcpy(restore_check_pos, pos, sizeof pos);
     } else
         SLOG("storysync: restarted %s from its start (no restore object for checkpoint %d)", restore_level,
              restore_cp);
+}
+
+/* 4 s after the restore: a host's player that is not near the checkpoint (it spawned at the level start after the
+ * restore script had run, seen with a client in the session) is put there, and the respawn points again. */
+static void restore_verify(void)
+{
+    if (!restore_check || (int)(GetTickCount() - restore_check_at) < 0)
+        return;
+    int cp = restore_check;
+    restore_check = 0;
+    float pos[3];
+    if (!ent_pos(PLAYER, pos))
+        return;
+    float dx = pos[0] - restore_check_pos[0], dz = pos[2] - restore_check_pos[2];
+    if (dx * dx + dz * dz < 100.f)
+        return;
+    char *node = *(char **)(PLAYER + ENT_NODE);
+    float at[3] = {restore_check_pos[0], restore_check_pos[1] + 0.5f, restore_check_pos[2]};
+    float dir[3] = {*(float *)(node + 0x58), *(float *)(node + 0x5c), *(float *)(node + 0x60)};
+    ((void (TSCALL *)(void *, float *, float *, int))(*(void ***)PLAYER)[0x210 / 4])(PLAYER, at, dir, 1);
+    set_spawns(restore_check_pos);
+    SLOG("storysync: the host's player was %.0f m from checkpoint %d after the restore: put there", sqrtf(dx * dx + dz * dz),
+         cp);
 }
 
 /* ---- per level ---- */
 static void level_changed(void)
 {
     table_clear();
+    if (!restore_pending)
+        restore_check = 0;
     n_occ = 0;
     n_eye_done = 0;
     q_head = q_count = 0;
@@ -1306,6 +1342,7 @@ static void frame(float dt)
     }
     if (restore_pending)
         restore_step();
+    restore_verify();
     if (pending_level[0])
         do_change_level();
     if (pending_ssl[0]) {
