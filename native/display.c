@@ -79,15 +79,32 @@ static int profile_value(const char *path, const char *key, char *out, int size)
     return found;
 }
 
+#define FRAME_STYLE (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE)
+static int frame_w, frame_h;   /* window mode: the framed window's outer size */
+
 static LRESULT CALLBACK proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
 {
-    if (msg == WM_WINDOWPOSCHANGING) {   /* the window keeps covering the monitor */
+    if (mode == 1 && msg == WM_WINDOWPOSCHANGING) {   /* the window keeps covering the monitor */
         WINDOWPOS *p = (WINDOWPOS *)lp;
         p->x = monitor.left, p->y = monitor.top;
         p->cx = monitor.right - monitor.left, p->cy = monitor.bottom - monitor.top;
         p->flags &= ~(UINT)(SWP_NOMOVE | SWP_NOSIZE);
+    } else if (mode == 2 && msg == WM_WINDOWPOSCHANGING && frame_w) {   /* (the game sizes it for full screen) */
+        WINDOWPOS *p = (WINDOWPOS *)lp;
+        p->cx = frame_w, p->cy = frame_h;
+        p->flags &= ~(UINT)SWP_NOSIZE;
+    } else if (mode == 2 && msg == WM_STYLECHANGING && wp == (WPARAM)GWL_STYLE) {
+        ((STYLESTRUCT *)lp)->styleNew = FRAME_STYLE;   /* (and takes the frame away) */
     }
     return CallWindowProcA(game_proc, w, msg, wp, lp);
+}
+
+static void subclass(HWND w)
+{
+    if (w && w != window) {
+        window = w;
+        game_proc = (WNDPROC)SetWindowLongA(w, GWL_WNDPROC, (LONG)proc);
+    }
 }
 
 static void framed_window(HWND w, HMONITOR mon, UINT cw, UINT ch)
@@ -95,14 +112,14 @@ static void framed_window(HWND w, HMONITOR mon, UINT cw, UINT ch)
     MONITORINFO mi = {sizeof mi};
     if (!w || !GetMonitorInfoA(mon, &mi))
         return;
-    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE;
-    SetWindowLongA(w, GWL_STYLE, (LONG)style);
     RECT r = {0, 0, (LONG)cw, (LONG)ch};
-    AdjustWindowRectEx(&r, style, FALSE, (DWORD)GetWindowLongA(w, GWL_EXSTYLE));
-    int ow = r.right - r.left, oh = r.bottom - r.top;
+    AdjustWindowRectEx(&r, FRAME_STYLE, FALSE, (DWORD)GetWindowLongA(w, GWL_EXSTYLE));
+    frame_w = r.right - r.left, frame_h = r.bottom - r.top;
+    subclass(w);
+    SetWindowLongA(w, GWL_STYLE, (LONG)FRAME_STYLE);
     RECT wa = mi.rcWork;
-    SetWindowPos(w, HWND_NOTOPMOST, wa.left + ((wa.right - wa.left) - ow) / 2, wa.top + ((wa.bottom - wa.top) - oh) / 2,
-                 ow, oh, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    SetWindowPos(w, HWND_NOTOPMOST, wa.left + ((wa.right - wa.left) - frame_w) / 2,
+                 wa.top + ((wa.bottom - wa.top) - frame_h) / 2, frame_w, frame_h, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 }
 
 static void cover_monitor(HWND w, HMONITOR mon)
@@ -113,10 +130,7 @@ static void cover_monitor(HWND w, HMONITOR mon)
     monitor = mi.rcMonitor;
     SetWindowLongA(w, GWL_STYLE, (LONG)(WS_POPUP | WS_VISIBLE));
     SetWindowLongA(w, GWL_EXSTYLE, GetWindowLongA(w, GWL_EXSTYLE) & ~(WS_EX_TOPMOST | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE));
-    if (w != window) {
-        window = w;
-        game_proc = (WNDPROC)SetWindowLongA(w, GWL_WNDPROC, (LONG)proc);
-    }
+    subclass(w);
     SetWindowPos(w, HWND_TOP, monitor.left, monitor.top, monitor.right - monitor.left, monitor.bottom - monitor.top,
                  SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 }
@@ -158,7 +172,6 @@ static HRESULT WINAPI hook_CreateDevice(IDirect3D9 *d3d, UINT a, D3DDEVTYPE t, H
     if (was_full && mode == 1)
         cover_monitor(w, mon);
     else if (was_full && mode == 2) {
-        window = w;
         framed_window(w, mon, pp->BackBufferWidth, pp->BackBufferHeight);
     }
     HRESULT hr = real_CreateDevice(d3d, a, t, focus, fl, pp, out);
@@ -182,6 +195,29 @@ void display_on_d3d(void *d3dv)
         real_CreateDevice = (CreateDevice_t)p;
 }
 
+/* The game believes it runs full screen and minimises its window when it loses the focus (alt-tab): in the
+ * borderless and window modes the window stays. */
+typedef BOOL (WINAPI *ShowWindow_t)(HWND, int);
+static ShowWindow_t real_ShowWindow;
+
+static int is_game_window(HWND w)
+{
+    char cls[64];
+    return w && GetClassNameA(w, cls, sizeof cls) && strcmp(cls, "TIMESHIFT_WIN_CLASS") == 0;
+}
+
+static BOOL WINAPI hook_ShowWindow(HWND w, int cmd)
+{
+    if ((cmd == SW_MINIMIZE || cmd == SW_SHOWMINIMIZED || cmd == SW_SHOWMINNOACTIVE || cmd == SW_FORCEMINIMIZE) &&
+        is_game_window(w)) {
+        static LONG n;
+        if (InterlockedIncrement(&n) <= 3)
+            ts_log("display: the game's minimise (ShowWindow %d from %p) skipped", cmd, __builtin_return_address(0));
+        return TRUE;
+    }
+    return real_ShowWindow(w, cmd);
+}
+
 void display_install(void)
 {
     char path[MAX_PATH], v[32];
@@ -195,6 +231,8 @@ void display_install(void)
     }
     if (mode != 1 && mode != 2)
         mode = 0;
+    if (mode)
+        real_ShowWindow = (ShowWindow_t)ts_patch_iat("USER32.dll", "ShowWindow", (void *)hook_ShowWindow);
     if (mode)
         ts_log("display: screen mode %d (%s, COOP_DisplayMode)", mode, mode == 1 ? "borderless" : "window");
 }
