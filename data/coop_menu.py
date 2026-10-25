@@ -123,6 +123,15 @@ def sp_levels(text):
     return out
 
 
+def fill(text, values):
+    """Each placeholder must stand exactly once in the text."""
+    for k, v in values.items():
+        if text.count(k) != 1:
+            raise ValueError("placeholder %s found %d times (must be 1)" % (k, text.count(k)))
+        text = text.replace(k, v)
+    return text
+
+
 def build(ctx):
     v = ctx.version
     levels = sp_levels(ctx.text("CacheBlock/ps/gs_map_list.cls"))
@@ -139,10 +148,10 @@ def build(ctx):
         lines.append('      AddLine(win, "GAME_%s", "%s", "%s")' % (lvl, lvl, small))
         ids.append('      if level == "%s"\n         return "%s"\n      end' % (lvl, lid))
 
-    host = ctx.data_file("ui/coophost.ui")
-    host = host.replace("%LEVEL_LINES%", "\n".join(lines)).replace("%MAPID_LINES%", "\n".join(ids))
+    # (a placeholder named in a comment once got the 24 level lines too, and the broken frame never opened)
+    host = fill(ctx.data_file("ui/coophost.ui"), {"%LEVEL_LINES%": "\n".join(lines), "%MAPID_LINES%": "\n".join(ids)})
     ctx.add("CacheBlock/ps/coophost.ui", host)
-    ctx.add("CacheBlock/ps/coopmenu.ui", ctx.data_file("ui/coopmenu.ui").replace("%VERSION%", v))
+    ctx.add("CacheBlock/ps/coopmenu.ui", fill(ctx.data_file("ui/coopmenu.ui"), {"%VERSION%": v}))
 
     restore = RESTORE_FUNCS.replace("%RESTORE%", "\n".join(
         '         CoopRestoreKey("%s")' % k for k in KEPT_KEYS))

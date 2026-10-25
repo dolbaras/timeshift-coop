@@ -1,5 +1,5 @@
 // Co-op mod: host a co-op game (written for the mod; level list as in the game's Replay Level frame,
-// settings as in its server settings). %LEVEL_LINES% and %MAPID_LINES% are filled in by build_pak.py
+// settings as in its server settings). The level lines and map ids below are filled in by build_pak.py
 // from the singleplayer entries of the player's gs_map_list.cls (campaign order).
 name           = CoopHost
 style          = styMenu

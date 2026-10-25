@@ -1,5 +1,5 @@
 // Co-op mod: the Co-op entry of the main menu (written for the mod; same look as the Multiplayer frame).
-// %VERSION% is filled in by build_pak.py.
+// The version text is filled in by build_pak.py.
 name           = CoopMenu
 style          = styMenu
 type           = PreCreateGame
