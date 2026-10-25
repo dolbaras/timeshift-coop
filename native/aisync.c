@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "ts.h"
 
@@ -125,6 +126,15 @@ typedef struct {
     int corpse;        /* client: its death was shown */
     int noanim;        /* client: dead on the server: no more animation from the server */
     int srv_dead;      /* client: the server says it is dead */
+    int shots, shots_sent;          /* server: weapon shots of this soldier, the count sent last */
+    int shots_seen, seen_init;      /* client: the server's count read last */
+    int pending;                    /* client: shots still to show */
+    DWORD last_shot;                /* client: tick of the last shot shown */
+    unsigned char atk;              /* the attack of the last shot (0 primary, 1 secondary) */
+    char *wpn;                      /* client: the soldier's weapon found last */
+    int have_shot;                  /* the last shot's geometry is known: */
+    float sh_org[3];                /*   server: its origin (absolute); client: relative to the body */
+    float sh_dir[3], sh_dist;       /*   its direction and the distance to its target */
 } AiState;
 #define NO_ANIM 0x7fffffff
 static AiState states[MAX_AI];
@@ -161,6 +171,8 @@ static AiState *state_of(char *ai)
 #define ANIM_EXTRA 8
 #define AI_DEAD 0x20000
 static const unsigned char anim_mark[2] = {0xa5, 0x5a};
+static const unsigned char anim_mark_shot[2] = {0xa5, 0x5b};   /* (the last shot's geometry before the 8 bytes) */
+#define SHOT_EXTRA 14
 #define MSG_LEN 5                            /* update message: +5 u8 motion bytes, +8 motion bytes pointer */
 #define MSG_BITS 8
 #define MSG_ANIM 0xc                         /* the AI's three bytes */
@@ -186,14 +198,50 @@ static void TSCALL hook_write(void *ai, int peer, int *msg, int flags)
     short body = (short)anim_id(node), bhv = (short)behaviour_anim(ai);
     memcpy(b, &body, 2);
     memcpy(b + 2, &bhv, 2);
-    b[4] = m[MSG_ANIM + 2];
-    b[5] = (*(unsigned *)((char *)ai + AI_FLAGS) & AI_DEAD) ? 1 : 0;
-    memcpy(b + 6, anim_mark, 2);
-    m[MSG_LEN] += ANIM_EXTRA;
     AiState *s = state_of(ai);
+    int shot = s && s->have_shot && s->shots != s->shots_sent && m[MSG_LEN] + ANIM_EXTRA + SHOT_EXTRA <= 255;
+    if (shot) {   /* the last shot's geometry before the tail: s16 origin - body (cm) x3, s16 direction x3, u16 dm */
+        float *np = (float *)(node + 0x68);
+        short v[7];
+        for (int i = 0; i < 3; i++) {
+            float d = (s->sh_org[i] - np[i]) * 100.f;
+            v[i] = (short)(d > 32000.f ? 32000.f : d < -32000.f ? -32000.f : d);
+            v[3 + i] = (short)(s->sh_dir[i] * 32000.f);
+        }
+        float dm = s->sh_dist * 10.f;
+        v[6] = (short)(unsigned short)(dm > 65000.f ? 65000.f : dm < 0.f ? 0.f : dm);
+        memcpy(b, v, SHOT_EXTRA);
+        b += SHOT_EXTRA;
+        memcpy(b, &body, 2);
+        memcpy(b + 2, &bhv, 2);
+    }
+    b[4] = m[MSG_ANIM + 2];
+    /* state byte: bit 0 dead on the server, bit 1 attack of the last shot, bits 2-7 its weapon shots (mod 64) */
+    b[5] = (unsigned char)(((*(unsigned *)((char *)ai + AI_FLAGS) & AI_DEAD) ? 1 : 0)
+                           | (s ? ((s->atk & 1) << 1) | ((s->shots & 63) << 2) : 0));
+    memcpy(b + 6, shot ? anim_mark_shot : anim_mark, 2);
+    m[MSG_LEN] += ANIM_EXTRA + (shot ? SHOT_EXTRA : 0);
     if (s) {
         s->anim = body;
         s->writes++;
+        s->shots_sent = s->shots;
+    }
+}
+
+/* Client: the server's shot count of a soldier (state byte of its update); new shots are shown by fire_frame. */
+static void shots_read(AiState *s, unsigned char state)
+{
+    int n = state >> 2;
+    if (!s->seen_init) {
+        s->seen_init = 1;   /* (the first update after the join: only the baseline) */
+        s->shots_seen = n;
+        return;
+    }
+    int d = (n - s->shots_seen) & 63;
+    s->shots_seen = n;
+    if (d > 0 && d < 32) {
+        s->pending = s->pending + d > 6 ? 6 : s->pending + d;
+        s->atk = (state >> 1) & 1;
     }
 }
 
@@ -205,12 +253,30 @@ static void TSCALL hook_read(void *ai, char *msg, int flags)
         s->reads++;
     if (s && (s->corpse || s->noanim))
         return;   /* (a corpse: the server's "no animation" would stand it up again) */
+    if (b && m[MSG_LEN] >= ANIM_EXTRA + SHOT_EXTRA && memcmp(b + m[MSG_LEN] - 2, anim_mark_shot, 2) == 0) {
+        unsigned char *sd = b + m[MSG_LEN] - ANIM_EXTRA - SHOT_EXTRA;
+        if (s) {
+            short v[7];
+            memcpy(v, sd, SHOT_EXTRA);
+            for (int i = 0; i < 3; i++) {
+                s->sh_org[i] = v[i] / 100.f;
+                s->sh_dir[i] = v[3 + i] / 32000.f;
+            }
+            s->sh_dist = (unsigned short)v[6] / 10.f;
+            s->have_shot = 1;
+        }
+        memmove(sd, sd + SHOT_EXTRA, ANIM_EXTRA);   /* (then as an update without the shot) */
+        m[MSG_LEN] -= SHOT_EXTRA;
+        memcpy(b + m[MSG_LEN] - 2, anim_mark, 2);
+    }
     if (!b || m[MSG_LEN] < ANIM_EXTRA || memcmp(b + m[MSG_LEN] - 2, anim_mark, 2) != 0) {
         m[MSG_ANIM] = (unsigned char)-1;   /* (no animation data: "none" rather than the buffer's leftovers) */
         m[MSG_ANIM + 1] = (unsigned char)-1;
         ((read_t)AI_READ)(ai, msg, flags);
         return;
     }
+    if (s && !(b[m[MSG_LEN] - 3] & 1))
+        shots_read(s, b[m[MSG_LEN] - 3]);
     if (b[m[MSG_LEN] - 3] & 1) {   /* dead on the server: shown here in the next frame (corpse_check) */
         if (s) {
             s->noanim = 1;
@@ -265,8 +331,256 @@ static void watch_anim(char *ai)
     if ((*role & 0x44) != 0x44 || !node)
         return;
     AiState *s = state_of(ai);
-    if (s && anim_id(node) != s->anim)
+    if (s && (anim_id(node) != s->anim || s->shots != s->shots_sent))
         *role |= 8;
+}
+
+/* ---- AI weapon fire on clients ----
+ * A soldier's shot runs only on the server: its strike logic (authority) sends 0x4e4 with a strike record to the
+ * weapon, whose handler (weapon vtbl+0x200 = 0x82cf90: thiscall (weapon, record), ret 4) calls 0x827c60: the
+ * attack's fire (the projectile: tracer, flash and sound of the shot; the dispatchers refuse on a client), the
+ * ammunition (not for a proxy on a client) and the weapon's shot effects (0x7fa420: the ejected shells, "ai_shells").
+ * The server counts each soldier's shots in that handler and keeps the last shot's origin, direction and target
+ * distance (shot info at record +8); the count rides in the AI update's state byte and the geometry in 14 more bytes
+ * (a soldier whose count changed is sent in the next update). A client that sees the count grow runs the weapon's
+ * handler on its copy of the soldier's weapon with the same kind of record, one shot per ~70 ms (show_shot_full).
+ * TS_AIFIRE=1 shows the shells only, TS_AIFIRE=0 nothing. TS_FIREDEBUG=1/2 (lab): log, 2 also frames. */
+static const DWORD wpn_vtables[] = {0xd92e78, 0xd93158, 0xd93438, 0xd939f8, 0xd93d28, 0xdbefa0};
+#define WPN_SHOT 0x82cf90
+#define WPN_SLOT 0x200
+typedef void (TSCALL *wshot_t)(void *w, unsigned char *rec);
+static int fire_debug;
+static LONG n_shot_logged, n_replay_logged;
+
+static int is_ai_weapon(char *w)
+{
+    if (!w || IsBadReadPtr(w, 0x280))
+        return 0;
+    for (unsigned i = 0; i < sizeof wpn_vtables / sizeof wpn_vtables[0]; i++)
+        if (*(DWORD *)w == wpn_vtables[i])
+            return 1;
+    return 0;
+}
+
+/* The weapon's owner as 0x82cf90 finds it (interface at +0x274, vtbl+0xc). */
+static char *weapon_owner(char *w)
+{
+    char *vb = *(char **)(w + 0x274);
+    char *obj = w + 0x274 + *(int *)(vb + 4);
+    return ((char *(TSCALL *)(void *))(*(void ***)obj)[3])(obj);
+}
+
+/* The effect host of an attack of a weapon (0x827c60: the attack must have flag 1 at +0x10; edi = the clip entry
+ * [set + atk * 0x14 + 0xc], its effects at +0x10, count +0x14), or NULL when the weapon shows nothing for it. */
+static char *shot_clip(char *w, int atk)
+{
+    char *set = w + 0x278;
+    char *p = *(char **)(set + 0xc);
+    char **attacks = p && !IsBadReadPtr(p, 4) ? *(char ***)p : NULL;
+    char *attack = attacks && !IsBadReadPtr(attacks + atk, 4) ? attacks[atk] : NULL;
+    if (!attack || IsBadReadPtr(attack, 0x14) || !(*(unsigned char *)(attack + 0x10) & 1) || !*(char **)set)
+        return NULL;
+    char *clip = *(char **)(*(char **)set + atk * 0x14 + 0xc);
+    return clip && !IsBadReadPtr(clip, 0x18) && *(int *)(clip + 0x14) > 0 ? clip : NULL;
+}
+
+typedef struct { char *ai, *found; int atk, owned; } FindWpn;
+static void find_wpn_fn(char *o, void *ctx)
+{
+    FindWpn *f = ctx;
+    if (f->found || !is_ai_weapon(o) || weapon_owner(o) != f->ai)
+        return;
+    f->owned++;
+    if (shot_clip(o, f->atk))
+        f->found = o;
+}
+static void for_each_obj(void (*fn)(char *o, void *ctx), void *ctx);
+/* The soldier's weapon that shows shots: among the AI weapon objects whose owner (as the engine finds it) is the
+ * soldier (soldiers carry two), the first with shot effects for the attack. The soldier's own fields did not hold
+ * it at one fixed place, so the objects are searched; the result is kept while it still belongs to the soldier. */
+static char *ai_weapon(char *ai, char **cache, int atk)
+{
+    if (*cache && is_ai_weapon(*cache) && weapon_owner(*cache) == ai)
+        return *cache;
+    FindWpn f = {ai, NULL, atk, 0};
+    for_each_obj(find_wpn_fn, &f);
+    if (fire_debug && InterlockedIncrement(&n_shot_logged) <= 40)
+    {
+        char *c = f.found ? shot_clip(f.found, atk) : NULL, list[200] = "";
+        for (int i = 0; c && i < *(int *)(c + 0x14) && i < 8; i++) {
+            void *e = (*(void ***)(c + 0x10))[i];
+            snprintf(list + strlen(list), sizeof list - strlen(list), " %p", e ? *(void **)e : NULL);
+        }
+        ts_log("aisync: %s: %d weapon(s), %s%s", ai_name(ai), f.owned, f.found ? "one with shot effects, vtables" :
+               "none with shot effects", list);
+    }
+    return *cache = f.found;
+}
+
+static void TSCALL hook_wpn_shot(void *w, unsigned char *rec)
+{
+    ((wshot_t)WPN_SHOT)(w, rec);
+    char *gm = GAME_MODE_OBJ;
+    if (!engine_mode || !gm || *(int *)(gm + 0x3c) == 3 || *(int *)(gm + 0x3c) < 2 || !rec)
+        return;
+    char *owner = weapon_owner(w);
+    if (!is_ai(owner))
+        return;
+    AiState *s = state_of(owner);
+    if (!s)
+        return;
+    s->shots++;
+    s->atk = rec[4];
+    float *si = *(float **)(rec + 8);   /* shot info: +8 weapon, +0xc shooter, +0x18 origin, +0x24 direction, +0x3c target */
+    if (si && !IsBadReadPtr(si, 0x48)) {
+        float d2 = 0;
+        for (int i = 0; i < 3; i++) {
+            s->sh_org[i] = si[6 + i];
+            s->sh_dir[i] = si[9 + i];
+            d2 += (si[15 + i] - si[6 + i]) * (si[15 + i] - si[6 + i]);
+        }
+        s->sh_dist = sqrtf(d2);
+        s->have_shot = 1;
+    }
+    if (fire_debug > 1 && s->shots < 30)
+        ts_shot_next();   /* (lab: the host's frame of a shot, to compare) */
+    if (fire_debug && s->shots <= 2) {   /* (lab: the shot info the attack gets, next to the soldier's position) */
+        float *si = *(float **)(rec + 8);
+        char *node = *(char **)(owner + E_NODE);
+        float *np = node ? (float *)(node + 0x68) : NULL;
+        if (si && !IsBadReadPtr(si, 0x60))
+            ts_log("aisync: shot info of %s (at %.2f %.2f %.2f): %08x %08x %p %p | %.3f %.3f %.3f | %.3f %.3f %.3f | "
+                   "%.3f %.3f %.3f | %.3f %.3f %.3f | %08x %08x %08x %08x", ai_name(owner), np ? np[0] : 0.f,
+                   np ? np[1] : 0.f, np ? np[2] : 0.f, ((unsigned *)si)[0], ((unsigned *)si)[1], ((void **)si)[2],
+                   ((void **)si)[3], si[4], si[5], si[6], si[7], si[8], si[9], si[10], si[11], si[12], si[13], si[14],
+                   si[15], ((unsigned *)si)[16], ((unsigned *)si)[17], ((unsigned *)si)[18], ((unsigned *)si)[19]);
+    }
+    if (fire_debug && InterlockedIncrement(&n_shot_logged) <= 12)
+        ts_log("aisync: shot by %s: weapon %p (shot effects: %s) record %02x %02x %02x %02x %02x %02x %02x "
+               "%02x (+8 %p) count %d", ai_name(owner), w, shot_clip(w, rec[4] & 1) ? "effects" : "none", rec[0], rec[1], rec[2], rec[3],
+               rec[4], rec[5], rec[6], rec[7], *(void **)(rec + 8), s->shots);
+}
+
+/* Client: the shot effects of the soldier's weapon, as the server's 0x827c60 runs them after the attack's fire. */
+static int show_shot(char *ai, int atk, char **cache)
+{
+    char *w = ai_weapon(ai, cache, atk), *clip = w ? shot_clip(w, atk) : NULL, *owner = w ? weapon_owner(w) : NULL;
+    if (!clip || !owner)
+        return 0;
+    unsigned fn = 0x7fa420;
+    __asm__ volatile("pushl $1\n\tpushl %[owner]\n\tcall *%[fn]"
+                     : "+D"(clip)
+                     : [owner] "r"(owner), [fn] "r"(fn)
+                     : "eax", "ecx", "edx", "memory", "cc");
+    return 1;
+}
+
+/* The whole shot on a client: the weapon's own 0x4e4 handler with a strike record and shot info like the server's
+ * (origin, direction and target from the server's last shot, relative to the body here). Its attack creates the
+ * shot's projectile (muzzle flash, tracer, sound: the shells alone are the weapon's shot effects); the projectile
+ * dispatchers refuse in game mode 3 and are let through for this call only (dispatch_gate). The projectile is a
+ * local object of the client (no authority), the server's shot does the damage. */
+static volatile int replaying;
+static DWORD replay_info[0x20];
+
+static void log_pjl_fn(char *o, void *ctx)
+{
+    (void)ctx;
+    DWORD vt = *(DWORD *)o;
+    if (vt == 0xd97ea8 || vt == 0xd9a1c8 || vt == 0xd9a648)
+        ts_log("aisync: projectile %p vt %06lx role %08x net %d", o, vt, *(unsigned *)(o + E_ROLE), *(int *)(o + E_NETID));
+}
+
+static int show_shot_full(char *ai, AiState *s)
+{
+    char *w = ai_weapon(ai, &s->wpn, s->atk);
+    char *node = *(char **)(ai + E_NODE);
+    if (!w || !node || !s->have_shot)
+        return 0;
+    float *np = (float *)(node + 0x68), *f = (float *)replay_info;
+    memset(replay_info, 0, sizeof replay_info);
+    replay_info[0] = 0x0054400d;   /* (the values the server's shot info has in these fields) */
+    replay_info[1] = 2;
+    ((char **)replay_info)[2] = w;
+    ((char **)replay_info)[3] = ai;
+    f[4] = 1.0f;
+    for (int i = 0; i < 3; i++) {
+        f[6 + i] = np[i] + s->sh_org[i];
+        f[9 + i] = s->sh_dir[i];
+        f[15 + i] = f[6 + i] + s->sh_dir[i] * s->sh_dist;
+    }
+    replay_info[19] = 0x2002;
+    unsigned char rec[12] = {0x14, 0x40, 0x0c, 0x00, s->atk, 1, 0x3f, 0x01};
+    *(DWORD **)(rec + 8) = replay_info;
+    replaying = 1;
+    ((wshot_t)WPN_SHOT)(w, rec);
+    replaying = 0;
+    static int checked;
+    if (fire_debug && checked < 3) {   /* (lab: the projectiles here, their role bits: no authority bit 4 expected) */
+        checked++;
+        for_each_obj(log_pjl_fn, NULL);
+    }
+    return 1;
+}
+
+/* The two projectile dispatchers' mode test (mov eax,[eax+0x3c]; cmp eax,3) as a call: mode 3 reads as 1 while a
+ * client replays a shot. */
+__attribute__((naked)) static void dispatch_gate(void)
+{
+    __asm__ volatile(
+        ".intel_syntax noprefix\n"
+        "mov eax, dword ptr [eax + 0x3c]\n"
+        "cmp dword ptr [_replaying], 0\n"
+        "je 1f\n"
+        "cmp eax, 3\n"
+        "jne 1f\n"
+        "mov eax, 1\n"
+        "1:\n"
+        "cmp eax, 3\n"
+        "ret\n"
+        ".att_syntax prefix\n");
+}
+
+static int gate_install(void)
+{
+    static const unsigned char orig[6] = {0x8b, 0x40, 0x3c, 0x83, 0xf8, 0x03};
+    unsigned char call[6] = {0xe8, 0, 0, 0, 0, 0x90};
+    int ok = 0;
+    DWORD at[2] = {0x7f7f25, 0x7f838e};
+    for (int i = 0; i < 2; i++) {
+        *(DWORD *)(call + 1) = (DWORD)dispatch_gate - (at[i] + 5);
+        ok += ts_patch_bytes(at[i], orig, call, 6);
+    }
+    return ok == 2;
+}
+
+static int fire_full = 1;
+
+static void fire_frame(char *ai)
+{
+    AiState *s = state_of(ai);
+    DWORD t = GetTickCount();
+    if (fire_full < 0 || !s || !s->pending || s->corpse || s->noanim || t - s->last_shot < 70)
+        return;
+    s->pending--;
+    s->last_shot = t;
+    int ok = fire_full > 0 && show_shot_full(ai, s) ? 2 : show_shot(ai, s->atk, &s->wpn);
+    if (fire_debug && InterlockedIncrement(&n_replay_logged) <= 40) {
+        ts_log("aisync: shot of %s shown here: %s (server count %d)", ai_name(ai),
+               ok == 2 ? "effects, projectile" : ok ? "effects" : "no weapon", s->shots_seen);
+        if (ok && fire_debug > 1)
+            ts_shot_next();   /* (TS_FIREDEBUG=2: the frame with the shot) */
+    }
+}
+
+static int fire_install(void)
+{
+    int ok = 0;
+    for (unsigned i = 0; i < sizeof wpn_vtables / sizeof wpn_vtables[0]; i++) {
+        void *o = (void *)WPN_SHOT, *h = (void *)hook_wpn_shot;
+        ok += ts_patch_bytes(wpn_vtables[i] + WPN_SLOT, &o, &h, 4);
+    }
+    return ok;
 }
 
 /* ---- diagnostics ---- */
@@ -832,6 +1146,7 @@ static void frame(float dt)
         if (n_dead_told)
             dead_list_apply();
         for_each_ai(corpse_check);
+        for_each_ai(fire_frame);
         if (ts_coop_active()) {
             dead_ask_tick();
             names_client();
@@ -888,6 +1203,16 @@ static void con_list_fn(char *ai)
 
 /* Test console (TS_CONSOLE): "!ai list <part of a name>|*", "!ai kill <ai>" (the death state, as the server's
  * message sets it), "!ai show <ai> [push]" (show its death here), "!ai named" (client: objects named so far). */
+static void con_wpn_fn(char *o, void *ctx)
+{
+    (void)ctx;
+    if (!is_ai_weapon(o) || con_n > con_size - 120)
+        return;
+    char *ow = weapon_owner(o);
+    con_n += snprintf(con_out + con_n, con_size - con_n, " %p vt %06lx owner %p %s;", o, *(unsigned long *)o, ow,
+                      is_ai(ow) ? ai_name(ow) : "(not AI)");
+}
+
 int aisync_console(const char *text, char *out, int size)
 {
     if (strncmp(text, "!ai", 3) != 0)
@@ -903,6 +1228,13 @@ int aisync_console(const char *text, char *out, int size)
         out[0] = 0;
         int n = for_each_ai(con_list_fn);
         snprintf(out + con_n, size - con_n, "%d AI", n);
+        return 1;
+    }
+    if (!strcmp(cmd, "weapons")) {   /* every AI weapon object: pointer, vtable, owner */
+        con_out = out;
+        con_size = size;
+        con_n = snprintf(out, size, "AI weapons:");
+        for_each_obj(con_wpn_fn, NULL);
         return 1;
     }
     if (!strcmp(cmd, "mem")) {   /* "!ai mem <object> <hex offset> [dwords]": a named object's memory (lab) */
@@ -952,16 +1284,20 @@ int aisync_console(const char *text, char *out, int size)
             k += snprintf(out + k, size - k, " [%d] %p vt %p (+10 %p +18 %p +50 %p)", i, e, vt, vt ? vt[4] : NULL,
                           vt ? vt[6] : NULL, vt ? vt[0x14] : NULL);
         }
+    } else if (!strcmp(cmd, "fire")) {   /* show one shot of the soldier's weapon here (effects only) */
+        char *w = NULL;
+        int ok = show_shot(ai, 0, &w);
+        snprintf(out, size, "shot effects %s (weapon %p vt %p)", ok ? "run" : "not run", w, w ? *(void **)w : NULL);
     } else if (!strcmp(cmd, "show")) {
         show_death(ai, push, 1);
         snprintf(out, size, "death shown: animation %d -> %d", before, node ? anim_id(node) : -9);
     } else
         snprintf(out, size, "!ai list <filter|*> | kill <ai> | show <ai> [push] | named | mem <obj> <off> [n] |"
-                            " wpn <ai> | strikes <ai>");
+                            " wpn <ai> | strikes <ai> | fire <ai>");
     return 1;
 }
 
-/* ---- lab: who calls the projectile dispatch (TS_FIREDEBUG=1) ----
+/* ---- lab: who calls the projectile dispatch (TS_FIREDEBUG=3) ----
  * The projectile dispatchers (0x7f7ee0, in the vtables 0xd943d0 +0x1c, 0xd95658 +0x270, 0xdbd038 +0x58) create the
  * shot's projectile and return at once in game mode 3: a client never creates one. Logs the code addresses found
  * on the stack for the first shots, to find the weapon's own shot function (effects). */
@@ -997,7 +1333,7 @@ void aisync_install(void)
 {
     {
         char fv[8];
-        if (ts_env("TS_FIREDEBUG", fv, sizeof fv) && fv[0] == '1')
+        if (ts_env("TS_FIREDEBUG", fv, sizeof fv) && fv[0] == '3')   /* (lab: the dispatch stacks of the first shots) */
             firedebug_install();
     }
     char v[16];
@@ -1013,6 +1349,16 @@ void aisync_install(void)
         return;
     }
     ts_frame_add(frame);
+    if (ts_env("TS_FIREDEBUG", v, sizeof v) && v[0] >= '1' && v[0] <= '2')
+        fire_debug = v[0] - '0';
+    if (ts_env("TS_AIFIRE", v, sizeof v))   /* (0 none, 1 shells only, 2 the whole shot: default) */
+        fire_full = v[0] == '2' ? 1 : v[0] == '1' ? 0 : -1;
+    if (engine_mode && fire_full >= 0 && fire_install() != (int)(sizeof wpn_vtables / sizeof wpn_vtables[0]))
+        ts_log("aisync: AI weapons not found (other exe): no AI shots on clients");
+    else if (engine_mode && fire_full > 0 && !gate_install()) {
+        ts_log("aisync: projectile dispatchers not found (other exe): AI shots on clients without projectiles");
+        fire_full = 0;
+    }
     if (engine_mode && !coopnet_listen(SUB_NAME_ASK, SUB_LAST, on_message))
         ts_log("aisync: no mod messages (names of new objects, the dead for late joiners)");
     ts_log("aisync: %s%s", engine_mode ? "AI replication on" : "AI diagnostics only",

@@ -666,10 +666,22 @@ done:
     IDirect3DSurface9_Release(bb);
 }
 
+/* (lab) the next presented frame as <dir>\shot<seconds><kk>.bmp: aisync's TS_FIREDEBUG asks for it right after it showed
+ * an AI shot, so the frame has the muzzle flash */
+static volatile LONG shot_asked;
+void ts_shot_next(void)
+{
+    if (shot_dir[0])
+        InterlockedExchange(&shot_asked, 1);
+}
+
 static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const RECT *dst, HWND w, const RGNDATA *dirty)
 {
     static LONG fails;
     static unsigned frame;
+    static int asked_n;
+    if (shot_asked && InterlockedExchange(&shot_asked, 0))
+        save_frame(dev, (int)((GetTickCount() - shot_t0) / 1000) * 100 + ++asked_n % 100);
     if (shot_next < shot_count && GetTickCount() - shot_t0 >= (DWORD)shot_secs[shot_next] * 1000)
         save_frame(dev, shot_secs[shot_next++]);
     if (shot_dir[0] && ++frame % 30 == 0) {   /* on request: a file shot.req in the folder (deleted when taken) */
