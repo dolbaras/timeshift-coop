@@ -3,7 +3,7 @@
  *
  * Placed next to bin\TimeShift.exe, it forwards DirectInput8Create to the system DLL and installs
  * the mod's hooks: start-up fixes for today's PCs (compat.c), test-mode window handling
- * (testmode.c) and a crash log. The exe on disk is never modified.
+ * (testmode.c), gamepad support (gamepad.c) and a crash log. The exe on disk is never modified.
  *
  *   TS_LOG=<file>     the mod's log (default: ts_coop.log next to the exe)
  */
@@ -310,6 +310,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         testmode_install();
         console_install();
         netfix_install();
+        gamepad_install();
         char v[16];
         if (ts_env("TS_WATCHDOG", v, sizeof v) && (watchdog_secs = (DWORD)atoi(v)) > 0) {
             DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &main_thread,

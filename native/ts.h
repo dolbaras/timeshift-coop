@@ -24,6 +24,10 @@ const char *ts_script_run(const char *text, char *out, int size);
 /* netfix.c: the game's own multiplayer on today's networks */
 void netfix_install(void);
 
+/* gamepad.c: XInput pad through the engine's own joystick codes and command bindings */
+void gamepad_install(void);
+int gamepad_slot(int player);   /* XInput pad index of local player 0/1, -1 = none */
+
 /* testmode.c: window, render adapter and focus handling for test instances */
 void testmode_install(void);
 void testmode_wrap_dinput(void *dinput);
