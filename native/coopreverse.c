@@ -462,13 +462,14 @@ static void host_stop(const char *why)
 {
     if (!on)
         return;
+    int was_stock = stock_run;
     if (stock_run && stock_ours && playing())
         rev_end(PLAYER, MODE_REVERSE, 0);   /* (ends the engine's playback) */
-    if (stock_run) {
+    apply(0, 0);   /* (with stock_run still set: the engine fires the host's OnStopTReverse itself) */
+    if (was_stock) {
         trap_until = GetTickCount() + 1500;
         stock_run = stock_ours = 0;
     }
-    apply(0, 0);
     owner = NONE;
     broadcast();
     RLOG("coopreverse: reverse ended (%s)", why);
@@ -535,7 +536,9 @@ int coopreverse_key(void)
 {
     if (!active() || !PLAYER)
         return -1;
-    return crev_key(PLAYER) ? 0 : 1;
+    int r = crev_key(PLAYER) ? 0 : 1;
+    VLOG("coopreverse: reverse start of the local player: %s", r ? "the engine's reverse" : "handled here");
+    return r;
 }
 
 extern void crev_thunk(void) __asm__("crev_thunk");
