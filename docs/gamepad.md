@@ -118,3 +118,11 @@ Not yet checked: the stop came from outside, before the in-game part. Still to d
   and whether `InvertMouse` applies to it), firing, a time power, rumble.
 - The controls screen: how the pad names look in its second column, and what happens to a pad binding when a
   key is assigned there.
+
+## Live test (2026-10-25, virtual Xbox 360 pad, main PC)
+
+In a level (`ts2_city_part02`): left stick forward gave `MOVE_FORWARD` and the player walked; right stick
+gave `ROTATE_RIGHT` and the view turned; RT gave `ATTACK_1`; d-pad left and up started slow motion and time
+stop (effect and energy use visible in the frames). In the menus the pad's presses reach the menu context as
+`DOWN`, `UP`, `ENTER`, `ESC`, but the highlight does not move and A does not open a page: the menu frames
+take their input another way (to be found).
