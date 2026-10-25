@@ -157,6 +157,8 @@ typedef struct {
     int consulted;                           /* storysync asked for this domain's verdict in this level */
     DWORD wait_since;                        /* (ALL) the host inside, somebody missing, since */
     DWORD killed_at[16];                     /* (KILL) per slot: last kill sent (0 = the host's player) */
+    unsigned char in_dom[16];                /* (KILL) per slot: inside since the last kill (a dead body stays inside;
+                                                killing it again restarted its respawn wait, seen live) */
 } Active;
 static Active act[ACT_MAX];
 static int n_act;
@@ -873,16 +875,20 @@ static void frame(float dt)
             continue;
         int locked = *(int *)(dom + DOM_LOCKS) > 0;
         if (a->r->rule == R_KILL && use_kill && !locked) {
-            if (inside(dom, PLAYER) && now - a->killed_at[0] > 8000) {
+            int hin = inside(dom, PLAYER);
+            if (hin && !a->in_dom[0] && now - a->killed_at[0] > 8000) {
                 a->killed_at[0] = now;
                 kill_local("inside a death domain");
             }
+            a->in_dom[0] = (unsigned char)hin;
             for (int i = 0; i < 16; i++) {
                 char *s = slot_at(i);
                 if (!s)
                     break;
                 char *ent = *(char **)(s + 4);
-                if (*(int *)s == 0 || !slot_joined(s) || !inside(dom, ent) || now - a->killed_at[i] <= 8000)
+                int in = *(int *)s != 0 && slot_joined(s) && inside(dom, ent), was = a->in_dom[i];
+                a->in_dom[i] = (unsigned char)in;
+                if (!in || was || now - a->killed_at[i] <= 8000)
                     continue;
                 a->killed_at[i] = now;
                 unsigned char b = PROTO;

@@ -436,6 +436,30 @@ __asm__(".text\n"
         "  movl 0xfcace8, %eax\n"        /* the 5 bytes the call replaced */
         "  ret\n");
 
+/* The reverse key is offered only while the recorder holds at least the controller's minimum (0x43edd0: frames x
+ * 0.1 s >= controller +0x48). A client never records (and a host without the stock rewind neither): the check reads
+ * a fake frame count there, so the key reaches the request path. Returns the recorder pointer for `mov edx, [0xfc8400]`
+ * (the fake one as "address of the count - 0x700ad0"). */
+static int crw_fake_frames = 100000;
+__attribute__((used)) char *crw_avail(void) __asm__("crw_avail");
+__attribute__((used)) char *crw_avail(void)
+{
+    if (enabled && active() && (game_mode() == MODE_CLIENT || !stock_ready()))
+        return (char *)&crw_fake_frames - REC_FRAMES;
+    return REC;
+}
+extern void crw_avail_thunk(void) __asm__("crw_avail_thunk");
+__asm__(".text\n"
+        ".globl crw_avail_thunk\n"
+        "crw_avail_thunk:\n"
+        "  pushl %eax\n"
+        "  pushl %ecx\n"
+        "  call crw_avail\n"
+        "  movl %eax, %edx\n"
+        "  popl %ecx\n"
+        "  popl %eax\n"
+        "  ret\n");
+
 /* ---- server ---- */
 static void send_state(int i)
 {
@@ -706,6 +730,13 @@ void coopreverse_install(void)
         return;
     }
     enabled = 1;
+    {   /* 0x43edda: mov edx, [0xfc8400] (6 bytes) -> call crw_avail_thunk; nop */
+        static const unsigned char want_av[6] = {0x8b, 0x15, 0x00, 0x84, 0xfc, 0x00};
+        unsigned char r[6] = {0xe8, 0, 0, 0, 0, 0x90};
+        *(DWORD *)(r + 1) = (DWORD)crw_avail_thunk - (0x43edda + 5);
+        if (!ts_patch_bytes(0x43edda, want_av, r, 6))
+            ts_log("coopreverse: reverse availability check not found: the key stays off where nothing is recorded");
+    }
     if (ts_env("TS_COOP_REWIND", v, sizeof v) && v[0] == '1') {
         /* the recorder code's game-mode reads (mov eax/ecx, [0xfcab34]) -> "single player" on a co-op host */
         static const DWORD sites_eax[] = {0x583912, 0x583952, 0x58398c, 0x5839d6, 0x584679, 0x5846b0, 0x585b97};
