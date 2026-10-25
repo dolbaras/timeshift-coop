@@ -140,6 +140,7 @@ __attribute__((naked)) static void *spawn_entity(void *xform, const char *name, 
 static int spawning_p2;
 #define MAX_OWN 64
 static BYTE *own2[MAX_OWN], *own1[MAX_OWN];
+static char own_cls[2][MAX_OWN][24];   /* (their classes, for the logs) */
 static int n_own2, n_own1;
 
 __attribute__((used)) void *__cdecl split_weapon_spawn(void *xform, const char *name, const char *cls, int id)
@@ -158,9 +159,9 @@ __attribute__((used)) void *__cdecl split_weapon_spawn(void *xform, const char *
         ts_log("split: player 2 body from template \"%s\" failed, without a template: %p", name, r);
     }
     if (r && spawning_p2 && used && strncmp(used, "wpn_plr_", 8) == 0 && n_own2 < MAX_OWN)
-        own2[n_own2++] = r;
+        snprintf(own_cls[1][n_own2], 24, "%s", used), own2[n_own2++] = r;
     else if (r && !spawning_p2 && used && strncmp(used, "wpn_plr_", 8) == 0 && n_own1 < MAX_OWN)
-        own1[n_own1++] = r;   /* (player 1's: made once, at the start of the game) */
+        snprintf(own_cls[0][n_own1], 24, "%s", used), own1[n_own1++] = r;   /* (player 1's: made once, at the start of the game) */
     if (splitlog || spawning_p2)
         ts_log("split: spawn%s class \"%s\" name \"%s\" -> %p", spawning_p2 ? " (player 2)" : "", used ? used : "(null)",
                name ? name : "(null)", r);
@@ -326,7 +327,7 @@ static void restore_globals(void)
     PLAYER_B = saved_pb;
     CANVAS_W = saved_canvas;
     if (shown_node)
-        *(DWORD *)(shown_node + 4) = (*(DWORD *)(shown_node + 4) & ~0x800u) | (shown_flags & 0x800u);
+        *(DWORD *)(shown_node + 4) = (*(DWORD *)(shown_node + 4) & ~0x10000u) | (shown_flags & 0x10000u);
     shown_node = NULL;
     swapped = 0;
 }
@@ -363,15 +364,16 @@ static void TSCALL hook_fstart(void *r)
             CANVAS_W = CANVAS_H * (float)(hr.right - hr.left) / (float)(hr.bottom - hr.top);
         if (view == 1 && p2)
             PLAYER_A = PLAYER_B = p2;
-        /* The other player's body is drawn in this view: the engine hides a local player's own body (scene node +4
-         * bit 0x800, set on "player_3d" by the player's init, 0x4075f3), and both players are local here. */
+        /* The other player's body is drawn in this view. The render prep skips nodes with +4 bit 0x10000 in the
+         * main view (view entry flags 0, 0x9a1389): the local player's body has it, and both players are local
+         * here. */
         if (p2) {
             BYTE *other = view == 0 ? p2 : saved_pb;
             BYTE *b = body_of(other), *n = b ? *(BYTE **)(b + 0x230) : NULL;
             shown_node = n;
             if (n) {
                 shown_flags = *(DWORD *)(n + 4);
-                *(DWORD *)(n + 4) &= ~0x800u;
+                *(DWORD *)(n + 4) &= ~0x10000u;
             }
         }
     } else
@@ -649,7 +651,7 @@ static void TSCALL hook_update(void *pl)
 typedef int (__stdcall *dispatch_t)(BYTE *, int, int, int);
 static dispatch_t dispatch_tramp;
 
-static int msglog, p1_depth;
+static int msglog, p1_depth, allow_ff;
 static BYTE *(TSCALL *find_task)(void *, int) = (void *)0x947c10;   /* scheduler: object by id */
 
 static BYTE *p1_of(void)
@@ -689,7 +691,7 @@ static int __stdcall hook_dispatch(BYTE *task, int msg, int a, int b)
      * weapons on player 1, or by player 1's on player 2, goes nowhere. */
     if (msg == 0x4e3 && p2 && a && (task == p2 || task == p1_of()) && !IsBadReadPtr((void *)a, 12)) {
         BYTE *by = find_task((void *)0xecb7f8, ((int *)a)[2]);
-        if ((task == p2 && is_p1_object(by)) || (task != p2 && is_p2_object(by))) {
+        if (!allow_ff && ((task == p2 && is_p1_object(by)) || (task != p2 && is_p2_object(by)))) {
             static int n;
             if (n++ < 8)
                 ts_log("split: friendly hit on player %d by %p dropped", task == p2 ? 2 : 1, (void *)by);
@@ -699,7 +701,20 @@ static int __stdcall hook_dispatch(BYTE *task, int msg, int a, int b)
     if (!is_p2_object(task)) {
         int mine = p2 && is_p1_object(task);
         p1_depth += mine;
+        static BYTE before[0x620];
+        int watch = msglog && msg == 0x4e3 && p2 && task == p1_of();   /* (tests: what a hit changes in player 1) */
+        if (watch)
+            memcpy(before, task, sizeof before);
         int r = dispatch_tramp(task, msg, a, b);
+        if (watch) {
+            static int n;
+            for (int off = 0; off < 0x620 && n < 300; off += 4)
+                if (*(DWORD *)(before + off) != *(DWORD *)(task + off)) {
+                    n++;
+                    ts_log("split: hit changed p1+%#x %08lx -> %08lx (%.3f -> %.3f)", off, *(DWORD *)(before + off),
+                           *(DWORD *)(task + off), *(float *)(before + off), *(float *)(task + off));
+                }
+        }
         p1_depth -= mine;
         return r;
     }
@@ -782,6 +797,20 @@ static void *TSCALL hook_dtor(void *pl, int flags)
     PLAYER_B = pb == pl ? NULL : pb;
     ts_log("split: player 2 destroyed");
     return r;
+}
+
+/* A scene node's visibility bit of this frame (world +0x50 bitmask, nodes 0x238 bytes from world +0x2ad0;
+ * the render prep 0x67f9b0 draws and animates only nodes with it). -1: not a world node. */
+static int node_visible(BYTE *n)
+{
+    BYTE *w = *(BYTE **)0xfcacdc;
+    if (!w || !n)
+        return -1;
+    BYTE *base = *(BYTE **)(w + 0x2ad0);
+    if (n < base || (n - base) % 0x238 || (n - base) / 0x238 >= 0xa8c)
+        return -1;
+    int i = (int)((n - base) / 0x238);
+    return (((DWORD *)(w + 0x50))[i >> 5] >> (i & 31)) & 1;
 }
 
 /* The player's third-person body (player_ghost "player_3d"): player +0x47c holds a handle to it. */
@@ -923,24 +952,25 @@ static void split_tick(float dt)
             for (int i = 0; i < 2; i++) {
                 BYTE *pl = i ? p2 : (PLAYER_B != p2 ? PLAYER_B : NULL), *b = body_of(pl);
                 BYTE *n = b ? *(BYTE **)(b + 0x230) : NULL, *pn = pl ? *(BYTE **)(pl + 0x230) : NULL;
-                if (pl && splitlog > 1) {   /* (TS_SPLITLOG=2: the weapons too: player +0x328 weapon set, +4 items, +8 count) */
-                    BYTE **w = *(BYTE ***)(pl + 0x328 + 4);
-                    int nw = *(int *)(pl + 0x328 + 8);
-                    for (int k = 0; w && !IsBadReadPtr(w, 4 * 12) && k < nw && k < 12; k++) {
-                        if (!w[k] || IsBadReadPtr(w[k], 0x234))
-                            continue;
-                        BYTE *wn = *(BYTE **)(w[k] + 0x230);
-                        if (wn && IsBadReadPtr(wn, 12))
-                            wn = NULL;
-                            ts_log("split:     p%d wpn %d %p vt %08lx +2c %08lx +228 %08lx node +4 %08lx +8 %08lx", i + 1, k,
-                                   (void *)w[k], *(DWORD *)w[k], *(DWORD *)(w[k] + 0x2c), *(DWORD *)(w[k] + 0x228),
-                                   wn ? *(DWORD *)(wn + 4) : 0, wn ? *(DWORD *)(wn + 8) : 0);
+                if (pl && splitlog > 1)   /* (TS_SPLITLOG=2: the players' own objects' scene nodes too) */
+                    for (int k = 0; k < (i ? n_own2 : n_own1); k++) {
+                        BYTE *o = i ? own2[k] : own1[k], *on = o ? *(BYTE **)(o + 0x230) : NULL;
+                        if (on && IsBadReadPtr(on, 12))
+                            on = NULL;
+                        if (on && !(*(DWORD *)(on + 4) & 3))   /* (the shown ones: +4 bits 0/1 hide a node, 0x9a1331) */
+                            ts_log("split:     p%d %-18s %p node %p +4 %08lx +8 %08lx vis %d at %.2f %.2f %.2f", i + 1,
+                                   own_cls[i][k], (void *)o, (void *)on, *(DWORD *)(on + 4), *(DWORD *)(on + 8),
+                                   node_visible(on), ((float *)(on + 0x68))[0], ((float *)(on + 0x68))[1],
+                                   ((float *)(on + 0x68))[2]);
                     }
+                if (pl) {
+                    float *c = (float *)((i ? cam2 : (as2.depth ? as2.cam : (swapped ? saved_cam : CAM))) + 0x30);
+                    ts_log("split:   player %d camera at %.2f %.2f %.2f", i + 1, c[0], c[1], c[2]);
                 }
                 if (pl)
-                    ts_log("split:   player %d body %p node +4 %08lx +8 %08lx; player node +4 %08lx +8 %08lx health %.1f", i + 1,
-                           (void *)b, n ? *(DWORD *)(n + 4) : 0, n ? *(DWORD *)(n + 8) : 0, pn ? *(DWORD *)(pn + 4) : 0,
-                           pn ? *(DWORD *)(pn + 8) : 0, *(float *)(pl + 0x468));
+                    ts_log("split:   player %d body %p node +4 %08lx +8 %08lx vis %d; player node +4 %08lx +8 %08lx damage %.1f",
+                           i + 1, (void *)b, n ? *(DWORD *)(n + 4) : 0, n ? *(DWORD *)(n + 8) : 0, node_visible(n),
+                           pn ? *(DWORD *)(pn + 4) : 0, pn ? *(DWORD *)(pn + 8) : 0, *(float *)(pl + 0x468));
             }
         }
     }
@@ -999,6 +1029,7 @@ void split_install(void)
     keep_mt = ts_env("TS_SPLIT_MT", v, sizeof v) && v[0] == '1';
     splitlog = ts_env("TS_SPLITLOG", v, sizeof v) ? atoi(v) : 0;
     msglog = ts_env("TS_SPLIT_MSGLOG", v, sizeof v) && v[0] == '1';
+    allow_ff = ts_env("TS_SPLIT_FF", v, sizeof v) && v[0] == '1';   /* (tests: friendly fire on) */
     if (ts_env("TS_SPLIT_P2DELAY", v, sizeof v))
         p2_delay = atoi(v);
     void **rv = (void **)R_VTBL, **pv = (void **)PLAYER_VTBL, **iv = (void **)IM_VTBL;
