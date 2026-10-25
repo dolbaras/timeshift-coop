@@ -7,7 +7,8 @@ param(
     [int[]] $Shots = @(15, 30),       # seconds after start
     [string] $Adapter = "window",     # "window": the secondary monitor's GPU; "": the game's choice
     [switch] $NoMod,                  # no proxy DLL (the game as installed)
-    [string] $Args = ""               # extra command line for TimeShift.exe
+    [string] $Args = "",              # extra command line for TimeShift.exe
+    [string] $Ini = ""                # more profile keys or overrides, "KEY=value;KEY2=value2"
 )
 $ErrorActionPreference = "Stop"
 $mod = Split-Path $PSScriptRoot
@@ -26,12 +27,15 @@ $bw = [System.Windows.Forms.SystemInformation]::FrameBorderSize.Width * 2
 $w = $wa.Width - $bw; $h = $wa.Height - $cap - $bw
 $w -= $w % 8; $h -= $h % 8
 
-# The profile the game reads (steamwars.ini: Profile Default in ..\UserConfigs): windowed, muted.
+# The profile the game reads (steamwars.ini: Profile Default in ..\UserConfigs): muted. VIDEO_FullScr stays "yes":
+# the game's own windowed mode loses its Direct3D device at the first level load (2026-10-25, Intel UHD 630);
+# the proxy's test mode makes the device windowed instead (TS_BACKGROUND).
 $ini = Join-Path $Game "UserConfigs\Default\user.ini"
 $text = [IO.File]::ReadAllText($ini)
 $text = $text -replace "(?<!\r)\n", "`r`n"   # (the game skips lines ending in a bare LF)
-$set = [ordered]@{ "VIDEO_SizeX" = "$w"; "VIDEO_SizeY" = "$h"; "VIDEO_FullScr" = "no"; "Volume" = "0.000000";
+$set = [ordered]@{ "VIDEO_SizeX" = "$w"; "VIDEO_SizeY" = "$h"; "VIDEO_FullScr" = "yes"; "Volume" = "0.000000";
     "Sfx_Volume" = "0.000000"; "Music_Volume" = "0.000000"; "Voice_Volume" = "0.000000" }
+foreach ($kv in $Ini.Split(';')) { if ($kv -match '^([^=]+)=(.*)$') { $set[$Matches[1].Trim()] = $Matches[2].Trim() } }
 foreach ($k in $set.Keys) {
     if ($text -match "(?m)^$k\s*=") { $text = $text -replace "(?m)^$k[ \t]*=[^\r\n]*", "$k = $($set[$k])" }
     else { $text = $text.TrimEnd() + "`r`n$k = $($set[$k])`r`n" }

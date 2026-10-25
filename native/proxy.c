@@ -100,6 +100,45 @@ void *ts_patch_vtable(void *obj, int index, void *hook)
     return orig;
 }
 
+/* The exe imports ws2_32 by ordinal: its import slots are found by the address they hold. A second hook
+ * of the same function chains: it gets the slot again and the previous hook as "real". */
+void *ts_patch_ws2(const char *func, void *hook)
+{
+    static struct { const char *func; void **slot; } known[32];
+    static int n_known;
+    for (int i = 0; i < n_known; i++)
+        if (strcmp(known[i].func, func) == 0) {
+            DWORD old;
+            void *prev = *known[i].slot;
+            if (!VirtualProtect(known[i].slot, sizeof(void *), PAGE_READWRITE, &old))
+                return NULL;
+            *known[i].slot = hook;
+            VirtualProtect(known[i].slot, sizeof(void *), old, &old);
+            return prev;
+        }
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    HMODULE ws2 = GetModuleHandleA("ws2_32.dll");
+    void *real = ws2 ? (void *)GetProcAddress(ws2, func) : NULL;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress); real && d->Name; d++) {
+        if (_stricmp((const char *)(base + d->Name), "WS2_32.dll") != 0)
+            continue;
+        for (void **slot = (void **)(base + d->FirstThunk); *slot; slot++) {
+            DWORD old;
+            if (*slot != real || !VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &old))
+                continue;
+            *slot = hook;
+            VirtualProtect(slot, sizeof *slot, old, &old);
+            if (n_known < 32)
+                known[n_known].func = func, known[n_known++].slot = slot;
+            return real;
+        }
+    }
+    ts_log("net: import ws2_32!%s not found", func);
+    return NULL;
+}
+
 /* Replace `len` bytes at `addr` when they still are `expect` (the exe this was found in). */
 int ts_patch_bytes(DWORD addr, const void *expect, const void *repl, int len)
 {
@@ -270,6 +309,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         compat_install();
         testmode_install();
         console_install();
+        netfix_install();
         char v[16];
         if (ts_env("TS_WATCHDOG", v, sizeof v) && (watchdog_secs = (DWORD)atoi(v)) > 0) {
             DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &main_thread,

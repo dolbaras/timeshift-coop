@@ -11,6 +11,7 @@ void **ts_find_iat_slot(const char *dll, const char *func);
 void *ts_patch_iat(const char *dll, const char *func, void *hook);
 void *ts_patch_vtable(void *obj, int index, void *hook);
 int ts_patch_bytes(DWORD addr, const void *expect, const void *repl, int len);
+void *ts_patch_ws2(const char *func, void *hook);   /* by-ordinal ws2_32 imports; chains */
 
 /* compat.c: start-up fixes for today's PCs */
 void compat_install(void);
@@ -19,6 +20,9 @@ void compat_on_d3d(void *d3d);   /* IDirect3D9 from Direct3DCreate9 */
 /* console.c: script runtime access (test console TS_CONSOLE=<port>, script error log) */
 void console_install(void);
 const char *ts_script_run(const char *text, char *out, int size);
+
+/* netfix.c: the game's own multiplayer on today's networks */
+void netfix_install(void);
 
 /* testmode.c: window, render adapter and focus handling for test instances */
 void testmode_install(void);

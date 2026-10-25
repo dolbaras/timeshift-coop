@@ -455,37 +455,13 @@ static HANDLE WINAPI hook_WSAAsyncGetHostByName(HWND w, u_int msg, const char *n
     return real_WSAAsyncGetHostByName(w, msg, name, buf, len);
 }
 
-/* The exe imports ws2_32 by ordinal: its import slots are found by the address they hold. */
-static void *patch_ws2(const char *func, void *hook)
-{
-    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
-    HMODULE ws2 = GetModuleHandleA("ws2_32.dll");
-    void *real = ws2 ? (void *)GetProcAddress(ws2, func) : NULL;
-    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
-    IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress); real && d->Name; d++) {
-        if (_stricmp((const char *)(base + d->Name), "WS2_32.dll") != 0)
-            continue;
-        for (void **slot = (void **)(base + d->FirstThunk); *slot; slot++) {
-            DWORD old;
-            if (*slot != real || !VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &old))
-                continue;
-            *slot = hook;
-            VirtualProtect(slot, sizeof *slot, old, &old);
-            return real;
-        }
-    }
-    ts_log("net: import ws2_32!%s not found", func);
-    return NULL;
-}
-
 static void netlog_install(void)
 {
     InitializeCriticalSection(&net_lock);
-#define NET_HOOK(fn) real_##fn = (fn##_t)patch_ws2(#fn, (void *)hook_##fn)
+#define NET_HOOK(fn) real_##fn = (fn##_t)ts_patch_ws2(#fn, (void *)hook_##fn)
     NET_HOOK(socket);
     NET_HOOK(bind);
-    real_connect = (bind_t)patch_ws2("connect", (void *)hook_connect);
+    real_connect = (bind_t)ts_patch_ws2("connect", (void *)hook_connect);
     NET_HOOK(listen);
     NET_HOOK(accept);
     NET_HOOK(sendto);
