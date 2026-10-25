@@ -184,7 +184,7 @@ static void console_pump(void)
         else {
             /* "@all ", "@peers ", "@srv ": send to the other machines of a network game (coopnet.c) */
             if (!coopnet_console(texts[i], out, sizeof out) && !storysync_console(texts[i], out, sizeof out)
-                && !aisync_console(texts[i], out, sizeof out))
+                && !aisync_console(texts[i], out, sizeof out) && !campaign_console(texts[i], out, sizeof out))
                 ts_script_run(texts[i], out, sizeof out);
             if (con_sock != INVALID_SOCKET)
                 sendto(con_sock, out, (int)strlen(out), 0, (struct sockaddr *)&from[i], sizeof from[i]);

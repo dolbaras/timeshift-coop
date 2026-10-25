@@ -1,0 +1,356 @@
+# Whole-campaign co-op: what still breaks, per level, and the test plan
+
+Static pass over the 24 campaign levels (2026-10-25) for co-op with 2-4 players on the game's own server: the host
+runs the story (`storysync.c`, multiplayer.md 9b), clients' players are `player_mp` bodies there. Nothing in this
+document was run in a game; the new native code (`native/campaign.c`) is **not yet run**. Tags as in the other
+documents: **[V]** read in the data or the executable, **[L]** likely, **[G]** needs a runtime test.
+
+Inputs: `player-audit.md` (rules C1-C11 and the per-level counts; this document does not repeat them),
+`multiplayer.md` 8-9d, `native/storysync.c`, `timesync.c`, the level scripts of `out.s3darc` (all `#ssl` texts with
+their owners, 6 135 object texts, the same count as the earlier audit), class data of the `ps` block.
+
+## 0. Short answers
+
+| Question | Answer |
+|---|---|
+| Biggest blocker | **Time reversal is refused in co-op** (timesync: the reverse key does nothing; the server never starts the time recorder). At least 10 levels have reverse puzzles (section 1, G1); where a puzzle has no slow/stop way through, the **whole team** is stuck, not only the clients. Needs shared reversal (multiplayer.md 9a "Reversal"). |
+| What storysync already fixes | first player starts the story, the host's events are replayed on clients (their `$player` locks, teleports, loadouts, hints, FMVs), level exits through the server, checkpoints move respawns, `FailMission` = team restart. So most `Transport`/`DisableMove` sequences (train buttons, glider, checkpoint restores) already carry every client. |
+| What still fails after storysync | reverse puzzles (G1); seats (`StartUse` is host-only: zeppelin turrets 8/23, armoured car 19) and quads (9/12) (G2); gates that start a lift or train with the first player inside (7, 17, 18, 22, 23) (G3); death scenes kill the host when a client falls in (14, 21) (G4); quad scanners fail the mission when a client walks into them (9, 12) (G5); story objects used by a client (buttons, pickups, a mounted gun) [G] (G6); scripted AI/turret/boss targets see the host only (G7); late joiners keep the level-start locks (G8). |
+| Implemented now (`campaign.c`, `TS_CAMPAIGN=1`, default off, not yet run) | "all players" gates for the 5 lift/train domains with a gather of the missing players after 20 s; host-only quad scanners; per-player death domains; host/client `regroup` and `gather` commands. Section 3. |
+| Effort to a whole-campaign run | shared reversal L (largest, decides 10 levels); seats/vehicles L; AI nearest-player M; late-join state M; button/pickup forwarding S-M if the live test shows it is needed; spread teleports S; player-facing regroup S. Section 5. |
+
+## 1. Generic gaps after storysync.c
+
+| Id | Gap | Where | Fix design | Effort | Status |
+|---|---|---|---|---|---|
+| G1 | **Time reversal refused in co-op** ([V] timesync.c: "local reverse refused"; the recorder `0x5846b0` starts only in game mode 1). Puzzles built on reverse: force fields that flip direction only while time runs backwards (`OnStartTReverse`/`OnStopTReverse` -> `SetSpeed`), a collision that hides only during a reverse (`ts2_skyscraper_part2` `Shaft_coll_actor`, `Shaft_coll_actor1`: `Hide()` on reverse start) [V], kill domains locked only during a reverse (`ts2_guardfactory_part04` `PROPELLERS_1` -> `dom_propeller_kill`; `ts2_city_part03` `dom_kill1/2`) [V], and objects rewound by the recorder (cranes, bridges, lifts, propellers; the levels' `$tc.SetMode("reverse"/"puzzle_reverse*")` zones and "Reverse" hints) [L] | 2?, 3, 5, 9, 10, 14, 16, 17, 19, 21, 23 (table per level) | (a) **shared reversal** as planned in 9a: the server records and rewinds its world, clients see the result through replication, every machine shows the effect, players are not rewound. (b) Cheaper partial step: a co-op "script reverse" that fires the world time events `OnStartTReverse`/`OnStopTReverse` on every machine while a player holds reverse (no rewind): makes the force-field, hidden-collision and kill-domain puzzles passable, not the rewound-object ones. Both belong to timesync.c. | (a) L, (b) M | design; **blocker** |
+| G2 | **Seats and vehicles**: `$player.StartUse(...)` is wrapped (host-only) on clients [V storysync `host_calls`], `DisableUse` too; the zeppelin (`vhc_zeppelin_cruiser`), armoured car (`vhc_bronik`) and quads (`vhc_bike`) derive from `vehicle` -> `dyn_destroy` -> `dynamic`, and `dynamic.cls` has `isSyncMP = Yes`, so vehicles are probably replicated [L] (the earlier audit said "not synced": `vehicle.cls` itself has no `isSyncMP` line, the parent has). Whether a `player_mp` can drive a quad or man a turret that sits on a moving vehicle is [G]; stock MP maps have usable `sob_turret_hmg`/`sob_turret_lom` (maps 1, 4, 7) and `vhc_bronik` props (7, 8) [V], so remote players manning a fixed turret is [L] | 8, 23 (zeppelin turret rides), 19 (armoured-car gun), 9, 12 (quads), 9 (truck ride at the start) | Fallback for every seat sequence: on a client, the replayed seat start puts the player into the stock spectator view of the host (`$mp_rules_sys.Spectate()`, observed to follow another player [V multiplayer.md]) until the sequence's end event, then the end's `Transport` replay (already there, e.g. `BR_pl_3` -> `Bronik_Exitpos`) or a regroup. Better for the zeppelins: per-level seat table (host `tur02`/`tur05`, clients the next free `tur0x`, the AI gunner of that seat removed on the host). Quads: one `bike*` per player (`$farm.Create` copies) if remote driving works. Hook point: the client's replay of the seat handler (storysync event hook) or a table in campaign.c keyed by object + event | spectate M, seats L, quads L | design |
+| G3 | **"All players" gates**: storysync starts a story domain with the first player, so a lift or train that leaves "when the player is inside" leaves with that player only [V] | lifts: 7 `dom_lift__move_up`, 17/18 `dom_act_lift` (+ `lift_door` `IsBelong($player)` on `dom_act_lift1`); trains: 22, 23 `dom_train_start` | **campaign.c rule ALL**: the domain counts as entered only while the host and every joined client are inside; after 20 s of waiting the missing clients are moved in (gather). Trains started by a button (10 `train_button`, 13 `ref_button`) already teleport every client through the replayed `$player.Transport` [V], but onto one point (G11) | done S | **campaign.c, not yet run** |
+| G4 | **Death scenes**: `dom_RIP_cine_start*` -> `RIP_cine` (camera, forced stop/slow, `$player.Kill()`): a client falling in sets the story domain off on the host, the host's player is killed and every machine plays the death camera; the client who fell survives (its `Kill` is wrapped) [V] | 14, 21 | **campaign.c rule KILL**: the domain never fires its story in co-op; any player inside it dies (host: `$player.Kill()`, client: message 71), respawn at the last checkpoint | done S | **campaign.c, not yet run** |
+| G5 | **Quad scanners**: `dom_scanner*` start `actor_checker*`, whose frame fails the mission when no quad is in the zone [V]; with "any player" a client on foot in the zone restarts the level for everybody, possibly in a loop | 9, 12 | **campaign.c rule HOST**: only the host's player sets the scanners off (the single-player test) | done S | **campaign.c, not yet run** |
+| G6 | **Story objects used by a client**: buttons (`OnPushed/OnPoped`, 162 object handlers, e.g. train buttons 10/13/22/23, lift buttons 19/20/22, `prison_button` 11, `but_ceilgun*` 14), pickups (`magnet_mine_item.OnPicked` 9/11/20) and mounted guns (`final_room_turret_hmg.OnOccupied` 2 -> unlocks the rockets) [V]. storysync forwards only domain entries and `OnEye` from clients; other client-detected story events are held back. Buttons and items are `isSyncMP` [V], so the host probably runs the event itself when a client uses them [L/G] | every level with story buttons (section 2) | Live test T-B first. If the host does not see it: storysync forwards held-back `OnPushed/OnPoped/OnPicked/OnOccupied/OnReleased` of `isSyncMP` objects like `OnEye` (sub 22 style), the host fires them once (state check: a button already pushed on the host is not pushed again) | S-M | test first |
+| G7 | **AI and turrets that name `"player"`** (audit C10, 235 calls): on the host the name is the host's player. Normal AI perception already shoots client players [V multiplayer.md 8a], so only scripted aims/targets are host-only. Matters for: `Metro_Tank` (3), `helicopter_actor\|tur01` (7), `ceilgun1..4` (14), `ai_swat1..5` in the lift (18), `STRIDER\|tur_shoulder1` boss (24) | 3, 7, 14, 18, 24 (others cosmetic) | Name remote players for scripts (host: `player_mp<slot>`, the naming path aisync.c uses for objects created in play), then hook `SetTarget` (`0x4b2ba0`, `0x4cb6d0`, `0x51a3d0`) and `SetAim` (`0x83d3f0`): `"player"` -> the nearest living player's name | M | design |
+| G8 | **Late joiners**: `OnInitLevel` is local, so a client that joins mid-level runs the level-start locks again, and the host's events that released them are not repeated (multiplayer.md 9b "Late joiners"). Level-start locks: 14 `DisableMove(1)` (released by `Start_cine`), 9 `Aimable(0)` (truck end), 1/2/24 `SetupWeapon(0,0,0)` (weapons later from the story or pickups), 1 all powers off, 2/3/14/16 `DisableTC("time_reverse",1)` [V] | 1, 2, 3, 9, 14, 16, 24 | On a client's join the host sends its own player's lock state (input, movement, aim, time-power disables, weapon slots) and the client applies it; or the rule "join at the level start only" with a menu message. Needs the RE of the lock fields | M | design |
+| G9 | **Locks from story domains reach every player**: a replayed `DisableMove()` locks players wherever they are (13 `dom_save` until `camp_rebel_1` ends its walk, 1 `dom_act_weapon` 3 s, 22/23 `dom_train_start`) [V]; released by the host's replay | 1, 13, 22, 23, 10/13 trains | Acceptable while the release replay arrives. Safety net: lock watchdog on clients (audit C11): a lock older than N s that the host's player does not have is cleared | M | design |
+| G10 | **Level exits need the host's player in the reload domain** (the reload runs from the host's own point test, multiplayer.md 9b) [V] | all 23 exits | Acceptable (the host leads). Optional: a client's report of a reload domain -> the host calls its `Reload` | S | design |
+| G11 | **Teleports put every player on one point**: replayed `Transport(<locator>)` (trains 10 `train_player_wp`, 13 `Train_actor/Swift_place`; checkpoint restores 3/18/19/20/22/24; finales 7 `fin_pos`, 18 `anc_ZCS_p1`) | 3, 7, 10, 13, 18-20, 22, 24 | On clients after a replayed `Transport`, offset the player by its slot (0.7 m ring, as campaign.c's gather does) - only after the live test shows whether stacked bodies push apart by themselves and whether an offset drops a player off a train | S | design (test first) |
+| G12 | **Stranded players** (any reason: missed seat, fell behind a quad, lift, train) | all | **campaign.c `!cp regroup`** (host: every client to the host; client: itself to the host). Needs a player-facing trigger (pause-menu entry or a key) | console done S; menu S | **campaign.c, not yet run** |
+| G13 | **Container traps** `*\|dom_mis_fail` (27): `OnStopTReverse` + `IsBelong($player)` -> `FailMission` [V]; `OnStopTReverse` is a world time event, local on every machine; with reverse refused they never fire | 11, 15, 18, 20 | Inactive today. With shared reversal: per player (the trapped player dies or is moved out; no team restart): add them to campaign.c's KILL-style rules | S (with G1) | design |
+| G14 | **Cinematics and FMVs**: `cinema` actors are not `isSyncMP` [V]; replayed `Unlock`/`Start` start them on each client, their `SetCamFollow` and `DisableInput` pairs come with the host's replays [V]; `fmv_15-17 "noSkip"` + credits end the campaign on every machine | all | Covered by storysync; check that a client's camera returns after each cinematic (T-C) | - | test |
+| G15 | **Campaign end**: `ts2_cityfinal_part01` `FMV_Manager` -> credits -> the host returns to the menu, the server closes; clients see "server closed" [L] | 24 | Clients: show the credits and go to the main menu without the error (coopsession) | S | design |
+
+## 2. Per level
+
+Columns: Risk | Fix | Status. "storysync" = covered by the shipped story sync (checked live on part02/part03 only);
+"campaign.c" = new rule, not yet run; "design" = section 1 / 5. Exit = the reload domain (target in brackets).
+Every level also has the generic items G6 (buttons), G7 (cosmetic AI aims), G8 (late joiners), G12 (regroup).
+
+#### 1. `ts2_city_part01` - exit `dom_reload` (locked) -> part02
+
+| Risk | Fix | Status |
+|---|---|---|
+| Start: FMV, `SetupWeapon(0,0,0)`, all powers off in `OnInitLevel`; `start_cine` wake-up `Transport` + `AutoSave(1)` | local on each machine + replay | storysync |
+| Pistol hand-over: `Rebel_weaponer.OnBhvEnd("GIVE")` (host AI event) -> `SetupWeapon(4,0,0)` | replayed to every client | storysync [G: check the client gets the pistol] |
+| `dom_act_weapon` locks movement 3 s for everybody | G9 | acceptable |
+| `STRIDER\|Spider` forced `tslow` in a story event | replayed on every machine; timesync re-sync | storysync [G] |
+| `reb_revive_a` VO only if the host is in `dom_revive` | cosmetic | - |
+| 8 `OnEye` look triggers | sub 22 | storysync (T9 on part02) |
+| Late joiner: unarmed, powers off | G8 | design |
+
+#### 2. `ts2_city_part02` - exits `dom_reload`, `dom_reload1` (locked) -> part03
+
+| Risk | Fix | Status |
+|---|---|---|
+| Time-power tutorial `cine_start` (`StartTControl("tstop"/"tslow")`) | replayed; timesync | storysync |
+| `tc_domain_bridge` auto mode `reverse`, `building_site_rocket_6` reverse handling: a bridge to rewind? | G1 | **[L] blocker if reverse is required** - check live |
+| `final_room_turret_hmg.OnOccupied` -> `$rockets_unlocker.Unlock()`, `SetHealthRate` for the user | host mans the gun; G6 test with a client | test |
+| 30 scripted AI aims | G7 cosmetic | design |
+| Natural exit | checked live (T8) | storysync |
+
+#### 3. `ts2_city_part03` - exit `dom_reload` -> skyscraper_part1
+
+| Risk | Fix | Status |
+|---|---|---|
+| `Metro_Tank.SetTarget("player",0/1)`: the tank turret fires at the host only | G7 | design |
+| Valve puzzle `valveLocator` (`OnPushed/OnPoped`) | G6 test | test |
+| `dom_kill1/2` locked only during a reverse (the way through a kill zone?) | G1 | **[L] blocker** - check |
+| `Check_Point_1..3` restores (`Transport` + far-AI kill) | team restart checked live (T7) | storysync |
+
+#### 4. `ts2_skyscraper_part1` - exit `dom_reload` -> skyscraper_part2
+
+| Risk | Fix | Status |
+|---|---|---|
+| Garage and force-field buttons (`botton_enter_garage`, `but_force_field*`, `ref_button_garage`) | G6 test | test |
+| `opendoor8` light zones by `IsBelong($player)` | local, cosmetic | - |
+| 2 `OnEye` | sub 22 | storysync |
+
+#### 5. `ts2_skyscraper_part2` - exit `Reload_domen` (locked) -> skyscraper_part3
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Reverse puzzles**: `Shaft_coll_actor`/`Shaft_coll_actor1` hide only during a reverse [V]; `force_field1/2` flip only during a reverse [V]; crane `Kran_actor`/`dom_kran_tc`, propellers `dom_hint_propeller1/2`, trap `dom_hint_trap1`, conveyor `dom_hint_conveyer`, `act_revers` [L] | G1 (b) covers the shaft and force fields; the crane/propellers need (a) | **blocker** |
+| FMV `fmv_04` with `DisableInput(1/0)` pair | replayed | storysync |
+| Alarm buttons, laser fence, prison gate (`but_alarm*`, `but_laser_fence`, `Button_prison_gate`) | G6 test | test |
+| Crawl zones `dom_holster*` (`SelectHolster`) | local per player | storysync |
+
+#### 6. `ts2_skyscraper_part3` - exit `Reload_domen` -> skyscraper_part4
+
+| Risk | Fix | Status |
+|---|---|---|
+| `Fall_domain*` `SetDeathFallHeight` | local per player | storysync |
+| Falling cabin `cabin1` (`FALL` frames, `$tc.SetMode`) | presentation | - |
+| Story consoles `data_console_1\|button`, `s3d_refLocator8`, `__renamed123` (autosaves) | G6 test | test |
+| 4 `OnEye` | sub 22 | storysync |
+
+#### 7. `ts2_skyscraper_part4` - exit `dom_reload` (locked) -> zepride1
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Lift**: `dom_lift__move_up` (act once) closes the door and sends `lift_cabin` up with the first player; `lift_door.OnAnimEnd("CLOSE")` checks `dom_act_lift1.IsBelong($player)` | rule ALL on `dom_lift__move_up`, gather after 20 s | **campaign.c, not yet run** |
+| `helicopt_plc` -> `helicopter_actor\|tur01.SetTarget("player")` | G7 | design |
+| Finale `Cine_FIN_Actor`: zeppelin route, `$player.Transport("fin_pos")` (all to one point), `fmv_05 "end"`, unlocks the exit | replay carries every client; G11 | storysync [G] |
+
+#### 8. `ts2_zepride1_part01` - exit `dom_reload` (locked) -> zepcrashsite_part01
+
+| Risk | Fix | Status |
+|---|---|---|
+| **The whole level is a turret ride**: `Cine1_ACTOR` and the restores `Check_Point_1..8` do `$player.StartUse("Zeppelin\|Zeppelin_cruiser_ACTOR\|tur02/tur05")` - host only; clients stand on the deck [V]. The zeppelin moves by `StartRoute` (host) and is replicated if `vehicle` inherits `isSyncMP` [L]; a client body on its deck [G] | G2: spectate the host (M) or a turret per player (L) | **design, blocker for clients** |
+| Intro `PreStart_cine` puts everyone on `Zeppelin_cruiser_Intro_plc/player_place`, locks movement and powers | replayed | storysync [G: bodies on a moving actor] |
+| `Zepp_Destr_Cine_ACTOR` -> `FailMission("GAME_ZEP_DESTROYED")` | team restart from `Check_Point_n` (restores seat the host only) | storysync + G2 |
+| `Zeppelin\|Zeppelin_cruiser_ACTOR.OnOccupied/OnReleased` (radar range for `user = $player`) | object argument travels as null | cosmetic |
+| Deck elevator buttons `Zeppelin\|elev_*` | G6 test | test |
+
+#### 9. `ts2_zepcrashsite_part01` - exit `Reload_domen` -> zepcrashsite_part02
+
+| Risk | Fix | Status |
+|---|---|---|
+| Truck ride at the start: `OnInitLevel` `Aimable(0)` + `Transport("start_place")` on each machine, truck by host `StartRoute`; `truck_place.OnAnimEnd("MOVE")` gives the aim back | replay; bodies on a moving vehicle [G] | storysync [G] |
+| **Quads**: `bike1..12` created on the host; remote driving [G] | G2 | design |
+| Quad scanners `dom_scanner`, `dom_scanner_1`, `dom_scanner_2` -> `actor_checker*` `FailMission("UI_OBJECTIVES_NO_TRIKE")` | rule HOST | **campaign.c, not yet run** |
+| Reverse time zones `dom_time_zone3/4/6/14/15` (`puzzle_reverse_once`), `bridge_puzle_actor` | G1 | **[L] blocker** |
+| `dom_hint_boost*` `InBike()` hints | each machine's own (replay evaluates the client's player) | storysync |
+| `magnet_mine_item.OnPicked` (autosave), `Tower_Button`, `nt_ref_button` | G6 test | test |
+
+#### 10. `ts2_zepcrashsite_part02` - exit `Reload_domen` (locked) -> zepcrashsite_part03
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Train**: `train_button.OnPushed` -> `Transport("train_player_wp")` + `DisableMove(1)`, train starts; `Reload_domen.OnEnter` releases | replay teleports and locks every client onto one point (G11); bodies riding the train [G D6]; the exit moves everybody anyway | storysync [G] |
+| Reverse lift puzzle (`dom_hint_lift*` "Reverse", `Lift_actor`, `acktor_revers*`, `time_domain` reverse) | G1 | **[L] blocker** |
+| Valves `Valve_button`, `lift_button`, `bridge_button`, `rope_m`, `destr_train_button` | G6 test | test |
+| FMVs `fmv_07`, `fmv_08` with input locks | replayed | storysync |
+
+#### 11. `ts2_zepcrashsite_part03` - exit `Reload_domen` -> summeroutdoor_part01
+
+| Risk | Fix | Status |
+|---|---|---|
+| Prison escape: `prison_button` -> `Prison_Cine` (gates open, `AutoSave(3)`) | G6 test (client presses) | test |
+| Containers `clonecontainer_3/4/6/7\|dom_mis_fail` | G13 (inactive without reverse) | - |
+| `magnet_mine_item.OnPicked` | G6 | test |
+
+#### 12. `ts2_summeroutdoor_part01` - exit `dom_reload` -> summeroutdoor_part02
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Quads** | G2 | design |
+| Scanners `dom_scanner_1..3` -> `actor_checker_1..3` `FailMission` | rule HOST | **campaign.c, not yet run** |
+| `STRIDER\|Spider` walk (28 camera shakes) | presentation | - |
+| `Bridge_button` | G6 test | test |
+
+#### 13. `ts2_summeroutdoor_part02` - exit `dom_reload` (locked) -> guardfactory_part01
+
+| Risk | Fix | Status |
+|---|---|---|
+| Dialogue lock: `dom_save` `DisableMove()` for everybody, released by `camp_rebel_1.OnBhvEnd("WALK")` (host AI) | replay releases; G9 | storysync |
+| **Train**: `ref_button` -> `Transport("Train_actor/Swift_place")` + `DisableMove(1)` | as level 10 | storysync [G] |
+| FMV `fmv_10` | replayed | storysync |
+
+#### 14. `ts2_guardfactory_part01` - exit `Reload_domen` -> guardfactory_part02
+
+| Risk | Fix | Status |
+|---|---|---|
+| Start lock `DisableMove(1)` in `OnInitLevel`, released by `Start_cine.OnAnimEnd("CLIP_1")` | replay; late joiner stays locked (G8) | storysync / design |
+| **Death scene** `dom_RIP_cine_start` -> `RIP_cine` (`$player.Kill()`) | rule KILL | **campaign.c, not yet run** |
+| **Fan shaft**: `dom_fan_tc` reverse, `dom_force_field`, `dom_force_field1/2` lift the player only while time runs backwards, `dom_force_field3` locked during a reverse [V]; hint `dom_hint_shaft` "Reverse" | G1 (b) | **blocker** |
+| Ceiling guns `ceilgun1..4.SetTarget("player")` (host only), `but_ceilgun1..4` | G7, G6 | design / test |
+| `dom_timemeter` `SetFixedTimeTR` | presentation | - |
+
+#### 15. `ts2_guardfactory_part02` - exit `Reload_domen` -> guardfactory_part03
+
+| Risk | Fix | Status |
+|---|---|---|
+| 14 containers `s3d_Container_*\|dom_mis_fail`; `start_room_door2` (`OnStopTReverse`) | G13 / G1 | inactive |
+| `QGS_event_dom` (time-stop soldier demo) | story domain | storysync |
+| `s3d_Planer_button` | G6 test | test |
+
+#### 16. `ts2_guardfactory_part03` - exit `Reload_domen` -> guardfactory_part04
+
+| Risk | Fix | Status |
+|---|---|---|
+| Conveyor force field `dom_ffield_conveyer` flips only during a reverse [V] (the stop zone `dom_conveyer_tc` may be the intended way) | G1 (b) | [L] check |
+| Lift valve `lift_valve01`, consoles (`E3_blue_console`, `console01`, `ref_button_press`) | G6 test | test |
+| 27 scripted AI aims | G7 cosmetic | design |
+
+#### 17. `ts2_guardfactory_part04` - exit `dom_reload` -> guardfactory_part05
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Lift**: `dom_act_lift.OnEnter` closes the door; `lift_door` goes up when the host is in `dom_act_lift1`, else reopens | rule ALL on `dom_act_lift`, gather | **campaign.c, not yet run** |
+| Conveyor `dom_conveyer_tc1` (reverse), `dom_force_field1/2`, `PROPELLERS_1` (kill domain locked only during a reverse) [V] | G1 | **blocker** |
+| Cranes `but_crane1/2`, `interface\|button` | G6 test | test |
+
+#### 18. `ts2_guardfactory_part05` - exit `dom_reload` (locked) -> zep_factory_part1
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Lift**: `dom_act_lift` (locked until the cabin came down) -> door -> `dom_act_lift1.IsBelong($player)` -> up + `$dom_cine_dirigible.Unlock()`; `ai_swat1..5.SetAim("player")` on arrival | rule ALL on `dom_act_lift`, gather; G7 | **campaign.c, not yet run** / design |
+| 5 containers `clonecontainer_*\|dom_mis_fail` | G13 | inactive |
+| Glider escape `planer_cine` (`Transport("anc_ZCS_p1")`, `fmv_11`) | replay; G11 | storysync |
+| Tram buttons `but_tram*`, gates `but_gate01/02`, `but_planer_out` | G6 test | test |
+| `ai_rocketeer2` auto mode reverse (combat hint) | not required | - |
+
+#### 19. `ts2_zep_factory_part1` - exit `Reload_domen` -> zep_factory_part2
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Armoured-car chase**: `actor_start_chase` `$player.StartUse("Bronevik")`, `DisableUse()` - host only; clients stay at the start while the car leaves; the end `BR_pl_3` replays `Transport("Bronik_Exitpos")` to everybody [V] | G2 spectate (M); now: clients wait, then are teleported at the end; `!cp regroup` | design |
+| Start FMV `actor_start_scene` (`fmv_12`, input lock) from `OnInitLevel` | local + replay | storysync |
+| Conveyor `dom_hint_conveyor` (`puzzle_reverse`), `dom_train_hint` (`puzzle_reverse_once`), `force_field` flips on reverse [V] | G1 | **[L] blocker** |
+| `Check_Point_1..3` restores (`Transport`, AI deaths, `Bronevik.StartRoute`) | team restart | storysync [G] |
+| Lifts with call buttons (`Lift_*_button_3/4`), `semaphoreButton`, `dot_button`, `Hoisting_FB_pult1`, `Alarm_button` | G6 test (call buttons bring a lift back: no gate needed) | test |
+
+#### 20. `ts2_zep_factory_part2` - exit `Reload_domen` -> zep_factory_part3
+
+| Risk | Fix | Status |
+|---|---|---|
+| 4 containers `clone1..4\|dom_mis_fail` | G13 | inactive |
+| `magnet_mine_item.OnPicked` (clears AI, autosave) | G6 test | test |
+| Lifts with call buttons `s3d_Lift_button_1/2`, gates `s3d_Gate_button_Left/Right` | G6 test | test |
+| `Check_Point_1/2` restores | team restart | storysync [G] |
+
+#### 21. `ts2_zep_factory_part3` - exit `Reload_domen` (locked) -> zep_factory_part4
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Death scenes** `dom_RIP_cine_start`, `_1`, `_2` (locked until `Propellers_mortal_Cine` CLIP_5) -> `RIP_cine` | rule KILL | **campaign.c, not yet run** |
+| Turbines `dom_hint_turbines` (`puzzle_reverse`), `Propellers_dom_WIND` flips on reverse | G1 | **[L] blocker** |
+| Gate consoles `s3d_Gate_pult_Left/Right`, `s3d_Propellers_button`, `s3d_Planer_button` | G6 test | test |
+
+#### 22. `ts2_zep_factory_part4` - exit `Reload_domen` (locked) -> zepride2
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Train fight**: `train_button` unlocks `dom_train_start` (act once), whose `OnEnter` starts `Train_actor` and locks movement; whoever is not aboard stays behind | rule ALL on `dom_train_start`, gather | **campaign.c, not yet run** |
+| `Check_Point_1` restore `Transport("Train_actor/tr_cabin")` (on the moving train) | replay; G11; [G] | storysync |
+| `Fin_cine` scripted `tslow` | replay | storysync |
+| Consoles, zeppelin deck switches, lift `s3d_Lift_button_1` | G6 test | test |
+
+#### 23. `ts2_zepride2_part01` - exit `dom_reload` (locked) -> cityfinal
+
+| Risk | Fix | Status |
+|---|---|---|
+| **Turret ride intro**: `Zep_Intro_actor` / `Zeppelin_cruiser_plc_iga` put everybody on `player_place`, then `StartUse(...\|tur01)` host only | G2 | **design** |
+| Train to the citadel: `dom_train_start` (act once, unlocked by `train_button`) locks movement and starts `train_lorry` | rule ALL, gather | **campaign.c, not yet run** |
+| `rope_btn1/2` set the auto mode to reverse; `dom_hint_lifts` "Reverse" | G1 | **[L] blocker** |
+| `Loading_cine` hides/shows the player (`hide()`/`show()`) | replay pairs | storysync |
+| `Zepp_Destr_Cine_ACTOR` `FailMission` | team restart (no `Check_Point_n`: from the level start) | storysync |
+| FMVs `fmv_13`, `fmv_14 "end"` | replay | storysync |
+
+#### 24. `ts2_cityfinal_part01` - no exit (credits)
+
+| Risk | Fix | Status |
+|---|---|---|
+| Boss `STRIDER\|tur_shoulder1.SetTarget("player")` on damage (the host draws its fire) | G7 | design |
+| `SetupWeapon(0,0,0)` at the level start | G8 for late joiners | design |
+| `Check_Point_1` restore (`Transport` np_4 -> np_5 -> `Check_Point_1`) | team restart | storysync [G] |
+| Ending `FMV_Manager` `fmv_15..17 "noSkip"` with `DisableInput` pairs, credits | replay; G15 | storysync / design |
+| 3 `OnEye` | sub 22 | storysync |
+
+## 3. `native/campaign.c` (implemented, **not yet run**)
+
+Off unless `TS_CAMPAIGN=1`; acts only in a co-op session whose host runs the story. Build checked (`build.sh`, no
+warnings with `-Wall -Wextra`); the data archives are unchanged (no recipe needed: level scripts are not edited).
+
+- **Domain rules** (host). `storysync.c`'s domain test hook (`ss_dom_count`, `0x6c2e3d`) asks
+  `campaign_dom_verdict(dom, host_inside)` first (one clearly marked block in storysync.c); -1 = no rule.
+
+  | Level | Domain | Rule |
+  |---|---|---|
+  | `ts2_skyscraper_part4` | `dom_lift__move_up` | ALL: entered only while the host and every joined client are inside |
+  | `ts2_guardfactory_part04`, `ts2_guardfactory_part05` | `dom_act_lift` | ALL |
+  | `ts2_zep_factory_part4`, `ts2_zepride2_part01` | `dom_train_start` | ALL |
+  | `ts2_zepcrashsite_part01` | `dom_scanner`, `dom_scanner_1`, `dom_scanner_2` | HOST: only the host's player (the single-player test) |
+  | `ts2_summeroutdoor_part01` | `dom_scanner_1..3` | HOST |
+  | `ts2_guardfactory_part01` | `dom_RIP_cine_start` | KILL: never fires its story; a player inside dies |
+  | `ts2_zep_factory_part3` | `dom_RIP_cine_start`, `_1`, `_2` | KILL |
+
+- **Gather** (host, ALL): while the domain is unlocked, not yet entered (nor spent: an `isActOnce` domain that
+  fired), the host's player inside and somebody missing, the missing clients are moved into it after
+  `TS_CAMPAIGN_GATHER` seconds (default 20; repeated every 20 s while somebody is missing). The client places its
+  own player (message 70) at the domain's floor middle, 0.7 m apart per slot, clamped into the domain's box; the
+  same player placement call as storysync's `!ss goto` (vtable `+0x210`, used live in the lab).
+- **KILL** (host): every 250 ms, for a KILL domain that is not locked: the host's player inside -> `$player.Kill()`;
+  a client's body inside -> message 71, the client runs `$player.Kill()`; at most once per 8 s per player. Acts only
+  for domains whose verdict storysync has asked for in this level (proof that its hook is live; a host alone keeps
+  the stock cinematic).
+- **Console** (`TS_CONSOLE`): `!cp state` (rules of the level with domain state, lock count, host in/out, clients
+  missing), `!cp regroup` (host: every client to the host; client: itself to the host's body), `!cp gather <domain>`
+  (host).
+- Switches: `TS_CAMPAIGN=1` on; `TS_CAMPAIGN_RULES=0` no domain rules; `TS_CAMPAIGN_GATHER=<s>` (0 = never);
+  `TS_CAMPAIGN_KILL=0` death domains as storysync; `TS_CAMPAIGN_LOG=1` verbose log (`campaign: ...` lines).
+- Messages: subtypes 70-79 (70 gather/regroup, 71 kill). Frame slot: the 8th and last of console.c's table.
+- Known limits: a dead client counts as "missing" for an ALL gate until it respawns, then the gather pulls it in
+  (gathering a dead player is [G]); a client that steps out while a lift door closes can still be left behind (the
+  `lift_door` check uses the host's player); the rules are by object name, checked against the 1.2 data only.
+
+## 4. Test plan for the live pass
+
+Set-up (N100 pair, `lab\n100_pair.ps1`; later the same steps with the main PC as client when the owner allows):
+
+```
+lab\n100_pair.ps1 -Seconds 600 -HostIni 'AutoTestMap="<level>"' `
+  -HostEnv 'TS_CAMPAIGN=1;TS_CAMPAIGN_LOG=1;TS_STORYSYNC_LOG=1' -ClientEnv 'TS_CAMPAIGN=1;TS_CAMPAIGN_LOG=1' `
+  -Steps { At 90; OnHost '!cp state'; ... }
+```
+
+Fast movement: `!ss goto <domain>` (this machine's player into a domain), `$player.Transport("<object>")` (to a
+placed object, AI or locator; not to a domain), `!ss fire <object> <event> [0|1]`, `$<object>.Unlock()` (open a
+locked domain or start a cinematic), `!ss exit <level>` (host: the whole session to the next level),
+`!ss restart` (team restart), `!cp state|regroup|gather`. A whole-campaign smoke run is 23 x (`$<exit>.Unlock()`,
+`!ss goto <exit>` on the host) with the exits of section 2, checking after each change that the client is still
+joined (`return $ui.GetGameInfo("IsServer")` = `No` on the client) and runs the new level.
+
+Generic tests (run once, on the level named):
+
+| Id | Level | Steps | Expected |
+|---|---|---|---|
+| T-C1 rule ALL | 7 | host `!ss goto dom_lift__move_up`; `!cp state` | "clients missing 1", lift stays; ~20 s later the client is moved into the cabin, the lift goes up with both; `campaign: 1 client(s) sent to dom_lift__move_up` |
+| T-C2 ALL, both walk in | 17 | host `!ss goto dom_act_lift`, client `!ss goto dom_act_lift` within 20 s | door closes once both are in; both ride up (client body stays in the cabin: [G] D6) |
+| T-C3 ALL train | 22 | host `$dom_train_start.Unlock()`, `!ss goto dom_train_start`; wait | train starts only after the gather; both locked, both released at `MOVE_A` frame 4 + 6 s |
+| T-C4 HOST scanner | 9 | `$dom_scanner_1.Unlock()`; client `!ss goto dom_scanner_1`, host elsewhere | no mission failure; then host `!ss goto dom_scanner_1` on foot -> team restart (single-player rule) |
+| T-C5 KILL | 14 | client `!ss goto dom_RIP_cine_start` | the client dies and respawns at the checkpoint; the host lives; no death camera anywhere; `campaign: client in slot 1 inside ...: killed` |
+| T-C6 KILL host | 21 | `$dom_RIP_cine_start.Unlock()`; host `!ss goto dom_RIP_cine_start` | the host dies once, respawns; the client sees no cinematic |
+| T-C7 regroup | any | client walks/teleports far away; host `!cp regroup`; then client `!cp regroup` | client next to the host each time, standing on the floor |
+| T-C8 off | 7 | without `TS_CAMPAIGN` | `!cp state` says off; the lift leaves with the first player (storysync behaviour) |
+| T-B buttons/pickups (G6) | 10, 11, 2 | client uses `train_button` (10), `prison_button` (11), picks `magnet_mine_item` (11), mans `final_room_turret_hmg` (2) | host log `storysync: sent train_button.OnPushed` etc.; if the host never runs it: G6 forwarding is needed |
+| T-R reverse (G1) | 5, 14 | try the shaft (`Shaft_coll_actor`) and the fan shaft with slow/stop only | confirms which levels are blocked without reversal |
+| T-V vehicles (G2, D6) | 8, 19, 9 | watch the client during the zeppelin intro, the armoured-car start and the truck ride; try a client on a quad and on a free zeppelin turret | does the client's body ride a moving vehicle; can `player_mp` drive or man it |
+| T-A AI (G7) | 3, 14, 24 | client in the open near `Metro_Tank`, `ceilgun*`, the boss | they fire at the host only (expected today) |
+| T-L late join (G8) | 14 | client joins after `Start_cine` ended | client locked (expected today) |
+| T-X exits | all | the smoke run above | 23 level changes, client joined after each |
+
+Per level, after the generic tests: start each level with `AutoTestMap`, walk the risky places of section 2 with
+`!ss goto`/`Transport`, and record per level: client joined, story replays without errors
+(`storysync: ... not replayed` / `dropped` lines), what the client sees in cinematics (frames), whether any client
+lock outlives the host's.
+
+## 5. Order and effort
+
+| Step | Work | Effort | Unblocks |
+|---|---|---|---|
+| 1 | Live pass of campaign.c (T-C1..T-C8) and the probes T-B, T-R, T-V, T-A, T-L | 1 day | decides G2, G6, G11 |
+| 2 | Time reversal in co-op: (b) script-only reverse events first, then (a) shared recorder | M + L | 2?, 3, 5, 9, 10, 14, 16, 17, 19, 21, 23 |
+| 3 | Seats: spectate-the-host fallback for 8, 19, 23 (+ quads 9, 12 if remote driving fails); then turret seats per player | M, then L | 8, 9, 12, 19, 23 |
+| 4 | G6 forwarding if T-B fails | S-M | many levels |
+| 5 | AI `"player"` -> nearest player (G7) | M | 3, 7, 14, 18, 24 |
+| 6 | Late-join state (G8), lock watchdog (G9), spread teleports (G11), player-facing regroup (G12), campaign end (G15) | M + S | polish |

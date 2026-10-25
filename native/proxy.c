@@ -316,6 +316,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         timesync_install();
         aisync_install();
         storysync_install();
+        campaign_install();   /* (after storysync: TS_CAMPAIGN, not yet run) */
         netfix_install();
         gamepad_install();
         split_install();

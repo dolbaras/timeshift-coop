@@ -676,6 +676,13 @@ __attribute__((used)) int ss_dom_count(char *dom, int idx)
 {
     void *w = *(void **)(dom + DOM_WATCHED);
     int n = ((int (TSCALL *)(void *))(*(void ***)w)[0x11c / 4])(w);
+    /* campaign.c (TS_CAMPAIGN, not yet run): per-level co-op rules ("all players" gates, host-only and death
+     * domains) decide first; -1 = no rule for this domain. (A result > idx = inside, <= idx = outside.) */
+    if (w == local_watch && net_role() == MODE_SERVER) {
+        int v = campaign_dom_verdict(dom, idx < n);
+        if (v >= 0)
+            return v ? (idx < n ? n : idx + 1) : idx;
+    }
     if (idx < n || w != local_watch || net_role() != MODE_SERVER)
         return n;
     return remote_inside(dom) ? idx + 1 : n;

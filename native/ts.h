@@ -52,6 +52,11 @@ void timesync_install(void);
 void storysync_install(void);
 int storysync_console(const char *text, char *out, int size);   /* "!ss ..." test commands; 0 = not ours */
 
+/* campaign.c: whole-campaign co-op rules over storysync.c (TS_CAMPAIGN=1; not yet run in a game) */
+void campaign_install(void);
+int campaign_console(const char *text, char *out, int size);   /* "!cp ..." test commands; 0 = not ours */
+int campaign_dom_verdict(void *dom, int host_inside);           /* storysync.c (host): -1 no rule, 0 out, 1 in */
+
 /* aisync.c: AI soldiers on clients of a campaign level */
 void aisync_install(void);
 int aisync_console(const char *text, char *out, int size);   /* "!ai ..." test commands; 0 = not ours */
