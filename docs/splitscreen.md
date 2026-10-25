@@ -360,6 +360,26 @@ when they touch, whether the copy's local shots leave pictures only (impact effe
 client), and that the menu option changes the UI string (the select is a stock `select` without a profile
 section).
 
+### Round 18 (2026-10-25, tests: host N100 + client main PC, then the main PC alone)
+
+Drivers: `lab/split_pair.ps1` (`-Mode client`: host on the N100, client on this PC with two virtual pads and the
+profile key `CoopSplitJoin=1`; `-Mode host`: split host here, client on the N100; steps `Here`/`There` console,
+`Pad`, `ShotHere`/`ShotThere`, `WaitLog`), `split_pair_t1.ps1` (split on a client), `split_pair_t2.ps1` (split
+host: time power, AI kill, item), `split_run.ps1 -Dll`.
+
+| Item | Result | Evidence |
+|---|---|---|
+| Main menu with a profile without `CoopSplitJoin` | **was broken by round 17**: the comparison of a missing key (null) with a string stopped the main menu's `OnInit` (and the AutoTest host after it). Fixed (key read into a string first), committed aa022f4 | N100 host log `20261025-212425`: `can't perform math operation '==' 'null' 'string' in '$.OnInit'` |
+| Menu option | works: Co-op frame, pad 1 down x5 to "Second player on pad 2", right: UI string and profile key 0 -> 1 -> 0, the row shows Вкл./Откл. The frame no longer writes the key by itself (it did on its own `OnInit`) | `20261025-225133` (`shot058.png`, console answers) |
+| Client joins with the option on | the client turns split screen on and streams pad 2; the host makes the client's player 2 (`player 2 networked as a puppet`, net id 2201) | `20261025-213310` both logs |
+| A player 2 made while a client is connected | **crashed the client** (0x447a5c, its first-person weapons): the server's entity init announces a new entity (CREATE_ENT 0x42a, sent at 0x654bee) with its node's name/class/template, "player" for player 2, so the client made a campaign `player` of it. A client joining later is fine (join list: the create descriptor's multiplayer class, round 15). Fix: the announcement's class and template say `player_mp` while player 2 is made. On a host the hook fires (`player 2 announced to the clients as "player_mp" (name "Default", was "player" "player")`); **the client side is not re-tested yet** | client logs `20261025-213310`, `-214537`, `-215305`, `-222038`, `-222711`; host `20261025-224245` |
+| Removing player 2 (client left, split off, tests) | **hung or crashed the game** in single player and on a server: its sniper crosshair object (vtable 0xd9b9f8) and other crosshair objects went on updating (`__purecall`), then its weapons (`0x5460d0` -> crash 0x81f09e). Fix: the body and the crosshair objects (found at their update by their node) are removed first; the weapons, holster and hands (recorded at player 2's spawn sites) are not updated any more and hidden until the level ends; a light-pass guard for instances without node (0x98b840). Single player and a split host now go on after the removal (`TS_SPLIT_DROPAT=25/40`; player 2 is made again 8 s later) | `20261025-215305` (host hang, watchdog), `-220418`, `-220747`, `-221623`, `-223352`, `-223839` (failing), `-224245`, `-225308` (fixed) |
+| Client's copy of player 2 | its weapon set-up runs later on a client (the player's network start, 0x41ec5f), outside the spawn: the set-up now always runs as player 2's. **Not reached in a run yet** (the client crashed before) | - |
+
+Still to run (needs the N100): split on a client end to end (copy, halves, HUD, weapon, hits, items, messages,
+death, jitter), and the split host + client checks (player 2's time power, its AI kill, its pick-up) with
+`split_pair_t2.ps1`.
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
