@@ -267,7 +267,38 @@ returned 0 or `multiplayer1`); `$ui.GetUserVar(key)` reads profile keys.
 - Rebel soldiers of the level (friendly in the campaign) and players on a server: which faction a
   multiplayer player belongs to was not checked.
 
-## 9. Open questions
+## 9. Mod messages (the mod's own data between the machines)
+
+The mod sends its own messages inside the game's network messages instead of opening a second
+connection, so they share the game's connection, reliability and ordering, and a joining client needs
+nothing extra. Built and checked against the executable only; not yet run in a game.
+
+- **Carrier**: the game's per-peer message sender with the generic small-message format the game uses for
+  its own "notify" events: `{ codec index, 0x40, size = 6 + payload, 16-bit subtype, payload }`, at most
+  250 payload bytes, reliable. Message id `0x7C01` (the game's ids are `0x3E8`-`0x4FA`; ids from `0x8000`
+  up cannot be used because the reader stops at a negative id).
+- **Routes**: a client talks only to the server; the server talks to each joined client. A message from a
+  client meant for everyone goes to the server, which passes it on.
+- **Receiving**: the mod puts its own function in front of the game's message handler of the server's and
+  of the client's network object; every message that is not the mod's goes on to the game unchanged. This
+  is always on (`TS_COOPNET=0` leaves the game's handlers alone).
+- **Subtypes**: `1` = run this SSL text on the receiving machine; `2` = (client to server) run it on every
+  machine: the server runs it and passes it on to the other clients as `1`. Received SSL runs in the
+  per-frame script tick, like the test console, and is logged as
+  `coopnet: ran from peer N: <text> -> <result>`. It runs only with `TS_COOPNET=1` or the test console
+  (`TS_CONSOLE`); otherwise it is logged and dropped.
+- **Test console** (section 7, `TS_CONSOLE`): a line starting with `@all ` runs the rest here and on every
+  other machine, `@peers ` only on the other machines, `@srv ` on the server. The reply is `sent to N`
+  (plus the local result for `@all`), `not in a network game`, or `too long`.
+
+| Environment | Effect |
+|---|---|
+| `TS_COOPNET=1` | run SSL received from the other machines (also on with `TS_CONSOLE`) |
+| `TS_COOPNET=0` | no mod messages at all (the game's handlers stay as they are) |
+
+The log shows the first 8 messages sent and received (`coopnet: sent sub ...`, `coopnet: got sub ...`).
+
+## 10. Open questions
 
 - On one test PC with two GPUs (game window on the integrated Intel GPU) the Direct3D device is lost at
   every map load (also a map loaded offline from the console, once already the main menu level) and

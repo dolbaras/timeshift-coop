@@ -20,6 +20,14 @@ void compat_on_d3d(void *d3d);   /* IDirect3D9 from Direct3DCreate9 */
 /* console.c: script runtime access (test console TS_CONSOLE=<port>, script error log) */
 void console_install(void);
 const char *ts_script_run(const char *text, char *out, int size);
+int ts_tick_install(void);   /* the per-frame script tick hook; 1 = in place */
+typedef void (*ts_ssl_done)(int tag, const char *text, const char *result);
+int ts_ssl_queue(const char *text, ts_ssl_done done, int tag);   /* any thread; runs in the script tick */
+
+/* coopnet.c: the mod's own messages over the game's network messages */
+void coopnet_install(void);
+int coopnet_send(int target, unsigned short sub, const void *data, int len);   /* main thread */
+int coopnet_console(const char *text, char *out, int size);   /* "@all/@peers/@srv <ssl>"; 0 = not ours */
 
 /* netfix.c: the game's own multiplayer on today's networks */
 void netfix_install(void);

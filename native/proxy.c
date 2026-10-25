@@ -309,6 +309,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         compat_install();
         testmode_install();
         console_install();
+        coopnet_install();
         netfix_install();
         gamepad_install();
         char v[16];
