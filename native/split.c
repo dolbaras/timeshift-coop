@@ -1764,9 +1764,39 @@ static int TSCALL hook_give(void *item, void *who, int x)
  * item's node shown, item +0x270 bit 1 clear). */
 static void (TSCALL *real_item_update)(void *);
 static int host_items_off;   /* TS_SPLIT_HOSTITEMS=0: player 2 takes no items on a server */
+/* A network game's item filter (item vtable +0x248, 0x4f5240) looks the taker up in the game's player table
+ * ([0xfcab18] +0xfc, 0x84-byte records, +0x40 a handle of the player, 0x5fb6f0) and refuses a player without a
+ * record (an empty record: "no player", 0x428f30). Player 2 has none (the table is the network players'), so a
+ * server's items refused it. For player 2's take the handle of player 1's record names player 2 (the checks then
+ * read player 2: alive, grenade count, energy) and is put back right after. Returns the handle, or NULL. */
+static BYTE **p1_record_handle(void)
+{
+    BYTE *t = *(BYTE **)0xfcab18, *p1 = PLAYER_B != p2 ? PLAYER_B : (as2.depth ? as2.pb : NULL);
+    if (!t || !p1 || IsBadReadPtr(t, 0x104))
+        return NULL;
+    BYTE *rec = *(BYTE **)(t + 0xfc);
+    int n = *(int *)(t + 0x100);
+    for (int i = 0; rec && i < n && i < 64; i++) {
+        BYTE **h = *(BYTE ***)(rec + i * 0x84 + 0x40);
+        if (h && !IsBadReadPtr(h, 4) && *h == p1)
+            return h;
+    }
+    return NULL;
+}
+
+static BYTE *upd_items[64];   /* (tests: items seen updating, for TS_SPLIT_ITEMTEST=grab) */
+static int n_upd_items;
+
 static void TSCALL hook_item_update(BYTE *item)
 {
     real_item_update(item);
+    if (n_upd_items < 64) {
+        int k = 0;
+        while (k < n_upd_items && upd_items[k] != item)
+            k++;
+        if (k == n_upd_items)
+            upd_items[n_upd_items++] = item;
+    }
     BYTE *gm = *(BYTE **)0xfcab34, *node = *(BYTE **)(item + 0x230);
     int md = gm ? *(int *)(gm + 0x3c) : 0, kind = *(int *)(item + 0x14);
     /* (a server: the loop's network branch, items it has authority over (+0x2c bit 4) that are not of the kinds
@@ -1778,10 +1808,29 @@ static void TSCALL hook_item_update(BYTE *item)
     void **vt = *(void ***)item;
     if (((int (TSCALL *)(void *, void *))vt[0x16c / 4])(item, p2))
         return;   /* (not in reach) */
+    BYTE **h = md == 2 ? p1_record_handle() : NULL, *h_was = h ? *h : NULL;
+    if (h)
+        *h = p2;
     p2_enter();
     int r = ((int (TSCALL *)(void *, void *, int))vt[0x20c / 4])(item, p2, 1);
     p2_leave();
+    if (h)
+        *h = h_was;
     static BYTE *last;   /* (logged once per item in a row) */
+    if (!r && item != last && splitlog > 1) {   /* (tests: which check refused it) */
+        BYTE *p1 = PLAYER_B != p2 ? PLAYER_B : NULL;
+        p2_enter();
+        int c2 = ((int (TSCALL *)(void *, void *, int))vt[0x208 / 4])(item, p2, 1);
+        int d2 = ((int (TSCALL *)(void *, void *))(*(void ***)p2)[0x2a4 / 4])(p2, item);
+        p2_leave();
+        int c1 = p1 ? ((int (TSCALL *)(void *, void *, int))vt[0x208 / 4])(item, p1, 1) : -1;
+        int d1 = p1 ? ((int (TSCALL *)(void *, void *))(*(void ***)p1)[0x2a4 / 4])(p1, item) : -1;
+        int f2 = (unsigned char)((int (TSCALL *)(void *, void *))vt[0x248 / 4])(item, p2);
+        int f1 = p1 ? (unsigned char)((int (TSCALL *)(void *, void *))vt[0x248 / 4])(item, p1) : -1;
+        ts_log("split: item %p vtable %08lx: check +0x208 player 2 %d player 1 %d; +0x248 %d %d; player +0x2a4 %d %d; +0x3f0 %.2f %.2f;"
+               " item +0x10c %d +0x270 %08lx", (void *)item, (DWORD)vt, c2, c1, f2, f1, d2, d1, *(float *)(p2 + 0x3f0),
+               p1 ? *(float *)(p1 + 0x3f0) : -1.0f, ((int (TSCALL *)(void *))vt[0x10c / 4])(item), *(DWORD *)(item + 0x270));
+    }
     if (r || item != last)
         ts_log("split: item %p (\"%.32s\", kind %d, game mode %d) in player 2's reach: %s", (void *)item,
                node && !IsBadReadPtr(*(char **)(node + 0x28), 1) ? *(char **)(node + 0x28) : "?", kind, md,
@@ -2658,6 +2707,30 @@ static void item_test(BYTE *p1)
             return;
         }
         item_next = 0;
+        if (strcmp(what, "grab") == 0 && pp) {   /* (the nearest item seen updating, with its node shown) */
+            BYTE *best = NULL;
+            float bd = 1e9f;
+            for (int i = 0; i < n_upd_items; i++) {
+                BYTE *it = upd_items[i], *nd = !IsBadReadPtr(it, 0x234) ? *(BYTE **)(it + 0x230) : NULL;
+                if (!nd || IsBadReadPtr(nd, 0x74) || (*(DWORD *)(nd + 4) & 3))
+                    continue;
+                float *q = (float *)(nd + 0x68), dx = q[0] - pp[0], dy = q[1] - pp[1], dz = q[2] - pp[2], d = dx * dx + dy * dy + dz * dz;
+                if (d < bd)
+                    bd = d, best = it;
+            }
+            if (best) {
+                BYTE *nd = *(BYTE **)(best + 0x230);
+                float pos[3], dir[3] = {-0.89f, -0.45f, 0};
+                memcpy(pos, nd + 0x68, 12);
+                pos[1] += 0.3f;
+                put_player(p2, pos, dir);
+                ts_log("split: item test: player 2 put on item %p (\"%.32s\", kind %d) at %.2f %.2f %.2f (%.1f m from player 1)", (void *)best,
+                       !IsBadReadPtr(*(char **)(nd + 0x28), 1) ? *(char **)(nd + 0x28) : "?", *(int *)(best + 0x14), pos[0], pos[1],
+                       pos[2], sqrtf(bd));
+            } else
+                ts_log("split: item test: no item seen (%d recorded)", n_upd_items);
+            return;
+        }
         if (strcmp(what, "nearitems") == 0 && pp) {
             /* (the world's scene nodes (world [0xfcacdc] +0x2ad0, 0xa8c nodes of 0x238 bytes, template at +0x1d0,
              * its name at +0x30): the pick-ups among them recorded too) */
