@@ -1199,6 +1199,12 @@ static int __stdcall hook_dispatch(BYTE *task, int msg, int a, int b)
     /* Friendly fire: message 0x4e3 is a hit on a player, delivered after the shot (outside the shooter's update);
      * its record (a) holds the shooter's scheduler id at +8 (0x947c10 finds the object). A hit by player 2 or its
      * weapons on player 1, or by player 1's on player 2, goes nowhere. */
+    if (msg == 0x4e3 && p2 && a && splitlog && task != p2 && task != p1_of() && !IsBadReadPtr((void *)a, 12)) {
+        BYTE *by = find_task((void *)0xecb7f8, ((int *)a)[2]);
+        static int n;
+        if (is_p2_object(by) && n++ < 30)   /* (tests: player 2's hits on others, with their net ids) */
+            ts_log("split: player 2 hit %p (net id %d)", (void *)task, *(int *)(task + 0x18));
+    }
     if (msg == 0x4e3 && p2 && a && (task == p2 || task == p1_of()) && !IsBadReadPtr((void *)a, 12)) {
         BYTE *by = find_task((void *)0xecb7f8, ((int *)a)[2]);
         if (!allow_ff && ((task == p2 && is_p1_object(by)) || (task != p2 && is_p2_object(by)))) {
@@ -1666,6 +1672,40 @@ static int install_give_hooks(void)
     return n;
 }
 
+/* Tests (TS_SPLITLOG on a network client or host): the remote players (player_mp, vtable 0xd74c28, update slot
+ * +0x13c = 0x42fa90) logged every 5 s each: net id, owner (+0x30), position, life, weapon slot. */
+static void (TSCALL *real_mp_update)(void *);
+static void TSCALL hook_mp_update(BYTE *o)
+{
+    real_mp_update(o);
+    static struct { BYTE *o; DWORD t; } seen[8];
+    DWORD now = GetTickCount();
+    int k = 0;
+    while (k < 8 && seen[k].o && seen[k].o != o)
+        k++;
+    if (k == 8)
+        k = 0;
+    if (seen[k].o == o && now - seen[k].t < 5000)
+        return;
+    seen[k].o = o, seen[k].t = now;
+    BYTE *n = *(BYTE **)(o + 0x230);
+    /* (tests on a client, TS_SPLIT_WATCH=1: the local player is put 4 m from the host's player 2 (the remote player
+     * without an owner, -2) facing it, every 5 s, so the client's frames show it) */
+    static int watch = -1;
+    char wv[8];
+    if (watch < 0)
+        watch = ts_env("TS_SPLIT_WATCH", wv, sizeof wv) && wv[0] == '1';
+    BYTE *me = PLAYER_B, *mn = me ? *(BYTE **)(me + 0x230) : NULL;
+    if (watch && *(int *)(o + 0x30) == -2 && n && mn && *(DWORD *)me == PLAYER_VTBL) {
+        float *q = (float *)(n + 0x68), pos[3] = {q[0] + 4.0f, q[1] + 0.3f, q[2]}, dir[3] = {-1, 0, 0};
+        ((place_t)(*(void ***)me)[SLOT_PLACE])(me, pos, dir, 1);
+        ts_log("split: watching the host's player 2 from 4 m");
+    }
+    float *p = n && !IsBadReadPtr(n, 0x74) ? (float *)(n + 0x68) : NULL;
+    ts_log("split: remote player %p net id %d owner %d at %.2f %.2f %.2f life %.1f flags %08lx", (void *)o, *(int *)(o + 0x18),
+           *(int *)(o + 0x30), p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, *(float *)(o + 0x234), *(DWORD *)(o + 0x39c));
+}
+
 /* The destructor clears both player pointers: player 2's must leave them on player 1. */
 static void *TSCALL hook_dtor(void *pl, int flags)
 {
@@ -2002,6 +2042,16 @@ static void spawn_p2(BYTE *p1)
     BYTE *gm = *(BYTE **)0xfcab34;
     if (!net_local && gm && *(int *)(gm + 0x3c) == 2) {
         unsigned r = *(unsigned *)(e + 0x2c);
+        /* (the player's network start, vtable +0x44 = 0x420300 (kind, motion, 0): the server's motion writer
+         * (+0x34) and the regular-update bits, which the server's player creation (0x697620) gives player 1;
+         * without it the clients' player_mp of player 2 stood at its spawn spot) */
+        ts_log("split: network start of player 2: player 1 motion %p kind %d, player 2 motion %p kind %d",
+               *(void **)(p1 + 0x34), *(int *)(p1 + 0x38), *(void **)(e + 0x34), *(int *)(e + 0x38));
+        if (!*(void **)(e + 0x34) && (DWORD)(*(void ***)e)[0x44 / 4] == 0x420300) {
+            p2_enter();
+            ((void (TSCALL *)(void *, int, int, int))(*(void ***)e)[0x44 / 4])(e, *(int *)(p1 + 0x38), 1, 0);
+            p2_leave();
+        }
         *(unsigned *)(e + 0x2c) |= 0x10u;
         ts_log("split: player 2 networked as a puppet for clients: net id %d, sync flags %08x, role %08x -> %08x (player 1 %08x)",
                *(int *)(e + 0x18), *(unsigned *)(e + 0x98), r, *(unsigned *)(e + 0x2c), *(unsigned *)(p1 + 0x2c));
@@ -2652,6 +2702,8 @@ void split_install(void)
         }
     fx_off = ts_env("TS_SPLIT_FXSHARED", v, sizeof v) && v[0] == '1';
     hudlog = splitlog > 0;
+    if (splitlog && *(DWORD *)(0xd74c28 + 0x13c) == 0x42fa90)
+        patch_slot(0xd74c28, 0x13c / 4, (void *)hook_mp_update, (void **)&real_mp_update);
     install_name_hook();   /* (also without split screen: player 1 with a pad) */
     if (ts_env("TS_SPLIT_NETLOCAL", v, sizeof v))
         net_local = v[0] != '0';

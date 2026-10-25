@@ -303,12 +303,27 @@ Host started by the lab recipe (`AutoTest="host"`, `AutoTestMap="ts2_city_part02
 |---|---|---|
 | Respawn prompt and other "press {button}" prompts | the game picks the _PC strings when it loads the tables (`0x6901d0`: a key ending in _PC replaces the plain one), so the text stays; the button comes from the command's first binding (`0x707e30` copies slot 0 of the command's entry in the GAME context, a HUD element's naming method vtable +0x110 = `0x709bf0` names it as CTRL_<key name>). When the player whose half is drawn last used a pad (`gamepad_pad_active`, gamepad.c: pad input newer than keyboard/mouse input; player 2 always), the naming gets the command's pad binding (slot 3/4) instead. The pad codes are named PAD_* (gamepad.c), and CTRL_PAD_* strings in all 9 tables give "RT", "RB", "X", "D-pad up" ... | `20261025-182729` `shot141.png` ("Нажмите RT, чтобы возродиться сейчас."), `20261025-183014` `shot100/104.png` (time-power hint "нажмите RB"), log (`prompt in view 0 names pad code 0x10d instead of 0x21`: use) |
 
+### Round 15 (2026-10-25, two PCs): split-screen host on the main PC, client on the N100
+
+Driver `lab/split_net.ps1` (split host via the Co-op menu, `TS_SPLIT=1`, virtual pad 2; the N100 joins with its
+own profile identity once player 2 is in; profiles cleaned at the end).
+
+| Item | Result | Evidence |
+|---|---|---|
+| Player 2 on the client | a `player_mp` (net id ~1575, owner -2) by the game's own replication: position follows the host's player 2 (moved 206.83 -> 205.80 on the host, the same on the client a few seconds later; back to its respawn spot after its death), life (76 -> 100 after its respawn), the white suit with its rifle seen from the client (`TS_SPLIT_WATCH=1` puts the client's player 4 m from it). Without a client identity of its own the N100 was refused (UI_NET_ERR_DUPLICATE_PROFILE) | `20261025-190909` and `20261025-191606` client logs (`remote player .. net id 1575 owner -2 at ..`), host logs (`player 2 camera at ..`), `20261025-192307` `client/shot157.png` |
+| Player 2's damage to AI | its hits reach the server's AI like player 1's (`player 2 hit .. (net id 1113)`); AI deaths go to the clients by aisync. A death caused by player 2 was not caught on the client (the soldiers near the start were dead before) | `20261025-192307` log |
+| Player 2's time power on the client | **not synced**: timesync takes the host's power from `$player` (player 1) only, so player 2's freeze runs on the host and is not sent. Needs timesync to read player 2's power controller too (the network agent's file) | `20261025-191606` |
+| Story events | still replayed to the client (sub 21 sent 3, received 3) | `20261025-192307` logs |
+| Split screen on a client | **not in the first release**: the server knows one player per connection (0x429 creates one `player_mp` per client slot); a second player from one client would need a second connection from the process or a mod-message player driven by the client and made on the host | - |
+| Plain join over the LAN (host N100 on part03, client main PC) | first try: the host closed the connection 24 s after the join while the client still loaded the level (`local close`, "client 1 left before it ran the level"); second try: joined, in the level (the client was shot dead at the start and saw the respawn countdown) | `20261025-193624` (dropped), `20261025-193931` `shot100-155.png` |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
   triggers, checkpoints, cutscenes, death and restart see player 1 only. The same audit as for network co-op
   (`player-audit.md`).
-- **Split screen with the network**: host side done (round 12), the client test is open.
+- **Split screen with the network**: player 2 of a split host is seen on clients (round 15); its time powers are not
+  sent (timesync reads player 1 only). Split screen on a client is not in the first release.
 - Hint boxes are one for both halves: a hint naming a button names player 1's device when both see it.
 - Old notes on the network (round 5 goal 6): What blocks it: the
   network co-op runs the multiplayer game mode (2) and the multi-thread frame, split screen needs the
