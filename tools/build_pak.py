@@ -54,12 +54,24 @@ class RecipeError(Exception):
 
 
 def mod_version():
-    """TS_VERSION from native/ts.h: the DLL and the data carry the same version."""
-    with open(os.path.join(MOD, "native", "ts.h"), encoding="latin-1") as f:
-        m = re.search(r'#define\s+TS_VERSION\s+"([^"]+)"', f.read())
-    if not m:
-        raise RecipeError("TS_VERSION not found in native/ts.h")
-    return m.group(1)
+    """TS_VERSION from native/ts.h: the DLL and the data carry the same version.
+
+    An installed copy (<game>/coop/tools, coop/data) has no native/: there it is coop/version.txt, which
+    tools/package.ps1 writes from ts.h (the one source of the version)."""
+    h = os.path.join(MOD, "native", "ts.h")
+    if os.path.isfile(h):
+        with open(h, encoding="latin-1") as f:
+            m = re.search(r'#define\s+TS_VERSION\s+"([^"]+)"', f.read())
+        if not m:
+            raise RecipeError("TS_VERSION not found in native/ts.h")
+        return m.group(1)
+    v = os.path.join(MOD, "version.txt")
+    if os.path.isfile(v):
+        with open(v, encoding="ascii") as f:
+            s = f.readline().strip()
+        if s:
+            return s
+    raise RecipeError("no mod version: neither native/ts.h nor version.txt next to tools/")
 
 
 def anchor_regex(anchor):
