@@ -1423,6 +1423,21 @@ static int msg_hide_view(int v)
 
 static void TSCALL hook_text_draw(BYTE *e, void *arg)
 {
+    if (splitlog > 2 && view == 1) {   /* (tests: the names of the text elements drawn in player 2's view, once each) */
+        static BYTE *seen[64];
+        static int ns;
+        int k = 0;
+        while (k < ns && seen[k] != e)
+            k++;
+        if (k == ns && ns < 64) {
+            seen[ns++] = e;
+            EStr *nm = *(EStr **)(e + 0x24);
+            BYTE *par = *(BYTE **)(e + 0x40);
+            EStr *pn = par ? *(EStr **)(par + 0x24) : NULL;
+            ts_log("split: view 1 draws text %p \"%s\" (parent \"%s\", flags %08lx)", (void *)e,
+                   nm && !IsBadReadPtr(nm, 0x18) ? nm->s : "?", pn && !IsBadReadPtr(pn, 0x18) ? pn->s : "?", *(DWORD *)(e + 0x18));
+        }
+    }
     /* (the multiplayer texts, "mp*": player 1's death and respawn countdown, the server's warm-up; player 1's
      * alone in a network game, not drawn in player 2's half) */
     if (view == 1 && p2) {
@@ -2377,6 +2392,20 @@ static void split_tick(float dt)
     if (stage < 3)
         return;
     install_msg_hook();
+    {   /* In a network game the player's update shows "Waiting for server" (GAME_WAIT_FOR_SERVER, 0x40c5c6) while
+         * its +0x39c bit 1 is clear: the server's "you may play" mark, which the game sets on player 1 only.
+         * Player 2, updated as the local player, showed it all the time (in both halves). Player 2 gets player 1's
+         * bit. */
+        BYTE *gm = *(BYTE **)0xfcab34, *a = PLAYER_B;
+        if (p2 && a && a != p2 && gm && (*(int *)(gm + 0x3c) == 2 || *(int *)(gm + 0x3c) == 3)) {
+            DWORD m1 = *(DWORD *)(a + 0x39c) & 2, m2 = *(DWORD *)(p2 + 0x39c) & 2;
+            static int logged;
+            if (m1 != m2 && logged++ < 4)
+                ts_log("split: player 2's server mark %lx set to player 1's %lx (+0x39c %08lx / %08lx)", m2, m1,
+                       *(DWORD *)(p2 + 0x39c), *(DWORD *)(a + 0x39c));
+            *(DWORD *)(p2 + 0x39c) = (*(DWORD *)(p2 + 0x39c) & ~2u) | m1;
+        }
+    }
     item_test(PLAYER_B != p2 ? PLAYER_B : NULL);
     if (support_check && (int)(GetTickCount() - support_check) >= 0 && p2 && PLAYER_B && PLAYER_B != p2) {
         support_check = 0;

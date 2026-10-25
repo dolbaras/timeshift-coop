@@ -288,14 +288,22 @@ Host started by the lab recipe (`AutoTest="host"`, `AutoTestMap="ts2_city_part02
 | Deaths in a network game | player 1 dies by the multiplayer rules (death screen, respawn countdown, the session's respawn points moved by storysync's checkpoints); player 2, which those rules do not know, is always respawned next to player 1 (before: the "both down" rule called the game's death for player 2, which left it a dead object without HUD). The multiplayer texts (`mp*`: death and respawn countdown) are not drawn in player 2's half | `20261025-175539` `shot128-185.png` (player 1's red death screen and countdown only in its half, player 2 keeps its HUD and weapon), log (`player 1 died in a network game`, `player 2 died: respawned next to player 1`) |
 | Needs the client | player 2 as a `player_mp` on the client (position, weapon, death), its shots and damage on the client, time powers of player 2 seen by the client, story sync gates with three players | - |
 
+### Round 13 (2026-10-25, main PC, co-op host)
+
+| Item | Result | Evidence |
+|---|---|---|
+| "Ожидание сервера." in both halves | its source was player 2: the player's update (`0x40c020`) shows GAME_WAIT_FOR_SERVER while its +0x39c bit 1 is clear, the server's "you may play" mark, which the game sets on player 1 only; player 2, updated as the local player, showed it all the time. Player 2 now gets player 1's mark in a network game. Gone from both halves | `20261025-180342` `shot125-170.png`, log (`player 2's server mark 0 set to player 1's 2`) |
+| Death screen per half | player 1's death screen (red, "Ожидание возрождения", countdown, prompt) only in its half; player 2 respawns next to player 1 at once (no countdown of its own) | `20261025-180342` `shot137/141/145.png` (player 1 dead), `shot161/163.png` (after player 2's death) |
+| Host without split screen | no "Ожидание сервера." during the host's death; the multiplayer death screen and prompt as the game has them | `20261025-180700` `shot137-145.png` |
+| Respawn prompt with a pad | the prompt is GAME_PLAYER_IS_DEAD_MP_FORCE_PC ("Нажмите {PARAM}", {PARAM} the first binding of the fire command: the mouse button); the game has pad variants (GAME_PLAYER_IS_DEAD_MP_FORCE "Отклоните {PARAM}") used on consoles. Not changed yet (the pad's RT does respawn, fire is bound to it) | strings tables |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
   triggers, checkpoints, cutscenes, death and restart see player 1 only. The same audit as for network co-op
   (`player-audit.md`).
 - **Split screen with the network**: host side done (round 12), the client test is open.
-- On the co-op host the text "Ожидание сервера." (waiting for the server) shows in both halves; not checked
-  whether it shows without split screen too.
+- The respawn prompt names the mouse button also when a pad is used (round 13).
 - Old notes on the network (round 5 goal 6): What blocks it: the
   network co-op runs the multiplayer game mode (2) and the multi-thread frame, split screen needs the
   single-thread frame; player 2 is a campaign `player` spawned locally, which the server's entity replication
