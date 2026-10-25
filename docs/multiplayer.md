@@ -428,18 +428,64 @@ soldiers logged by both machines at the same clock seconds (`TS_AIDEBUG`):
 | Update rate | ~9 updates per second per moving soldier (the engine's priority scheduler); standing soldiers only when their animation changes |
 | Stability | 10 minutes (and 9.5 minutes with the default build, no test variables but the diagnostics) with AI updates, AI deaths (script and client fire), client deaths and respawns: no crash on either side |
 
+### Corpses, deaths before a join, names of objects created in play (2026-10-25)
+
+**Corpses.** A death reaches a client as the death state (`0x859090` case 2 -> `[ai+0x290]->vtbl[1]` = `0x8496c0`,
+with `netfix.c`'s empty hit info); without the authority bit that handler shows nothing, so the soldier stood in
+its idle. The visual part is the class's virtual `+0x2e8` (`0x466b90` for the police/soldier classes: hit
+reaction, death animation or ragdoll from the damage; `0x8498c0` "R.I.P." for simpler classes). A client now runs
+it itself for every dead soldier (`AI_FLAGS 0x538` bit `0x20000`, set by the death state on both machines), with
+the authority bit set for that call only and a neutral damage (no attacker, no damage type, a push of 1): the
+soldier falls as a ragdoll where it stands, a few cm from the server's. That call also drops the soldier's weapon
+and grenade pack as pickups; the server's own pickups reach the client through the network, so the client's
+copies (objects the call created that would be networked, `isSyncMP`, but have no net id) are ended at once
+(entity `vtbl+0xc0` = Terminate). Without that the client picked up a duplicate carbine (seen in a run).
+Experiments that did not work: the body component's ragdoll call (`+0x4fc` -> `vtbl+4`, mode 12) with authority
+made the body vanish.
+
+**Dead before the join.** Two paths, both in `aisync.c`:
+- the AI updates carry a "dead on the server" bit (one byte more after the animation ids). A client that gets it
+  for a soldier that lives there gives it the death state and shows the death; a dead soldier gets no more
+  animations from the server. The level's posed corpses `slo_*` (spawned from `SceneSLO/<level>.slo`, saved
+  ragdoll poses, `0x612670`) are ragdolls on both machines from the start, but the server's animation id (175/176)
+  stood them up on clients: they now keep their pose ("a ragdoll already");
+- a client asks for the dead 4 s and 15 s into each level (message 52); the server answers with the names and
+  positions of every dead soldier among the script manager's named objects (53; a dead soldier leaves the
+  scheduler's lists), the client moves a living copy to the server's body and kills it.
+
+**Names.** An object the server creates in play reaches a client as an unnamed replica (objects that exist when a
+client joins do arrive with their names). A client asks for the names of networked objects whose script instance
+has no name (50, net ids), the server answers with the names it has (51), and the client names its instance and
+inserts it into the script manager's sorted list of named objects as CreateObject (`0x8fd2f0`) does (compare
+`0x8fb500`, insert `0x8fb000`). A name a local object already has is not given twice.
+
+| Subtype | Direction | Body |
+|---|---|---|
+| `50` | client -> server | `u8 1, u8 n, i32 net id x n` |
+| `51` | server -> client | `u8 1, u8 n, (i32 net id, u8 len, name) x n` |
+| `52` | client -> server | `u8 1, u8 0` |
+| `53` | server -> client | `u8 1, u8 n, (u8 len, name, f32 x y z) x n` |
+
+Messages stay below 200 payload bytes.
+
+Measured on the N100 pair **(observed)**, level `ts2_city_part02`, run `work\runs\n100pair-20261025-112642` (frames in
+`shots-20261025-112642`), confirmed in `n100pair-20261025-113324`, `-114638`, `-115442`:
+
+| Check | Result |
+|---|---|
+| Death by script on the host (`police3.Die()`) | client: "died: death shown here (animation 181 -> -1)", ragdoll on the ground (client `shot143`, host `shot188`); the client's copies of `_arifle_itm` removed, the server's pickup then named on the client |
+| Death by the client's fire (3 bursts at `police4_v2`) | dead on the host, ragdoll on the client (client `shot181`, host `shot226`); weapon and grenade pack copies removed |
+| Killed on the host before the client joined (`police4_v3`) | client: "is dead on the server: death shown here (animation 175 -> -1)"; in other runs the server had already removed the body and the client did not have it either |
+| Level corpses `slo_0`..`slo_8` | client: "is dead on the server: a ragdoll already", pose kept (before: standing) |
+| `$farm.Create("ai_house_second_room_4")` after the join | client: "object net 2570 named ai_house_second_room_4"; `string($ai_house_second_room_4)` gives the name on both |
+| Earlier experiment `n100pair-20261025-104724` | the visual death with authority turned `police4_v2` into a ragdoll matching the host's (client `shot181`, host `shot204`) |
+
 Still open:
 
-- **Deaths on the client.** The server's soldiers die into ragdolls (body animation id -1). The client gets the
-  death (`IsLive()` false) and the body stays where the server's ragdoll lies, but the client's AI then plays its
-  default idle animation: a standing corpse. The visual part of a death (hit reaction, death animation or
-  ragdoll start: `0x8496c0` -> vtable `+0x2e8` = `0x466b90` -> `+0x394`/`+0x430`) runs only with authority.
 - Soldiers playing scripted sequences (the level-start actors `*_MM`/`*_CR`, body animation id -2 on the server)
   stand in their idle on the client.
-- AI weapon fire effects (muzzle flash, tracers, sounds) are not seen on the client.
-- Soldiers created at run time (`$farm.Create`) reach the client without their name (`""`), so client-side
-  scripts cannot address them.
-- AIs that died before the client joined still stand on the client (`slo_*`, as before).
+- AI weapon fire effects (muzzle flash, tracers, sounds) are not seen on the client (see "AI weapon fire" below).
+- The client's ragdoll falls from its own pose with a neutral push, not with the server's hit direction.
 
 | Environment | Effect |
 |---|---|

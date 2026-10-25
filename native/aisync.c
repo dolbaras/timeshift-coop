@@ -504,8 +504,8 @@ static void names_client(void)
         told[i] = told[--n_told];
     }
     static DWORD last;
-    if (now - last < 500 || !PLAYER)   /* (asks only once the client runs the level) */
-        return;
+    if (now - last < 500 || !ts_coop_feature(COOP_F_ACTIVE))   /* (asks once the host's session info arrived: the */
+        return;                                                /* server answers clients that run the level only) */
     last = now;
     AskMsg m;
     m.b[0] = NPROTO;
@@ -662,8 +662,9 @@ static void kill_here(char *ai)
 }
 
 /* Dead before the join: AIs that died on the server before a client loaded the level stand alive on the client
- * (the death was a one-time message). A client asks for the list of the dead (52) a few seconds into each level;
- * the server answers with the names and positions of every dead AI it has (53, several messages when long), from
+ * (the death was a one-time message). A client asks for the list of the dead (52) when the host's session info has
+ * arrived and 10 s later; the server answers with the names and positions of every dead AI it has (53, several
+ * messages when long), from
  * the script manager's named objects (a dead soldier leaves the scheduler's lists). The client puts each of them
  * where the server's body lies, gives it the death state and shows its death. */
 #define SUB_DEAD_ASK 52
@@ -781,7 +782,8 @@ static void on_message(int peer, unsigned short sub, const unsigned char *d, int
         on_dead(peer, sub, d, len);
 }
 
-/* client: ask for the dead 4 s and 15 s after its player appears in a level */
+/* client: ask for the dead when the host's session info has arrived (the server talks to a client only once it
+ * runs the level) and again 10 s later */
 static void dead_ask_tick(void)
 {
     static char level[64];
@@ -789,7 +791,7 @@ static void dead_ask_tick(void)
     static int asked_n;
     char lvl[64];
     snprintf(lvl, sizeof lvl, "%.63s", (const char *)0xfcabc8);
-    if (!PLAYER) {
+    if (!PLAYER || !ts_coop_feature(COOP_F_ACTIVE)) {
         since = 0;
         return;
     }
@@ -799,7 +801,7 @@ static void dead_ask_tick(void)
         asked_n = 0;
     }
     DWORD age = GetTickCount() - since;
-    if ((asked_n == 0 && age > 4000) || (asked_n == 1 && age > 15000)) {
+    if ((asked_n == 0 && age > 500) || (asked_n == 1 && age > 10000)) {
         unsigned char b[2] = {NPROTO, 0};
         coopnet_send(-1, SUB_DEAD_ASK, b, 2);
         asked_n++;
@@ -929,6 +931,35 @@ int aisync_console(const char *text, char *out, int size)
     if (!strcmp(cmd, "kill")) {
         kill_here(ai);
         snprintf(out, size, "death state: fl %x hp %.2f", *(unsigned *)(ai + AI_FLAGS), *(float *)(ai + 0x234));
+    } else if (!strcmp(cmd, "wpn")) {   /* the soldier's weapon holder (+0x520) and its current weapon (+0x38) */
+        char *h = *(char **)(ai + 0x520);
+        int **w = h && !IsBadReadPtr(h, 0x40) ? *(int ***)(h + 0x38) : NULL;
+        char *wo = w && !IsBadReadPtr(w, 8) ? (char *)*w : NULL;
+        snprintf(out, size, "holder %p vt %p; +38 %p -> %p vt %p; holder dwords %08x %08x %08x %08x", h,
+                 h ? *(void **)h : NULL, w, wo, wo && !IsBadReadPtr(wo, 4) ? *(void **)wo : NULL,
+                 h ? *(unsigned *)(h + 0x30) : 0, h ? *(unsigned *)(h + 0x34) : 0, h ? *(unsigned *)(h + 0x3c) : 0,
+                 h ? *(unsigned *)(h + 0x40) : 0);
+    } else if (!strcmp(cmd, "strikes")) {   /* the strike manager (+0x530): +0xc count, entries at +0x14 (8 bytes) */
+        char *sm = *(char **)(ai + 0x530);
+        int n = sm ? *(int *)(sm + 0xc) : -1, k = snprintf(out, size, "strikes %p count %d:", sm, n);
+        for (int i = 0; sm && i < n && i < 8 && k < size - 120; i++) {
+            void **e = *(void ***)(sm + 0x14 + i * 8);
+            void **vt = e && !IsBadReadPtr(e, 4) ? (void **)*e : NULL;
+            k += snprintf(out + k, size - k, " [%d] %p vt %p (+10 %p +18 %p +50 %p)", i, e, vt, vt ? vt[4] : NULL,
+                          vt ? vt[6] : NULL, vt ? vt[0x14] : NULL);
+        }
+    } else if (!strcmp(cmd, "fire")) {   /* "!ai fire <ai> [slot]": strike entry vtbl+0x10(target) aimed at my player */
+        char *sm = *(char **)(ai + 0x530), *me = PLAYER, *pn = me ? *(char **)(me + E_NODE) : NULL;
+        int slot = (int)push;
+        void **e = sm && slot >= 0 && slot < *(int *)(sm + 0xc) ? *(void ***)(sm + 0x14 + slot * 8) : NULL;
+        if (!e || !pn)
+            return snprintf(out, size, "no strike %d or no player", slot), 1;
+        float tgt[3] = {*(float *)(pn + 0x68), *(float *)(pn + 0x6c) + 1.5f, *(float *)(pn + 0x70)};
+        unsigned *role = (unsigned *)(ai + E_ROLE), saved = *role;
+        *role |= 4;
+        ((void (TSCALL *)(void *, float *))((void **)*e)[4])(e, tgt);
+        *role = (*role & ~4u) | (saved & 4);
+        snprintf(out, size, "fired strike %d at %.1f %.1f %.1f", slot, tgt[0], tgt[1], tgt[2]);
     } else if (!strcmp(cmd, "show")) {
         show_death(ai, push, 1);
         snprintf(out, size, "death shown: animation %d -> %d", before, node ? anim_id(node) : -9);

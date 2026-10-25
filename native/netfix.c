@@ -203,10 +203,49 @@ static void saves_install(void)
         ts_log("net: save check not found (other exe), saves stay single-player only");
 }
 
+/* ---- connection events in the log ----
+ * The network layer (net::PEER_NETWORK, vtable 0xdb5754) reports connects, leaves and lost connections through
+ * its PollEvent (+0x54, 0x769b20: {type, peer, reason text, reason length, ...}; type 10 = data) and the server
+ * drops a peer with Kick (+0x20, 0x76a060: thiscall (peer, reason text), ret 8). Both are logged (data events
+ * not), so a client that drops out of a session says why on both machines. */
+#define PEERNET_VT 0xdb5754
+typedef int *(__attribute__((thiscall)) *poll_t)(void *);
+typedef void (__attribute__((thiscall)) *kick_t)(void *, int, const char *);
+static LONG n_net_events;
+
+static int *__attribute__((thiscall)) hook_poll(void *self)
+{
+    int *e = ((poll_t)0x769b20)(self);
+    if (e && e[0] != 10 && InterlockedIncrement(&n_net_events) <= 200) {
+        const char *r = (const char *)e[2];
+        int n = e[3] > 0 && e[3] < 200 && r && !IsBadReadPtr(r, e[3]) ? e[3] : 0;
+        ts_log("net: event %d (%s) peer %d%s%.*s", e[0],
+               e[0] == 1 ? "connected" : e[0] == 2 || e[0] == 6 ? "connection lost" : e[0] == 3 ? "connect request"
+               : e[0] == 4 ? "peer joined" : e[0] == 5 ? "peer left" : e[0] == 7 ? "closed by the host" : "?",
+               e[1], n ? ", reason: " : "", n, n ? r : "");
+    }
+    return e;
+}
+
+static void __attribute__((thiscall)) hook_kick(void *self, int peer, const char *reason)
+{
+    if (InterlockedIncrement(&n_net_events) <= 200)
+        ts_log("net: kick peer %d (%s)", peer, reason && !IsBadReadPtr(reason, 4) ? reason : "");
+    ((kick_t)0x76a060)(self, peer, reason);
+}
+
+static void events_install(void)
+{
+    void *p = (void *)0x769b20, *hp = (void *)hook_poll, *k = (void *)0x76a060, *hk = (void *)hook_kick;
+    if (!ts_patch_bytes(PEERNET_VT + 0x54, &p, &hp, 4) || !ts_patch_bytes(PEERNET_VT + 0x20, &k, &hk, 4))
+        ts_log("net: connection events not found (other exe)");
+}
+
 void netfix_install(void)
 {
     saves_install();
     ai_death_install();
+    events_install();
     real_sendto = (sendto_t)ts_patch_ws2("sendto", (void *)hook_sendto);
     char v[64];
     if (ts_env("TS_PORT_SHIFT", v, sizeof v) && (port_shift = atoi(v)) != 0)

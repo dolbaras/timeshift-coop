@@ -42,6 +42,7 @@
 #define SLOT_SIZE 0xa4                       /* slot: +0 client id (0 = the server), +8 flags */
 #define SLOT_READY 0x80                      /* (set when the joiner gets the world / says ready) */
 #define SLOT_JOINED 0x100                    /* (set when the server accepted the connection) */
+#define SLOT_INGAME 1                        /* (set once the client has loaded the level and runs it) */
 #define MODE_SERVER 2
 #define MODE_CLIENT 3
 #define MODE_DEDICATED 4
@@ -149,9 +150,12 @@ static int send_msg(int target, int except, unsigned short sub, const void *data
         if (!s)
             break;
         int id = *(int *)s, fl = *(int *)(s + 8);
-        int want = target >= 0 ? id != me
+        /* (a server sends to a client only once it runs the level: messages that reached a client while it was
+         * still loading came with lost connections, "server closed", in about half of the joins on the N100) */
+        int ingame = client || (fl & SLOT_INGAME);
+        int want = target >= 0 ? id != me && ingame
                  : client ? id == 0   /* (the server is client id 0 on a client, as 0x6fb8e0 finds it) */
-                 : id != me && (fl & (SLOT_JOINED | SLOT_READY)) == (SLOT_JOINED | SLOT_READY);
+                 : id != me && ingame && (fl & (SLOT_JOINED | SLOT_READY)) == (SLOT_JOINED | SLOT_READY);
         if (want && id != except) {
             send_to_slot(s, &m);
             n++;
