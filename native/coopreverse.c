@@ -530,6 +530,14 @@ __attribute__((used)) int crev_key(char *pl)
     return 1;
 }
 
+/* The power start gate (timesync.c's tsync_may_start, 0x43e1b0: the reverse key's usual way) for mode 2. */
+int coopreverse_key(void)
+{
+    if (!active() || !PLAYER)
+        return -1;
+    return crev_key(PLAYER) ? 0 : 1;
+}
+
 extern void crev_thunk(void) __asm__("crev_thunk");
 __asm__(".text\n"
         ".globl crev_thunk\n"

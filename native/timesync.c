@@ -163,6 +163,11 @@ __attribute__((used)) int tsync_may_start(int mode)
         TLOG("timesync: local %s refused, a co-op reverse runs", mode_name(mode));
         return 0;
     }
+    if (mode == 2) {   /* coopreverse.c (TS_COOP_REVERSE): its reverse key rule decides (-1: not active) */
+        int r = coopreverse_key();
+        if (r >= 0)
+            return r;
+    }
     if (mode == 2 && !allow_reverse) {
         TLOG("timesync: local reverse refused (not shared in co-op yet)");
         return 0;

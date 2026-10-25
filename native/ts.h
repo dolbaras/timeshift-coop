@@ -55,6 +55,7 @@ int timesync_busy(void);
  * (TS_COOP_REVERSE=1; not yet run in a game) */
 void coopreverse_install(void);
 int coopreverse_busy(void);                                       /* a co-op reverse runs now */
+int coopreverse_key(void);   /* timesync.c, a reverse start of this machine's player: -1 not ours, 0 refuse, 1 engine */
 int coopreverse_console(const char *text, char *out, int size);   /* "!rv ..."; 0 = not ours */
 
 /* storysync.c: the campaign story in co-op (host runs it, clients replay it; exits, checkpoints; TS_STORYSYNC) */
