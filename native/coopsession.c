@@ -36,8 +36,11 @@
  *   40 server -> client  u8 proto (1), u8 flags (COOP_F_*), u8 difficulty (0-2, 255 = not set),
  *                        u8 max players, u8 len, version[len]
  *   41 client -> server  u8 proto, u8 result (0 = same version, 1 = other version), u8 len, version[len]
- * The server sends 40 to every client whose slot is joined and ready, again every 3 s until 41 arrives
- * (5 times at most).
+ *   42 client -> server  u8 proto, u8 0: "send me 40" (a client that runs the level and has no session info yet)
+ * The server sends 40 once when a client's slot is joined and ready (the client may still be loading the level)
+ * and answers every 42; a client asks every 3 s (20 times at most) from the moment its player exists. Blind
+ * repeats to a loading client lost the connection in a test.
+ * TS_COOP_VERSION=<v> (lab): this machine says it has version <v> (tests the version check).
  *
  * TS_COOP=0: none of this (no rule patches, no messages).
  */
@@ -79,14 +82,17 @@
 
 #define SUB_SESSION 40
 #define SUB_ACK 41
+#define SUB_ASK 42                           /* client -> server: "send me the session info" (u8 proto, u8 0) */
 #define SUB_LAST 49
 #define PROTO 1
-#define RESEND_MS 3000
-#define MAX_SENDS 5
+#define ASK_MS 3000                          /* client: ask again every 3 s until the info arrives */
+#define MAX_ASKS 20
+#define ANSWER_MS 90000                      /* server: "never answered" after 90 s */
 #define MAX_PEERS 32
 #define VER_MAX 40
 
 static int enabled, ff_off = 1, rules_off = 1;
+static char my_version[VER_MAX + 1] = TS_VERSION;   /* (TS_COOP_VERSION: lab test of the version check) */
 static int host_flags, host_difficulty = 255, host_maxplayers;
 static int last_role = -1;
 static char last_level[64];
@@ -96,10 +102,11 @@ static DWORD session_start;
 static volatile LONG got_session, session_seq;
 static int srv_flags, srv_difficulty = 255, srv_maxplayers;
 static char srv_version[VER_MAX + 1];
-static int handled_seq, client_applied, client_left, client_warned;
+static int handled_seq, client_applied, client_left, client_warned, client_asks;
+static DWORD client_asked_at;
 
 /* server: one record per client id */
-static struct { int id, sends, acked; DWORD at; } peers[MAX_PEERS];
+static struct { int id, sends, acked, warned; DWORD at; } peers[MAX_PEERS];
 static int n_peers;
 
 static LONG n_logged;
@@ -223,33 +230,30 @@ static char *slot_at(int i)
     return gm && i >= 0 && i < *(int *)(gm + NSLOTS_OFF) ? *(char **)(gm + SLOTS_OFF) + i * SLOT_SIZE : NULL;
 }
 
-static void send_session(int slot, int id)
+static void send_session(int slot, int id, int log)
 {
     unsigned char b[8 + VER_MAX];
-    int vl = (int)strlen(TS_VERSION);
-    if (vl > VER_MAX)
-        vl = VER_MAX;
+    int vl = (int)strlen(my_version);
     b[0] = PROTO;
     b[1] = (unsigned char)host_flags;
     b[2] = (unsigned char)host_difficulty;
     b[3] = (unsigned char)host_maxplayers;
     b[4] = (unsigned char)vl;
-    memcpy(b + 5, TS_VERSION, vl);
+    memcpy(b + 5, my_version, vl);
     int n = coopnet_send(slot, SUB_SESSION, b, 5 + vl);
-    CLOG("coopsession: session info to client %d (slot %d): flags %#x, difficulty %d -> %d", id, slot, host_flags,
+    if (log)
+        CLOG("coopsession: session info to client %d (slot %d): flags %#x, difficulty %d -> %d", id, slot, host_flags,
          host_difficulty, n);
 }
 
 static void send_ack(int result)
 {
     unsigned char b[4 + VER_MAX];
-    int vl = (int)strlen(TS_VERSION);
-    if (vl > VER_MAX)
-        vl = VER_MAX;
+    int vl = (int)strlen(my_version);
     b[0] = PROTO;
     b[1] = (unsigned char)result;
     b[2] = (unsigned char)vl;
-    memcpy(b + 3, TS_VERSION, vl);
+    memcpy(b + 3, my_version, vl);
     coopnet_send(-1, SUB_ACK, b, 3 + vl);   /* (-1 on a client = the server) */
 }
 
@@ -266,15 +270,36 @@ static void on_message(int peer, unsigned short sub, const unsigned char *d, int
         clean_version(srv_version, sizeof srv_version, d + 5, vl);
         InterlockedExchange(&got_session, 1);
         InterlockedIncrement(&session_seq);
+    } else if (sub == SUB_ASK && game_mode() != MODE_CLIENT) {
+        /* (the client runs the level now: the first info, sent when it joined, may have gone to a client that was
+         * still loading; a request is answered at once) */
+        for (int i = 0; i < slot_count(); i++)
+            if (*(int *)slot_at(i) == peer) {
+                int k = 0;
+                while (k < n_peers && peers[k].id != peer)
+                    k++;
+                if (k < n_peers) {
+                    peers[k].sends++;
+                    if (peers[k].acked)
+                        break;
+                }
+                send_session(i, peer, k == n_peers || peers[k].sends == 2);
+                break;
+            }
     } else if (sub == SUB_ACK && game_mode() != MODE_CLIENT && len >= 3) {
         char ver[VER_MAX + 1];
         int vl = d[2] <= len - 3 ? d[2] : len - 3;
         clean_version(ver, sizeof ver, d + 3, vl);
+        int sends = 0, again = 0;
         for (int i = 0; i < n_peers; i++)
-            if (peers[i].id == peer)
+            if (peers[i].id == peer) {
+                again = peers[i].acked;
                 peers[i].acked = 1;
-        CLOG("coopsession: client %d answers: %s (its version %s)", peer, d[1] == 0 ? "same version" : "OTHER VERSION, it leaves",
-             ver);
+                sends = peers[i].sends;
+            }
+        if (!again)
+            CLOG("coopsession: client %d answers: %s (its version %s; session info sent %d time(s))", peer,
+                 d[1] == 0 ? "same version" : "OTHER VERSION, it leaves", ver, sends);
     }
 }
 
@@ -337,18 +362,19 @@ static void server_tick(void)
             if (n_peers == MAX_PEERS)
                 continue;
             peers[n_peers].id = id;
-            peers[n_peers].sends = 0;
-            peers[n_peers].acked = 0;
+            peers[n_peers].sends = 1;
+            peers[n_peers].acked = peers[n_peers].warned = 0;
             peers[n_peers].at = now;
             n_peers++;
             CLOG("coopsession: client %d joined (slot %d)", id, i);
+            /* Once, at once (an old client only gets this one); a client that is still loading the level asks again
+             * when it runs it (42). Repeated sends to a loading client lost the connection on the N100 pair
+             * ("server shut down" on the client) in 2 of 3 runs. */
+            send_session(i, id, 1);
         }
-        if (!peers[k].acked && peers[k].sends < MAX_SENDS && (peers[k].sends == 0 || now - peers[k].at >= RESEND_MS)) {
-            send_session(i, id);
-            peers[k].sends++;
-            peers[k].at = now;
-            if (peers[k].sends == MAX_SENDS)
-                CLOG("coopsession: client %d never answered (no co-op mod, or an old one)", id);
+        if (!peers[k].acked && !peers[k].warned && now - peers[k].at >= ANSWER_MS) {
+            peers[k].warned = 1;
+            CLOG("coopsession: client %d never answered in %d s (no co-op mod, or an old one)", id, ANSWER_MS / 1000);
         }
     }
 }
@@ -356,6 +382,13 @@ static void server_tick(void)
 static void client_tick(void)
 {
     char out[256], ssl[300];
+    if (!got_session && *(void **)0x1095b30 && client_asks < MAX_ASKS
+        && (!client_asks || GetTickCount() - client_asked_at >= ASK_MS)) {   /* (in the level: its player exists) */
+        unsigned char b[2] = {PROTO, 0};
+        coopnet_send(-1, SUB_ASK, b, 2);
+        client_asks++;
+        client_asked_at = GetTickCount();
+    }
     if (!got_session) {
         if (!client_warned && GetTickCount() - session_start > 20000) {
             client_warned = 1;
@@ -368,17 +401,17 @@ static void client_tick(void)
         return;
     handled_seq = seq;
     /* every session message is answered (the host sends it again after each of its level changes) */
-    int same = strcmp(srv_version, TS_VERSION) == 0;
+    int same = strcmp(srv_version, my_version) == 0;
     send_ack(same ? 0 : 1);
     if (!same) {
         if (client_left)
             return;
         client_left = 1;
         char mine[VER_MAX + 1];
-        clean_version(mine, sizeof mine, (const unsigned char *)TS_VERSION, (int)strlen(TS_VERSION));
+        clean_version(mine, sizeof mine, (const unsigned char *)my_version, (int)strlen(my_version));
         snprintf(ssl, sizeof ssl, "$ui.SetStr(\"CoopError\", \"COOP_ERR_VERSION,%s,%s\")\n$ui.LoadLevel(\"menu.lg\")",
                  srv_version[0] ? srv_version : "?", mine);
-        CLOG("coopsession: host version %s, here %s: leaving (%s)", srv_version, TS_VERSION,
+        CLOG("coopsession: host version %s, here %s: leaving (%s)", srv_version, my_version,
              ts_script_run(ssl, out, sizeof out));
         return;
     }
@@ -424,7 +457,7 @@ static void frame(float dt)
         if (!role) {
             InterlockedExchange(&got_session, 0);
             handled_seq = session_seq;
-            client_applied = client_left = client_warned = 0;
+            client_applied = client_left = client_warned = client_asks = 0;
             srv_version[0] = 0;
             n_peers = 0;
         }
@@ -448,6 +481,10 @@ void coopsession_install(void)
         SetEnvironmentVariableA("TS_TIMESYNC", "1");
         ts_log("coopsession: TS_TIMESYNC=1 (default for co-op sessions)");
     }
+    if (ts_env("TS_COOP_VERSION", v, sizeof v)) {   /* (lab: act as another version, to test the check) */
+        clean_version(my_version, sizeof my_version, (const unsigned char *)v, (int)strlen(v));
+        ts_log("coopsession: TS_COOP_VERSION: this machine says it has version %s", my_version);
+    }
     ff_off = !env_on("TS_COOP_FF", 0);
     rules_off = !env_on("TS_COOP_MPRULES", 0);
     enabled = 1;
@@ -461,6 +498,6 @@ void coopsession_install(void)
     int ok_hud = patch_call(SITE_SCOREBAR, SCOREBAR_WANTED, (void *)score_bar_wanted);
     int ok_tick = ts_frame_add(frame), ok_net = coopnet_listen(SUB_SESSION, SUB_LAST, on_message);
     ts_log("coopsession: on, version %s (friendly fire %s %d, warm-up/ready %s %d/3, score bar off %d, session messages %s)",
-           TS_VERSION, ff_off ? "off" : "stock", ok_ff, rules_off ? "off" : "stock", ok_rules, ok_hud,
+           my_version, ff_off ? "off" : "stock", ok_ff, rules_off ? "off" : "stock", ok_rules, ok_hud,
            ok_tick && ok_net ? "on" : "OFF: no script tick or mod messages");
 }

@@ -1331,7 +1331,8 @@ int storysync_console(const char *text, char *out, int size)
     if (strncmp(text, "!ss", 3) != 0)
         return 0;
     char cmd[32] = "", a1[128] = "", a2[64] = "";
-    sscanf(text + 3, "%31s %127s %63s", cmd, a1, a2);
+    int a3 = -1;
+    sscanf(text + 3, "%31s %127s %63s %d", cmd, a1, a2, &a3);
     int role = net_role();
     if (!strcmp(cmd, "state") || !cmd[0]) {
         snprintf(out, size, "storysync %s, role %d, level %s, classes %d (rewritten %d), occupancy %d, replays waiting %d,"
@@ -1363,15 +1364,49 @@ int storysync_console(const char *text, char *out, int size)
             inst_release(&inst);
         return 1;
     }
+    if (!strcmp(cmd, "find")) {   /* "!ss find <event>": the level objects with a handler of that event */
+        int n = snprintf(out, size, "%s:", a1), k = 0, sym = sym_of(a1);
+        for (int i = 0; table && i < TABLE_SIZE && n < size - 80; i++) {
+            ClassRec *r = &table[i];
+            if (r->cls && r->name[0] && rec_event(r, sym) >= 0) {
+                n += snprintf(out + n, size - n, " %s", r->name);
+                k++;
+            }
+        }
+        snprintf(out + n, size - n, " (%d)", k);
+        return 1;
+    }
     if (!strcmp(cmd, "enter") || !strcmp(cmd, "leave")) {
         if (role != MODE_CLIENT)
             return snprintf(out, size, "client only"), 1;
         send_occ(a1, cmd[0] == 'e', SUB_OCC);
         return snprintf(out, size, "told the host: %s %s", cmd, a1), 1;
     }
-    if (!strcmp(cmd, "fire")) {
-        int rc = fire_named(a1, a2, 0, NULL, 0);
+    if (!strcmp(cmd, "fire")) {   /* "!ss fire <object> <event> [0|1]": with a third value, one bool argument */
+        Arg arg = {2, a3 ? 1 : 0, ""};
+        int rc = fire_named(a1, a2, a3 >= 0 ? 1 : 0, &arg, 0);
         return snprintf(out, size, rc < 0 ? "no object %s" : "ran %s.%s", a1, a2), 1;
+    }
+    if (!strcmp(cmd, "goto")) {   /* "!ss goto <domain>": this machine's player into the middle of a domain (lab) */
+        String nm = 0;
+        ObjPtr inst = 0;
+        str_ctor(&nm, a1, -1, 0);
+        mgr_find_obj(MGR, &inst, &nm);
+        str_release(nm);
+        char *dom = inst ? *(char **)((char *)inst + INST_NATIVE) : NULL;
+        if (inst)
+            inst_release(&inst);
+        char *node = PLAYER ? *(char **)(PLAYER + ENT_NODE) : NULL;
+        if (!is_domain(dom) || !node)
+            return snprintf(out, size, "%s is not a domain (or no player)", a1), 1;
+        /* the domain's bounds: +0xc8 min x y z, +0xd4 max x y z (from memory, 2026-10-25) */
+        float *mn = (float *)(dom + 0xc8), *mx = (float *)(dom + 0xd4);
+        float pos[3] = {(mn[0] + mx[0]) / 2, mn[1] + 0.1f, (mn[2] + mx[2]) / 2};
+        float dir[3] = {*(float *)(node + 0x58), *(float *)(node + 0x5c), *(float *)(node + 0x60)};
+        ((void (TSCALL *)(void *, float *, float *, int))(*(void ***)PLAYER)[0x210 / 4])(PLAYER, pos, dir, 1);
+        return snprintf(out, size, "player to %.2f %.2f %.2f (bounds %.2f %.2f %.2f .. %.2f %.2f %.2f, state %x, locks %d)",
+                        pos[0], pos[1], pos[2], mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], *(unsigned *)(dom + DOM_STATE),
+                        *(int *)(dom + DOM_LOCKS)), 1;
     }
     if (!strcmp(cmd, "exit") && role == MODE_SERVER) {
         server_change_level(a1);
@@ -1382,7 +1417,8 @@ int storysync_console(const char *text, char *out, int size)
         restart_at = GetTickCount();
         return snprintf(out, size, "team restart (checkpoint %d)", last_cp), 1;
     }
-    snprintf(out, size, "!ss state | class <obj> | enter/leave <domain> | fire <obj> <event> | exit <level> | restart");
+    snprintf(out, size, "!ss state | class <obj> | find <event> | enter/leave <domain> | fire <obj> <event> [bool] |"
+                        " goto <domain> | exit <level> | restart");
     return 1;
 }
 

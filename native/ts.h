@@ -52,6 +52,7 @@ int storysync_console(const char *text, char *out, int size);   /* "!ss ..." tes
 
 /* aisync.c: AI soldiers on clients of a campaign level */
 void aisync_install(void);
+int aisync_console(const char *text, char *out, int size);   /* "!ai ..." test commands; 0 = not ours */
 
 /* netfix.c: the game's own multiplayer on today's networks */
 void netfix_install(void);

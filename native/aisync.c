@@ -118,6 +118,9 @@ typedef struct {
     void *ai;
     int net, writes, reads, frames;
     int anim;          /* server: the body animation sent last (NO_ANIM = none yet) */
+    int corpse;        /* client: its death was shown */
+    int noanim;        /* client: dead on the server: no more animation from the server */
+    int srv_dead;      /* client: the server says it is dead */
 } AiState;
 #define NO_ANIM 0x7fffffff
 static AiState states[MAX_AI];
@@ -148,8 +151,11 @@ static AiState *state_of(char *ai)
  * of the AI's net state +0x4f4, 0x859f00 starts it), but the update codec (0x693240) writes only seq, length and
  * the motion bytes: a client read whatever its receive buffer held (animation 0: the "first pose"). They ride
  * here at the end of the motion bytes instead, with the ids as 16 bits (the AI's own bytes cut ids above 127):
- *   s16 body animation, s16 behaviour animation, u8 speed, 2 marker bytes. */
-#define ANIM_EXTRA 7
+ *   s16 body animation, s16 behaviour animation, u8 speed, u8 state (1 = dead on the server), 2 marker bytes.
+ * A soldier that is dead on the server (a ragdoll, or one of the level's posed corpses "slo_*", whose body animation
+ * id is not -1) must not get the server's animations on a client: they would stand it up. */
+#define ANIM_EXTRA 8
+#define AI_DEAD 0x20000
 static const unsigned char anim_mark[2] = {0xa5, 0x5a};
 #define MSG_LEN 5                            /* update message: +5 u8 motion bytes, +8 motion bytes pointer */
 #define MSG_BITS 8
@@ -177,7 +183,8 @@ static void TSCALL hook_write(void *ai, int peer, int *msg, int flags)
     memcpy(b, &body, 2);
     memcpy(b + 2, &bhv, 2);
     b[4] = m[MSG_ANIM + 2];
-    memcpy(b + 5, anim_mark, 2);
+    b[5] = (*(unsigned *)((char *)ai + AI_FLAGS) & AI_DEAD) ? 1 : 0;
+    memcpy(b + 6, anim_mark, 2);
     m[MSG_LEN] += ANIM_EXTRA;
     AiState *s = state_of(ai);
     if (s) {
@@ -192,10 +199,19 @@ static void TSCALL hook_read(void *ai, char *msg, int flags)
     AiState *s = state_of(ai);
     if (s)
         s->reads++;
+    if (s && (s->corpse || s->noanim))
+        return;   /* (a corpse: the server's "no animation" would stand it up again) */
     if (!b || m[MSG_LEN] < ANIM_EXTRA || memcmp(b + m[MSG_LEN] - 2, anim_mark, 2) != 0) {
         m[MSG_ANIM] = (unsigned char)-1;   /* (no animation data: "none" rather than the buffer's leftovers) */
         m[MSG_ANIM + 1] = (unsigned char)-1;
         ((read_t)AI_READ)(ai, msg, flags);
+        return;
+    }
+    if (b[m[MSG_LEN] - 3] & 1) {   /* dead on the server: shown here in the next frame (corpse_check) */
+        if (s) {
+            s->noanim = 1;
+            s->srv_dead = 1;
+        }
         return;
     }
     m[MSG_LEN] -= ANIM_EXTRA;   /* (the base reader gets its own bytes only) */
@@ -309,6 +325,487 @@ static void follow_host(void)
            pos[2]);
 }
 
+/* ---- names of objects created during play ----
+ * A client builds the replica of an object the server created at run time ($farm.Create) without the object's
+ * name: its script instance is "" and the level scripts (and storysync's replays) cannot find it. The client asks
+ * the server for the names of networked objects whose instance has no name (50), the server answers with the
+ * names it has (51), and the client gives its instance that name (inst+4) and puts it into the script manager's
+ * sorted list of named objects, as CreateObject (0x8fd2f0) does. */
+#define SUB_NAME_ASK 50
+#define SUB_NAME_TELL 51
+#define SUB_DEAD 52
+#define SUB_LAST 59
+#define NPROTO 1
+#define MSG_MAX 200                          /* (payload bytes per message: well below the codec's limit) */
+#define MGR (*(char **)0xebedec)             /* script manager: +0x14 named objects (Inst *[], sorted), +0x18 count */
+#define PLAYER (*(char **)0x1095b30)
+typedef struct { int refs, len, cap; char s[1]; } StrHdr;
+static void (__cdecl *eng_free)(void *) = (void *)0x7e4700;
+static StrHdr **(TSCALL *str_ctor)(StrHdr **, const char *, int, int) = (void *)0x402490;
+static void **(TSCALL *mgr_find_obj)(void *, void **, StrHdr **) = (void *)0x8fc720;
+static void (TSCALL *inst_release)(void **) = (void *)0x8f8050;
+static int (TSCALL *named_cmp)(void *, void **, void **) = (void *)0x8fb500;      /* <0 / 0 / >0 by name */
+static void (TSCALL *named_insert)(void *, int, void **, int) = (void *)0x8fb000; /* (array, index, &inst, 1) */
+
+static void str_release(StrHdr *s)
+{
+    if (s && --s->refs == 0)
+        eng_free(s);
+}
+
+/* The script instance of a level object (entity +0x80), or NULL. */
+static char *inst_of(char *o)
+{
+    if (IsBadReadPtr(o, 0x84))
+        return NULL;
+    char *inst = *(char **)(o + E_INST);
+    if (!inst || ((DWORD)inst & 3) || IsBadReadPtr(inst, 0x14) || *(char **)(inst + 0xc) != o)
+        return NULL;
+    return inst;
+}
+
+static const char *inst_str(char *inst)
+{
+    StrHdr *s = *(StrHdr **)(inst + 4);
+    return s ? s->s : "";
+}
+
+/* Every object in the scheduler's lists (main thread). */
+static void for_each_obj(void (*fn)(char *o, void *ctx), void *ctx)
+{
+    char *b = ENT_BUCKETS;
+    int nb = ENT_NBUCKETS;
+    for (int i = 0; b && i < nb; i++)
+        for (char *o = *(char **)(b + i * 12); o; ) {
+            fn(o, ctx);
+            char *next = *(char **)(o + 8);
+            o = next ? next - 4 : NULL;
+        }
+}
+
+typedef struct { int net; char *found; } FindNet;
+static void find_net_fn(char *o, void *ctx)
+{
+    FindNet *f = ctx;
+    if (!f->found && *(int *)(o + E_NETID) == f->net && inst_of(o))
+        f->found = o;
+}
+static char *obj_by_net(int net)
+{
+    FindNet f = {net, NULL};
+    for_each_obj(find_net_fn, &f);
+    return f.found;
+}
+
+/* Give an unnamed script instance its name (client). 1 = done. */
+static int name_inst(char *inst, const char *name)
+{
+    char *mgr = MGR;
+    StrHdr *nm = NULL;
+    void *found = NULL;
+    str_ctor(&nm, name, -1, 0);
+    mgr_find_obj(mgr, &found, &nm);
+    if (found) {   /* (a local object of that name exists: keep both as they are) */
+        inst_release(&found);
+        str_release(nm);
+        return 0;
+    }
+    StrHdr *old = *(StrHdr **)(inst + 4);
+    *(StrHdr **)(inst + 4) = nm;
+    str_release(old);
+    void **data = *(void ***)(mgr + 0x14), *ip = inst;
+    int lo = 0, hi = *(int *)(mgr + 0x18);
+    while (lo != hi) {
+        int mid = (lo + hi) >> 1, c = named_cmp(NULL, &data[mid], &ip);
+        if (c == 0)
+            return 0;
+        if (c > 0)
+            hi = mid;
+        else
+            lo = mid + 1;
+    }
+    named_insert(mgr + 0x14, lo, &ip, 1);
+    return 1;
+}
+
+static int slot_of_peer(int peer)
+{
+    char *gm = GAME_MODE_OBJ;
+    for (int i = 0; gm && i < *(int *)(gm + 0x2c); i++)
+        if (*(int *)(*(char **)(gm + 0x28) + i * 0xa4) == peer)
+            return i;
+    return -1;
+}
+
+static int is_player_ent(char *o)
+{
+    char *gm = GAME_MODE_OBJ;
+    if (o == PLAYER)
+        return 1;
+    for (int i = 0; gm && i < *(int *)(gm + 0x2c); i++)
+        if (*(char **)(*(char **)(gm + 0x28) + i * 0xa4 + 4) == o)
+            return 1;
+    return 0;
+}
+
+/* client: the objects asked for (pointer + net id), reset with the level */
+#define ASKED_MAX 2048
+static struct { char *o; int net; } asked[ASKED_MAX];
+static int n_asked;
+static char asked_level[64];
+/* client: names received, applied in the next frame */
+#define TOLD_MAX 256
+static struct { int net; char name[64]; DWORD until; } told[TOLD_MAX];
+static int n_told;
+static LONG n_named_logged;
+
+typedef struct { unsigned char b[MSG_MAX]; int n, count; } AskMsg;
+static void ask_fn(char *o, void *ctx)
+{
+    AskMsg *m = ctx;
+    int net = *(int *)(o + E_NETID);
+    if (net < 0 || net > 0xffffff || m->n + 4 > MSG_MAX || is_player_ent(o))
+        return;
+    char *inst = inst_of(o);
+    if (!inst || inst_str(inst)[0])
+        return;
+    for (int i = 0; i < n_asked; i++)
+        if (asked[i].o == o && asked[i].net == net)
+            return;
+    if (n_asked < ASKED_MAX) {
+        asked[n_asked].o = o;
+        asked[n_asked++].net = net;
+    }
+    memcpy(m->b + m->n, &net, 4);
+    m->n += 4;
+    m->count++;
+}
+
+static void names_client(void)
+{
+    char lvl[64];
+    snprintf(lvl, sizeof lvl, "%.63s", (const char *)0xfcabc8);
+    if (strcmp(lvl, asked_level) != 0) {
+        strcpy(asked_level, lvl);
+        n_asked = n_told = 0;
+    }
+    DWORD now = GetTickCount();
+    for (int i = 0; i < n_told; ) {
+        char *o = obj_by_net(told[i].net), *inst = o ? inst_of(o) : NULL;
+        if (inst && !inst_str(inst)[0]) {
+            int ok = name_inst(inst, told[i].name);
+            if (InterlockedIncrement(&n_named_logged) <= 200)
+                ts_log("aisync: object net %d named \"%s\"%s", told[i].net, told[i].name,
+                       ok ? "" : " - not done (a local object has that name)");
+        } else if (!o && (int)(now - told[i].until) < 0) {
+            i++;
+            continue;
+        }
+        told[i] = told[--n_told];
+    }
+    static DWORD last;
+    if (now - last < 500 || !PLAYER)   /* (asks only once the client runs the level) */
+        return;
+    last = now;
+    AskMsg m;
+    m.b[0] = NPROTO;
+    m.n = 2;
+    m.count = 0;
+    for_each_obj(ask_fn, &m);
+    if (m.count) {
+        m.b[1] = (unsigned char)m.count;
+        coopnet_send(-1, SUB_NAME_ASK, m.b, m.n);
+    }
+}
+
+static void on_names(int peer, unsigned short sub, const unsigned char *d, int len)
+{
+    char *gm = GAME_MODE_OBJ;
+    int mode = gm ? *(int *)(gm + 0x3c) : 0;
+    if (len < 2 || d[0] != NPROTO)
+        return;
+    if (sub == SUB_NAME_ASK && mode != 3) {   /* server: answer with the names it has */
+        unsigned char out[MSG_MAX];
+        int n = 2, count = 0;
+        out[0] = NPROTO;
+        for (int i = 0; i < d[1] && 2 + i * 4 + 4 <= len; i++) {
+            int net;
+            memcpy(&net, d + 2 + i * 4, 4);
+            char *o = obj_by_net(net), *inst = o && !is_player_ent(o) ? inst_of(o) : NULL;
+            const char *nm = inst ? inst_str(inst) : "";
+            int l = (int)strlen(nm);
+            if (!l || l > 63)
+                continue;
+            if (n + 5 + l > MSG_MAX) {   /* (full: send this part) */
+                out[1] = (unsigned char)count;
+                coopnet_send(slot_of_peer(peer), SUB_NAME_TELL, out, n);
+                n = 2;
+                count = 0;
+            }
+            memcpy(out + n, &net, 4);
+            out[n + 4] = (unsigned char)l;
+            memcpy(out + n + 5, nm, l);
+            n += 5 + l;
+            count++;
+        }
+        if (count) {
+            out[1] = (unsigned char)count;
+            coopnet_send(slot_of_peer(peer), SUB_NAME_TELL, out, n);
+        }
+    } else if (sub == SUB_NAME_TELL && mode == 3) {
+        int n = 2;
+        for (int i = 0; i < d[1] && n + 5 <= len && n_told < TOLD_MAX; i++) {
+            int l = d[n + 4];
+            if (n + 5 + l > len || l > 63)
+                break;
+            memcpy(&told[n_told].net, d + n, 4);
+            memcpy(told[n_told].name, d + n + 5, l);
+            told[n_told].name[l] = 0;
+            told[n_told++].until = GetTickCount() + 5000;
+            n += 5 + l;
+        }
+    }
+}
+
+/* ---- corpses on clients ----
+ * An AI's death reaches a client as the death state (0x859090 case 2 -> [ai+0x290]->vtbl[1] = 0x8496c0, with
+ * netfix.c's empty hit info); that handler shows nothing without the authority bit: the visual part (the class's
+ * vtbl+0x2e8, e.g. 0x466b90: hit reaction, death animation or ragdoll from the damage) runs on the server only, so
+ * the client's soldier stood in its idle. A client runs that visual part itself for every dead AI (AI_FLAGS
+ * 0x20000, set by the death state on both machines) with the authority bit set for the call and a neutral damage
+ * (no attacker, no damage type, a small push): the soldier falls as a ragdoll where it stands. Afterwards its
+ * network reads are ignored (the server sends "no animation" for its ragdoll, which would stand it up).
+ * Measured on the N100 pair (2026-10-25): police4_v2 fell like the host's ragdoll, a few cm apart. */
+#define AI_DEATHSTATE 0x290
+static unsigned char fake_dmg[0x200], fake_type[0x200], fake_hit[0x1000];
+static LONG n_corpse_logged;
+
+static void show_death(char *ai, float push, int auth)
+{
+    unsigned *role = (unsigned *)(ai + E_ROLE), saved = *role;
+    memset(fake_dmg, 0, sizeof fake_dmg);
+    memset(fake_type, 0, sizeof fake_type);
+    memset(fake_hit, 0, sizeof fake_hit);
+    *(int *)(fake_dmg + 8) = -1;               /* attacker: none */
+    *(void **)(fake_dmg + 0xc) = fake_type;    /* damage type: nothing special */
+    *(float *)(fake_dmg + 0x14) = push;        /* impulse */
+    *(float *)(fake_dmg + 0x1c) = 1e9f;        /* hit point: none (the class uses its own) */
+    *(int *)(fake_dmg + 0x34) = -1;
+    char *mgr = MGR;
+    int before = mgr ? *(int *)(mgr + 0xc) : 0;   /* (script manager: +8 every object, +0xc count; new ones appended) */
+    if (auth)
+        *role |= 4;
+    ((void (TSCALL *)(void *, void *, void *))(*(void ***)ai)[0x2e8 / 4])(ai, fake_dmg, fake_hit);
+    *role = (*role & ~4u) | (saved & 4);
+    /* The visual death also drops the soldier's weapon and grenade pack as pickups. The server's pickups reach
+     * the client through the network; the client's own copies would be duplicates a player could pick up (seen:
+     * "Received: carbine" on the client). Objects this call created that the network would carry (isSyncMP) but
+     * that have no net id are such copies: they end at once (entity vtbl+0xc0 = Terminate). */
+    int after = mgr ? *(int *)(mgr + 0xc) : 0, removed = 0;
+    void **all = mgr ? *(void ***)(mgr + 8) : NULL;
+    for (int i = before; all && i < after; i++) {
+        char *inst = all[i], *o = inst && !IsBadReadPtr(inst, 0x14) ? *(char **)(inst + 0xc) : NULL;
+        if (!o || o == ai || IsBadReadPtr(o, 0xb0) || *(int *)(o + E_NETID) >= 0 || !(*(unsigned *)(o + E_SYNC) & 1))
+            continue;
+        if (InterlockedIncrement(&n_corpse_logged) <= 100)
+            ts_log("aisync: %s: local copy \"%s\" of a networked object removed", ai_name(ai), inst_str(inst));
+        ((void (TSCALL *)(void *, float))(*(void ***)o)[0xc0 / 4])(o, 0.0f);
+        removed++;
+    }
+    (void)removed;
+}
+
+static void kill_here(char *ai);
+
+/* 1 = the body is a ragdoll already (the body component +0x4fc, its ragdoll +0x7c, vtbl+0x18 "active", as the
+ * level's posed corpses get it at load, 0x612670). */
+static int ragdoll_active(char *ai)
+{
+    char *body = *(char **)(ai + 0x4fc);
+    void *r = body ? *(void **)(body + 0x7c) : NULL;
+    return r && ((int (TSCALL *)(void *))(*(void ***)r)[0x18 / 4])(r) != 0;
+}
+
+static void corpse_check(char *ai)
+{
+    if (*(unsigned *)(ai + E_ROLE) & 4)
+        return;
+    AiState *s = state_of(ai);
+    if (!s || s->corpse)
+        return;
+    int dead = (*(unsigned *)(ai + AI_FLAGS) & AI_DEAD) != 0, killed = 0;
+    if (!dead && s->srv_dead) {   /* (dead on the server, alive here: it died before this client joined) */
+        kill_here(ai);
+        killed = 1;
+        dead = (*(unsigned *)(ai + AI_FLAGS) & AI_DEAD) != 0;
+    }
+    if (!dead)
+        return;
+    s->corpse = s->noanim = 1;
+    char *node = *(char **)(ai + E_NODE);
+    int before = node ? anim_id(node) : -9, rag = ragdoll_active(ai);
+    if (!rag)
+        show_death(ai, 1.0f, 1);
+    if (InterlockedIncrement(&n_corpse_logged) <= 100)
+        ts_log("aisync: %s (net %d) %s: %s (animation %d -> %d)", ai_name(ai), *(int *)(ai + E_NETID),
+               killed ? "is dead on the server" : "died", rag ? "a ragdoll already" : "death shown here", before,
+               node ? anim_id(node) : -9);
+}
+
+/* The death state on a client, as the server's message sets it (a soldier that died before this client joined). */
+static void kill_here(char *ai)
+{
+    char *st = *(char **)(ai + AI_DEATHSTATE);
+    memset(fake_hit, 0, sizeof fake_hit);
+    if (st)
+        ((void (TSCALL *)(void *, int, void *))(*(void ***)st)[1])(st, 0, fake_hit);
+}
+
+/* Dead before the join: AIs that died on the server before a client loaded the level stand alive on the client
+ * (the death was a one-time message). A client asks for the list of the dead (52) a few seconds into each level;
+ * the server answers with the names and positions of every dead AI it has (53, several messages when long), from
+ * the script manager's named objects (a dead soldier leaves the scheduler's lists). The client puts each of them
+ * where the server's body lies, gives it the death state and shows its death. */
+#define SUB_DEAD_ASK 52
+#define SUB_DEAD_TELL 53
+#define DEAD_MAX 256
+static struct { char name[64]; float pos[3]; } dead_told[DEAD_MAX];
+static int n_dead_told;
+static LONG n_dead_logged;
+
+static void dead_list_send(int peer)
+{
+    char *mgr = MGR;
+    void **data = mgr ? *(void ***)(mgr + 0x14) : NULL;
+    int count = mgr ? *(int *)(mgr + 0x18) : 0, total = 0;
+    unsigned char out[MSG_MAX];
+    int n = 2, k = 0;
+    out[0] = NPROTO;
+    for (int i = 0; data && i <= count; i++) {
+        char *inst = i < count ? data[i] : NULL, *ai = inst ? *(char **)(inst + 0xc) : NULL;
+        int last = i == count;
+        const char *nm = "";
+        int l = 0;
+        if (!last) {
+            if (!ai || !is_ai(ai) || (*(unsigned *)(inst + 8) & 1) || !(*(unsigned *)(ai + AI_FLAGS) & AI_DEAD))
+                continue;
+            nm = inst_str(inst);
+            l = (int)strlen(nm);
+            if (!l || l > 63)
+                continue;
+        }
+        if (last || n + 13 + l > MSG_MAX) {
+            if (k || (last && !total)) {
+                out[1] = (unsigned char)k;
+                coopnet_send(slot_of_peer(peer), SUB_DEAD_TELL, out, n);
+            }
+            n = 2;
+            k = 0;
+            if (last)
+                break;
+        }
+        char *node = *(char **)(ai + E_NODE);
+        float *p = node ? (float *)(node + 0x68) : (float *)(ai + E_POS);
+        out[n] = (unsigned char)l;
+        memcpy(out + n + 1, nm, l);
+        memcpy(out + n + 1 + l, p, 12);
+        n += 13 + l;
+        k++;
+        total++;
+    }
+    if (InterlockedIncrement(&n_dead_logged) <= 50)
+        ts_log("aisync: client %d asked for the dead: %d AI", peer, total);
+}
+
+static void dead_list_apply(void)
+{
+    for (int i = 0; i < n_dead_told; i++) {
+        char *ai = NULL;
+        StrHdr *nm = NULL;
+        void *inst = NULL;
+        str_ctor(&nm, dead_told[i].name, -1, 0);
+        mgr_find_obj(MGR, &inst, &nm);
+        str_release(nm);
+        if (inst) {
+            ai = *(char **)((char *)inst + 0xc);
+            inst_release(&inst);
+        }
+        if (!ai || !is_ai(ai) || (*(unsigned *)(ai + E_ROLE) & 4) || (*(unsigned *)(ai + AI_FLAGS) & AI_DEAD))
+            continue;
+        char *node = *(char **)(ai + E_NODE);
+        float *p = node ? (float *)(node + 0x68) : (float *)(ai + E_POS), *q = dead_told[i].pos;
+        float dx = p[0] - q[0], dy = p[1] - q[1], dz = p[2] - q[2];
+        int moved = 0;
+        if (node && dx * dx + dy * dy + dz * dz > 0.25f) {   /* (put the body where the server's lies) */
+            float dir[3] = {*(float *)(node + 0x58), *(float *)(node + 0x5c), *(float *)(node + 0x60)};
+            ((void (TSCALL *)(void *, float *, float *, int))(*(void ***)ai)[0x210 / 4])(ai, q, dir, 1);
+            memcpy(ai + E_POS, q, 12);
+            moved = 1;
+        }
+        kill_here(ai);
+        corpse_check(ai);
+        if (InterlockedIncrement(&n_dead_logged) <= 100)
+            ts_log("aisync: %s died before this client joined: dead here too%s", dead_told[i].name,
+                   moved ? " (moved to the server's body)" : "");
+    }
+    n_dead_told = 0;
+}
+
+static void on_dead(int peer, unsigned short sub, const unsigned char *d, int len)
+{
+    char *gm = GAME_MODE_OBJ;
+    int mode = gm ? *(int *)(gm + 0x3c) : 0;
+    if (len < 2 || d[0] != NPROTO)
+        return;
+    if (sub == SUB_DEAD_ASK && mode != 3)
+        dead_list_send(peer);
+    else if (sub == SUB_DEAD_TELL && mode == 3) {
+        int n = 2;
+        for (int i = 0; i < d[1] && n < len && n_dead_told < DEAD_MAX; i++) {
+            int l = d[n];
+            if (n + 13 + l > len || l > 63)
+                break;
+            memcpy(dead_told[n_dead_told].name, d + n + 1, l);
+            dead_told[n_dead_told].name[l] = 0;
+            memcpy(dead_told[n_dead_told++].pos, d + n + 1 + l, 12);
+            n += 13 + l;
+        }
+    }
+}
+
+static void on_message(int peer, unsigned short sub, const unsigned char *d, int len)
+{
+    if (sub == SUB_NAME_ASK || sub == SUB_NAME_TELL)
+        on_names(peer, sub, d, len);
+    else if (sub == SUB_DEAD_ASK || sub == SUB_DEAD_TELL)
+        on_dead(peer, sub, d, len);
+}
+
+/* client: ask for the dead 4 s and 15 s after its player appears in a level */
+static void dead_ask_tick(void)
+{
+    static char level[64];
+    static DWORD since;
+    static int asked_n;
+    char lvl[64];
+    snprintf(lvl, sizeof lvl, "%.63s", (const char *)0xfcabc8);
+    if (!PLAYER) {
+        since = 0;
+        return;
+    }
+    if (strcmp(lvl, level) != 0 || !since) {
+        strcpy(level, lvl);
+        since = GetTickCount();
+        asked_n = 0;
+    }
+    DWORD age = GetTickCount() - since;
+    if ((asked_n == 0 && age > 4000) || (asked_n == 1 && age > 15000)) {
+        unsigned char b[2] = {NPROTO, 0};
+        coopnet_send(-1, SUB_DEAD_ASK, b, 2);
+        asked_n++;
+    }
+}
+
 /* ---- per frame ---- */
 static void frame(float dt)
 {
@@ -325,6 +822,15 @@ static void frame(float dt)
     }
     if (engine_mode && mode != 3)
         for_each_ai(watch_anim);
+    if (engine_mode && mode == 3) {
+        if (n_dead_told)
+            dead_list_apply();
+        for_each_ai(corpse_check);
+        if (ts_coop_active()) {
+            dead_ask_tick();
+            names_client();
+        }
+    }
     if (debug_secs && mode == 3)
         follow_host();
     if (debug_secs) {
@@ -338,6 +844,97 @@ static void frame(float dt)
             ts_log("aisync: %d AI", for_each_ai(dump_one));
         }
     }
+}
+
+/* ---- test console: "!ai ..." (experiments) ---- */
+static char *ai_by_name_found;
+static const char *ai_by_name_want;
+static void ai_by_name_fn(char *ai)
+{
+    if (!ai_by_name_found && strcmp(ai_name(ai), ai_by_name_want) == 0)
+        ai_by_name_found = ai;
+}
+static char *ai_by_name(const char *name)
+{
+    ai_by_name_found = NULL;
+    ai_by_name_want = name;
+    for_each_ai(ai_by_name_fn);
+    return ai_by_name_found;
+}
+
+static char *con_out;
+static int con_size, con_n;
+static const char *con_filter;
+static void con_list_fn(char *ai)
+{
+    const char *nm = ai_name(ai);
+    if (con_filter[0] && !strstr(nm, con_filter))
+        return;
+    char *node = *(char **)(ai + E_NODE);
+    AiState *s = state_of(ai);
+    if (con_n < con_size - 200)
+        con_n += snprintf(con_out + con_n, con_size - con_n,
+                          "%s vt=%p net=%d role=%x fl=%x hp=%.2f anim=%d rag=%d corpse=%d/%d\n", nm, *(void **)ai,
+                          *(int *)(ai + E_NETID), *(unsigned *)(ai + E_ROLE), *(unsigned *)(ai + AI_FLAGS),
+                          *(float *)(ai + 0x234), node ? anim_id(node) : -9, ragdoll_active(ai), s ? s->corpse : -1,
+                          s ? s->srv_dead : -1);
+}
+
+/* Test console (TS_CONSOLE): "!ai list <part of a name>|*", "!ai kill <ai>" (the death state, as the server's
+ * message sets it), "!ai show <ai> [push]" (show its death here), "!ai named" (client: objects named so far). */
+int aisync_console(const char *text, char *out, int size)
+{
+    if (strncmp(text, "!ai", 3) != 0)
+        return 0;
+    char cmd[32] = "", a1[128] = "";
+    float push = 1.0f;
+    sscanf(text + 3, "%31s %127s %f", cmd, a1, &push);
+    if (!strcmp(cmd, "list")) {
+        con_out = out;
+        con_size = size;
+        con_n = 0;
+        con_filter = strcmp(a1, "*") ? a1 : "";
+        out[0] = 0;
+        int n = for_each_ai(con_list_fn);
+        snprintf(out + con_n, size - con_n, "%d AI", n);
+        return 1;
+    }
+    if (!strcmp(cmd, "mem")) {   /* "!ai mem <object> <hex offset> [dwords]": a named object's memory (lab) */
+        unsigned off = 0;
+        int cnt = 16;
+        sscanf(text + 3, "%31s %127s %x %d", cmd, a1, &off, &cnt);
+        StrHdr *nm = NULL;
+        void *inst = NULL;
+        str_ctor(&nm, a1, -1, 0);
+        mgr_find_obj(MGR, &inst, &nm);
+        str_release(nm);
+        char *o = inst ? *(char **)((char *)inst + 0xc) : NULL;
+        if (inst)
+            inst_release(&inst);
+        if (!o || cnt < 1 || cnt > 64 || IsBadReadPtr(o + off, cnt * 4))
+            return snprintf(out, size, "no object %s or bad range", a1), 1;
+        int n = snprintf(out, size, "%s %p vt %p:", a1, o, *(void **)o);
+        for (int i = 0; i < cnt && n < size - 40; i++)
+            n += snprintf(out + n, size - n, " +%x=%08x(%.2f)", off + i * 4, *(unsigned *)(o + off + i * 4),
+                          *(float *)(o + off + i * 4));
+        return 1;
+    }
+    if (!strcmp(cmd, "named"))
+        return snprintf(out, size, "asked %d, waiting %d, named %ld (log)", n_asked, n_told, n_named_logged), 1;
+    char *ai = ai_by_name(a1);
+    if (!ai)
+        return snprintf(out, size, "no AI %s", a1), 1;
+    char *node = *(char **)(ai + E_NODE);
+    int before = node ? anim_id(node) : -9;
+    if (!strcmp(cmd, "kill")) {
+        kill_here(ai);
+        snprintf(out, size, "death state: fl %x hp %.2f", *(unsigned *)(ai + AI_FLAGS), *(float *)(ai + 0x234));
+    } else if (!strcmp(cmd, "show")) {
+        show_death(ai, push, 1);
+        snprintf(out, size, "death shown: animation %d -> %d", before, node ? anim_id(node) : -9);
+    } else
+        snprintf(out, size, "!ai list <filter|*> | kill <ai> | show <ai> [push] | named");
+    return 1;
 }
 
 void aisync_install(void)
@@ -355,6 +952,8 @@ void aisync_install(void)
         return;
     }
     ts_frame_add(frame);
+    if (engine_mode && !coopnet_listen(SUB_NAME_ASK, SUB_LAST, on_message))
+        ts_log("aisync: no mod messages (names of new objects, the dead for late joiners)");
     ts_log("aisync: %s%s", engine_mode ? "AI replication on" : "AI diagnostics only",
            debug_secs ? ", diagnostics in the log" : "");
 }
