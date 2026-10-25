@@ -948,6 +948,22 @@ int campaign_console(const char *text, char *out, int size)
         }
         return snprintf(out, size, "not in a co-op session with the story on (or TS_CAMPAIGN is off)"), 1;
     }
+    if (!strcmp(cmd, "putin")) {   /* "!cp putin <domain> [flag]": this machine's player into the middle of a domain (lab) */
+        char *dom = find_ent(a1), *pl = PLAYER;
+        char *node = pl ? *(char **)(pl + ENT_NODE) : NULL;
+        int flag = 0;
+        sscanf(text + 3, "%*s %*s %d", &flag);
+        if (!is_domain(dom) || !node)
+            return snprintf(out, size, "%s is not a domain (or no player)", a1), 1;
+        float *mn = (float *)(dom + DOM_MIN), *mx = (float *)(dom + DOM_MAX);
+        float at[3] = {(mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2};
+        float dir[3] = {*(float *)(node + NODE_DIR), *(float *)(node + NODE_DIR + 4), *(float *)(node + NODE_DIR + 8)};
+        ((void (TSCALL *)(void *, float *, float *, int))(*(void ***)pl)[PLAYER_PLACE / 4])(pl, at, dir, flag);
+        float pos[3];
+        ent_pos(pl, pos);
+        return snprintf(out, size, "player placed (flag %d) at %.2f %.2f %.2f, now %.2f %.2f %.2f, inside %d", flag, at[0],
+                        at[1], at[2], pos[0], pos[1], pos[2], inside(dom, pl)), 1;
+    }
     if (!strcmp(cmd, "gather") && r == MODE_SERVER) {
         char *dom = find_ent(a1);
         if (!is_domain(dom))

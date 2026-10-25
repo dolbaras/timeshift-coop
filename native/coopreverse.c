@@ -408,6 +408,46 @@ static void push_rewind_actors(void)
     }
 }
 
+/* The recorder task's per-frame update (0x584960, its vtable +0x138) keeps running during a playback, when the
+ * script tick (this file's frame) does not: the network updates of the rewind actors and the end of a client's reverse
+ * happen here. */
+static void host_stop(const char *why);
+__attribute__((used)) void crw_tick(void) __asm__("crw_tick");
+__attribute__((used)) void crw_tick(void)
+{
+    if (!stock || !on || !stock_run || game_mode() != MODE_SERVER)
+        return;
+    if (playing())
+        push_rewind_actors();
+    if (stock_ours && (int)(GetTickCount() - until) >= 0)
+        host_stop("time up");
+}
+extern void crw_tick_thunk(void) __asm__("crw_tick_thunk");
+__asm__(".text
+"
+        ".globl crw_tick_thunk
+"
+        "crw_tick_thunk:
+"
+        "  pushl %eax
+"
+        "  pushl %ecx
+"
+        "  pushl %edx
+"
+        "  call crw_tick
+"
+        "  popl %edx
+"
+        "  popl %ecx
+"
+        "  popl %eax
+"
+        "  movl 0xfcace8, %eax
+"        /* the 5 bytes the call replaced */
+        "  ret
+");
+
 /* ---- server ---- */
 static void send_state(int i)
 {
@@ -484,6 +524,10 @@ static float affordable(char *pl)
 
 static void request(int start, float secs)
 {
+    if (start && PLAYER && rev_cost > 0.f && !stock_ready()) {   /* the owner pays at once (the engine charges the host's own) */
+        float *e = (float *)(PLAYER + ENERGY);
+        *e = *e - secs * rev_cost < 0.f ? 0.f : *e - secs * rev_cost;
+    }
     if (game_mode() == MODE_CLIENT) {
         int t = (int)(secs * 10.f);
         unsigned char b[3] = {PROTO, (unsigned char)start, (unsigned char)(t > 255 ? 255 : t < 0 ? 0 : t)};
@@ -611,17 +655,7 @@ static void frame(float dt)
         owner = NONE;
         fx_stop();
     }
-    if (on && yours) {   /* the owner pays */
-        char *pl = PLAYER;
-        float dts = (now - drain_last) / 1000.f;
-        drain_last = now;
-        if (pl && rev_cost > 0.f) {
-            float *e = (float *)(pl + ENERGY);
-            *e = *e - rev_cost * dts < 0.f ? 0.f : *e - rev_cost * dts;
-            if (*e <= 0.f)
-                request(0, 0.f);
-        }
-    }
+    (void)drain_last;   /* (the owner pays when it asks: request(); the engine's regeneration outran a per-frame drain) */
     if (game_mode() != MODE_SERVER)
         return;
     if (on && (int)(now - until) >= 0)
@@ -702,6 +736,11 @@ void coopreverse_install(void)
             *(DWORD *)(r + 1) = (DWORD)crw_gm_ecx - (sites_ecx[i] + 5);
             ok += ts_patch_bytes(sites_ecx[i], want_ecx, r, 6);
         }
+        unsigned char tr[5] = {0xe8};
+        *(DWORD *)(tr + 1) = (DWORD)crw_tick_thunk - (0x584960 + 5);
+        static const unsigned char want_tick[5] = {0xa1, 0xe8, 0xac, 0xfc, 0x00};
+        ok += ts_patch_bytes(0x584960, want_tick, tr, 5);
+        n++;
         stock = ok == n;
         ts_log("coopreverse: stock rewind on the host %s (%d/%d recorder sites)", stock ? "on (NOT YET RUN)" : "off", ok, n);
     }
