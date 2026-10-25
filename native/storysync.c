@@ -1,7 +1,8 @@
 /*
  * The campaign's story in co-op on the game's own server (patch 1.2 exe only; addresses from the static
- * analysis in the private notes). TS_STORYSYNC=1 on every machine; nothing changes without it, and nothing
- * changes in single player (game mode 1) with it.
+ * analysis in the private notes). On by default (coopsession.c sets TS_STORYSYNC=1 when it is not set); it acts
+ * only in a co-op session whose host runs the story (COOP_F_STORYSYNC). TS_STORYSYNC=0 switches it off (on the
+ * host: for the whole session); nothing changes in single player (game mode 1) or on stock multiplayer maps.
  *
  * Engine facts this builds on:
  * - Level objects with script text get their own script class: the entity's script set-up (0x644e50) creates
@@ -1010,6 +1011,10 @@ static void got_eye(const char *name, int on)
 static void run_queue(void)
 {
     int n = q_count;
+    /* (a client replays only once its own player exists: the handlers' $player calls, e.g. a checkpoint's restore
+     * teleport after a team restart, went nowhere while the restarted level was still spawning it) */
+    if (n && !PLAYER && game_mode() == MODE_CLIENT && (int)(GetTickCount() - queue[q_head].until) < 25000)
+        return;
     for (int i = 0; i < n && q_count; i++) {
         Replay *q = &queue[q_head];
         int rc = fire_named(q->obj, q->ev, q->argc, q->args, q->replay);
@@ -1236,8 +1241,10 @@ static void restore_step(void)
     }
     if (!restore_seen_off)
         return;
-    if (!restore_at) {
-        restore_at = GetTickCount() + 3000;
+    if (!restore_at) {   /* (2 s after the host's player exists again: its restore teleport needs it) */
+        if (!PLAYER)
+            return;
+        restore_at = GetTickCount() + 2000;
         return;
     }
     if ((int)(GetTickCount() - restore_at) < 0)

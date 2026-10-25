@@ -15,6 +15,10 @@
  *      changed for the next update.
  * Only for entities of the AI classes with isSyncMP, in a network session. TS_AISYNC=0 switches it off.
  *
+ * Also (sections below): corpses on clients (a client shows each death itself), soldiers dead before a client joined
+ * (a "dead on the server" bit in the updates, and a list of the dead on request), and the names of objects the
+ * server creates in play (clients ask for them). Mod messages 50-59.
+ *
  * TS_AIDEBUG=<s>: diagnostics. Counts AI writes (sender), reads and interpolation calls (receiver) and logs each
  * AI's net id, role bits, position and animations every <s> seconds (aligned to the clock, so a host and a client
  * on one PC log the same moments). Test helper with it: <TS_SHOTDIR>\follow.req (below).
@@ -948,28 +952,54 @@ int aisync_console(const char *text, char *out, int size)
             k += snprintf(out + k, size - k, " [%d] %p vt %p (+10 %p +18 %p +50 %p)", i, e, vt, vt ? vt[4] : NULL,
                           vt ? vt[6] : NULL, vt ? vt[0x14] : NULL);
         }
-    } else if (!strcmp(cmd, "fire")) {   /* "!ai fire <ai> [slot]": strike entry vtbl+0x10(target) aimed at my player */
-        char *sm = *(char **)(ai + 0x530), *me = PLAYER, *pn = me ? *(char **)(me + E_NODE) : NULL;
-        int slot = (int)push;
-        void **e = sm && slot >= 0 && slot < *(int *)(sm + 0xc) ? *(void ***)(sm + 0x14 + slot * 8) : NULL;
-        if (!e || !pn)
-            return snprintf(out, size, "no strike %d or no player", slot), 1;
-        float tgt[3] = {*(float *)(pn + 0x68), *(float *)(pn + 0x6c) + 1.5f, *(float *)(pn + 0x70)};
-        unsigned *role = (unsigned *)(ai + E_ROLE), saved = *role;
-        *role |= 4;
-        ((void (TSCALL *)(void *, float *))((void **)*e)[4])(e, tgt);
-        *role = (*role & ~4u) | (saved & 4);
-        snprintf(out, size, "fired strike %d at %.1f %.1f %.1f", slot, tgt[0], tgt[1], tgt[2]);
     } else if (!strcmp(cmd, "show")) {
         show_death(ai, push, 1);
         snprintf(out, size, "death shown: animation %d -> %d", before, node ? anim_id(node) : -9);
     } else
-        snprintf(out, size, "!ai list <filter|*> | kill <ai> | show <ai> [push] | named");
+        snprintf(out, size, "!ai list <filter|*> | kill <ai> | show <ai> [push] | named | mem <obj> <off> [n] |"
+                            " wpn <ai> | strikes <ai>");
     return 1;
+}
+
+/* ---- lab: who calls the projectile dispatch (TS_FIREDEBUG=1) ----
+ * The projectile dispatchers (0x7f7ee0, in the vtables 0xd943d0 +0x1c, 0xd95658 +0x270, 0xdbd038 +0x58) create the
+ * shot's projectile and return at once in game mode 3: a client never creates one. Logs the code addresses found
+ * on the stack for the first shots, to find the weapon's own shot function (effects). */
+typedef void (TSCALL *dsp_t)(void *, int *);
+static LONG n_fire_logged;
+static void TSCALL hook_dsp(void *dsp, int *shot)
+{
+    if (InterlockedIncrement(&n_fire_logged) <= 12) {
+        DWORD *sp = (DWORD *)__builtin_frame_address(0);
+        char buf[400];
+        int n = snprintf(buf, sizeof buf, "fire: dsp %p shot %p (+8 %p +c %p) stack:", dsp, shot, shot ? (void *)shot[2] : NULL,
+                         shot ? (void *)shot[3] : NULL);
+        for (int i = 0, k = 0; i < 160 && k < 14 && n < (int)sizeof buf - 12; i++)
+            if (sp[i] >= 0x401000 && sp[i] < 0xc00000) {
+                n += snprintf(buf + n, sizeof buf - n, " %lx", (unsigned long)sp[i]);
+                k++;
+            }
+        char *sh = shot ? (char *)shot[3] : NULL;
+        ts_log("aisync: %s%s%s", buf, sh && is_ai(sh) ? " (AI " : "", sh && is_ai(sh) ? ai_name(sh) : "");
+    }
+    ((dsp_t)0x7f7ee0)(dsp, shot);
+}
+
+static void firedebug_install(void)
+{
+    void *o = (void *)0x7f7ee0, *h = (void *)hook_dsp;
+    int ok = ts_patch_bytes(0xd943d0 + 0x1c, &o, &h, 4) + ts_patch_bytes(0xd95658 + 0x270, &o, &h, 4)
+             + ts_patch_bytes(0xdbd038 + 0x58, &o, &h, 4);
+    ts_log("aisync: fire diagnostics %d/3", ok);
 }
 
 void aisync_install(void)
 {
+    {
+        char fv[8];
+        if (ts_env("TS_FIREDEBUG", fv, sizeof fv) && fv[0] == '1')
+            firedebug_install();
+    }
     char v[16];
     engine_mode = !(ts_env("TS_AISYNC", v, sizeof v) && v[0] == '0');
     if (ts_env("TS_AIDEBUG", v, sizeof v))

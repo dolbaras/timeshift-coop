@@ -475,11 +475,16 @@ void coopsession_install(void)
         ts_log("coopsession: off (TS_COOP=0)");
         return;
     }
-    /* Time powers are shared in co-op sessions by default (timesync.c acts on campaign levels only).
-     * Story sync (storysync.c) still needs TS_STORYSYNC=1: it acts in every network game, stock maps too. */
+    /* Time powers and the story are shared in co-op sessions by default (timesync.c acts on campaign levels only,
+     * storysync.c only in a co-op session whose host has COOP_F_STORYSYNC); TS_TIMESYNC=0 / TS_STORYSYNC=0 switch
+     * them off (on the host: for the whole session). */
     if (!ts_env("TS_TIMESYNC", v, sizeof v)) {
         SetEnvironmentVariableA("TS_TIMESYNC", "1");
         ts_log("coopsession: TS_TIMESYNC=1 (default for co-op sessions)");
+    }
+    if (!ts_env("TS_STORYSYNC", v, sizeof v)) {
+        SetEnvironmentVariableA("TS_STORYSYNC", "1");
+        ts_log("coopsession: TS_STORYSYNC=1 (default for co-op sessions)");
     }
     if (ts_env("TS_COOP_VERSION", v, sizeof v)) {   /* (lab: act as another version, to test the check) */
         clean_version(my_version, sizeof my_version, (const unsigned char *)v, (int)strlen(v));

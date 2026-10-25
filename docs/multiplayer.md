@@ -480,17 +480,46 @@ Measured on the N100 pair **(observed)**, level `ts2_city_part02`, run `work\run
 | `$farm.Create("ai_house_second_room_4")` after the join | client: "object net 2570 named ai_house_second_room_4"; `string($ai_house_second_room_4)` gives the name on both |
 | Earlier experiment `n100pair-20261025-104724` | the visual death with authority turned `police4_v2` into a ragdoll matching the host's (client `shot181`, host `shot204`) |
 
+### AI weapon fire on clients (findings, not built yet)
+
+Static analysis and one diagnostic run (`TS_FIREDEBUG=1` on the host logs the code addresses on the stack of the
+first 12 projectile dispatches; run `n100pair-20261025-131715`):
+
+- A soldier's shot: the strike logic (authority only) sends engine message `0x4e4` with its strike record to the
+  weapon (`0x84f0d0`: `0x946ee0(weapon, 0x4e4, record, 0)`; the AI's own handler `0x83a510` forwards `0x4e4` the same
+  way), the weapon's handler (`0x82cf40` -> `0x82cf90` -> `0x827c60` on its sub-object `+0x278`) calls the attack's
+  fire (`attack->vtbl+0x24`, `0x5417e0` -> `0x8c1fa0` for `atk_spread`), counts ammunition (not on a client) and
+  plays `0x7fa420` (shells/flash of the weapon). Stack seen: `0x8c1ff8 <- 0x5417ee <- 0x827c85 <- 0x82cfc0 <-
+  0x82cf70 <- 0x946ec4 <- ... <- 0x84f103 <- 0x83a6ff`; shot info `+0xc` = the soldier, `+8` its weapon.
+- The projectile dispatchers (`0x7f7ee0`, `0x7f8340`; vtables `0xdbd038 +0x58/+0x88`, `0xd943d0 +0x1c`,
+  `0xd95658 +0x270`) **return at once in game mode 3**: a client never creates a projectile, so a shot replayed on a
+  client cannot hurt anybody twice. The AI tracer class (`wpn_ai_tracer` -> `plw_sfx_tracer` -> `sw_pjl` -> `pjl_base`)
+  is not `isSyncMP` (no projectile of a player's bullet either; only grenade/crossbow stickers are networked), so
+  clients get no tracers from the server.
+- Cheapest replay: the server counts the shots of each soldier (the dispatch hook above sees them, with the
+  soldier) and sends the count with the AI update extras (unreliable, no extra message); a client that sees the
+  count grow sends `0x4e4` to its own copy of the weapon with a strike record like the server's (attack index at
+  `+4`, shots at `+5`): the weapon's effects run, the dispatch does nothing. Still to find out: the strike record
+  layout on a client (built by `0x852f10`), whether the weapon's effects need the authority bit, and whether
+  sounds play from the weapon handler or from the attack's fire.
+
 Still open:
 
 - Soldiers playing scripted sequences (the level-start actors `*_MM`/`*_CR`, body animation id -2 on the server)
   stand in their idle on the client.
-- AI weapon fire effects (muzzle flash, tracers, sounds) are not seen on the client (see "AI weapon fire" below).
+- AI weapon fire effects (muzzle flash, tracers, sounds) are not seen on the client (findings above).
 - The client's ragdoll falls from its own pose with a neutral push, not with the server's hit direction.
 
 | Environment | Effect |
 |---|---|
 | `TS_AISYNC=0` | leave the AI as the game has it (the mod's AI replication is on by default; it acts only on AI with `isSyncMP` in a network session) |
 | `TS_AIDEBUG=<s>` | every `<s>` seconds (on the clock) each AI's net id, role bits, body position, animation and update counters in the log; with it a client also reads `<TS_SHOTDIR>\follow.req` (`side back up` in metres) and puts its player next to the host's body, facing the same way, so both machines can render the same scene |
+| `TS_FIREDEBUG=1` | (lab) the code addresses on the stack of the first 12 projectile dispatches, with the shooting soldier |
+
+Test console (`TS_CONSOLE`): `!ai list <part of a name>|*` (each soldier's net id, role, flags, animation, ragdoll,
+corpse state), `!ai kill <ai>` (the death state as the server's message sets it), `!ai show <ai> [push]` (show
+its death here), `!ai named` (client: objects asked for and named), `!ai mem <object> <hex offset> [dwords]`,
+`!ai wpn <ai>`, `!ai strikes <ai>` (weapon holder `+0x520`, strike manager `+0x530`).
 
 ### Script facts found on the way
 
@@ -648,9 +677,9 @@ was spoiled by the key tool's "used" mark; engine behaviour as in single player)
 
 ## 9b. Story in co-op
 
-`native/storysync.c`, switched on with `TS_STORYSYNC=1` on every machine (still opt-in); it acts only in a co-op
-session whose host runs the story (`ts_coop_feature(COOP_F_STORYSYNC)`; `TS_STORYSYNC=all` = every network map,
-for tests). Run live on the N100 pair 2026-10-25 (results at the end of this section). The classifier and the client rewrite were run offline over the scripts of all
+`native/storysync.c`, **on by default** since 2026-10-25 (`coopsession.c` sets `TS_STORYSYNC=1` when it is not set;
+`TS_STORYSYNC=0` switches it off, on the host for the whole session); it acts only in a co-op session whose host
+runs the story (`ts_coop_feature(COOP_F_STORYSYNC)`; `TS_STORYSYNC=all` = every network map, for tests). Run live on the N100 pair 2026-10-25 (results at the end of this section). The classifier and the client rewrite were run offline over the scripts of all
 24 campaign levels (6 135 object texts: 2 480 get statements wrapped, 10 746 statements in all; no statement
 spans two lines). Addresses are those of patch 1.2. The rules come from `player-audit.md` (C1, C2, C4, C6-C8).
 
@@ -732,14 +761,17 @@ bytes). Object arguments (`OnPicked(user)`, `OnOccupied(user)`) travel as null.
 
 | Environment | Effect |
 |---|---|
-| `TS_STORYSYNC=1` | story in co-op (all machines need it; single player is unchanged) |
+| `TS_STORYSYNC=0` | no shared story (default: on in co-op sessions; single player and stock maps are unchanged either way) |
 | `TS_STORYSYNC_FAIL=death` | mission failure stays a multiplayer death |
 | `TS_STORYSYNC_LOG=1` | every held-back, sent and replayed event in the log |
 
 Test console (`TS_CONSOLE`): `!ss state`, `!ss class <object>` (its handlers: story or local; rewritten),
 `!ss enter <domain>` / `!ss leave <domain>` (client: report as if its player entered or left),
-`!ss fire <object> <event>` (run an event; on the host it is also sent), `!ss exit <level>` and `!ss restart`
-(host). The log has every decision as `storysync: ...`.
+`!ss fire <object> <event> [0|1]` (run an event, with one bool argument when the value is given; on the host it is
+also sent, on a client a story event is held back and reported like one the client detected),
+`!ss find <event>` (the level objects with a handler of that event), `!ss goto <domain>` (this machine's player to
+the middle of a domain's bounds, `+0xc8` min / `+0xd4` max), `!ss exit <level>` and `!ss restart` (host). The log
+has every decision as `storysync: ...`.
 
 Changes made in the live test (all in `storysync.c`): event arguments handled as `Variant **` on both sides
 (the client crashed at `0xCCCCCCCC` on the first replay, and every argument had gone out as null); the
@@ -768,10 +800,14 @@ a level rebuilt under the same name (team restart) clears the class table on bot
 | Time powers with story on | unchanged | host slow -> client `0x41`; client stop -> host `0x42` | 084558, 090615 |
 | Stock map `multiplayer1` with `TS_STORYSYNC=1`, `TS_TIMESYNC=1` | both modules idle | storysync role 0, no classes, nothing sent; timesync "co-op powers off"; V on the host spends energy on the stock chrono grenade, no world power; client joined and played (its first load of the map spent > 80 s building its shader cache, the next took 9 s) | n100pair-20261025-102207 (101905) |
 
-Not run: the natural exit through a reload domain (`LOAD_LEVEL` caught at `0x8aa0e3`): `$dom_reload1.Unlock()`
-alone did not leave the level, and the host's player could not be put inside the exit domain (a reload object
-is not a scene entity: its `+0x230` is not a node; reading it as one crashed a test build); the `OnEye` report
-(22). Both go through code paths shared with the tested ones (the server map change, the occupancy report).
+Second round, 2026-10-25 afternoon **(observed)**:
+
+| Test | Expected | Observed | Run (`workuns\`) |
+|---|---|---|---|
+| T8 natural level exit | the host's player walks into the exit; everybody loads the next level | `$dom_reload.Unlock()` (in the level a rebel's `OnBhvEnd("RUN_TO_EXIT")` unlocks it), `!ss goto dom_reload` put the host's player into the domain (bounds 205.3 -7.3 -16.0 .. 209.6 -5.3 -11.7, a tunnel under the street): 1 s later "level change to ts2_city_part03 requested" from the reload domain's `LOAD_LEVEL`, then the server's map change; host and client on part03, the client still joined (`IsServer` No), both at the level start (frames `shots-20261025-124159`) | n100pair-20261025-124159, 124850 (113324: host only, the client had dropped) |
+| T9 `OnEye` report | a client's look trigger is held back, reported (22), run once by the host | `!ss fire look_door_knock OnEye 1` on the client (its own detection path): the host ran the handler and created `ai_house_third_room_1`; on the client the soldier exists under its name and lives (the verbose story log was off in that run, so the held-back and reported lines are not in it) | n100pair-20261025-124159 |
+| Default on, no `TS_STORYSYNC` anywhere | as with `TS_STORYSYNC=1` | log "TS_STORYSYNC=1 (default for co-op sessions)" on both; roles 2/3; T1 (client entry -> host created `ai_house_first_room_2`, named on the client, alive), T4 (`AutoSave(2)` -> "checkpoint 2"), T5 (client `FailMission`, respawn), time powers (host V: host `0x41`, client `0x4041`; client G: host `0x42`, client `0x4042`), T8 (natural exit, both on part03), T6 (client `$ui.LoadLevel` refused), T7 (host `FailMission` -> "restarted at checkpoint 2") | n100pair-20261025-124850 |
+| T7 again (fix) | both at `Check_Point_2` after the restart | in 124850 both stood at the level start after the restart: the restore ran 3 s after the level start, before the players existed (they spawn ~6 s in on the N100). The restore now waits for the host's player (+2 s) and a client's replays wait for its player (up to 30 s): host at -169.62 -11.88 -145.22 = `Check_Point_2`. The client of that run had dropped while loading (section 9d), so its side is not confirmed yet | n100pair-20261025-125817 |
 
 ### Not covered yet
 
@@ -790,7 +826,8 @@ is not a scene entity: its `+0x230` is not a node; reading it as one crashed a t
 
 ## 9c. The co-op session (`native/coopsession.c`)
 
-Built and checked against the executable only; not yet run in a game.
+Run in every N100 pair session since 2026-10-25 (the lab's `AutoTest="join"` goes through the Co-op menu's
+direct connection); results at the end of this section.
 
 - **What a co-op session is**: a network game (game mode 2/3/4) on a campaign level (`ts2_` in the level
   file name). Only the mod's Co-op menu starts one (the stock map list does not offer campaign levels), so
@@ -808,15 +845,19 @@ Built and checked against the executable only; not yet run in a game.
   `TS_COOP=0` switches the whole file off.
 - **Session settings** (`ts_coop_feature(COOP_F_*)`): the host's. Its co-op menu leaves them in UI strings
   (`CoopSession = host`, `CoopDifficulty`, `CoopMaxPlayers`), read by the DLL when the server's level starts;
-  time powers (`TS_TIMESYNC`, default `1` since this file: timesync.c acts on campaign levels only) and story
-  (`TS_STORYSYNC`, still opt-in; storysync.c acts only in co-op sessions with `COOP_F_STORYSYNC`) from the
-  environment. Both modules read these flags (`ts_coop_feature`).
+  time powers (`TS_TIMESYNC`) and story (`TS_STORYSYNC`) from the environment, both `1` by default since
+  2026-10-25 (`0` switches them off; timesync.c acts on campaign levels only, storysync.c only in co-op sessions
+  with `COOP_F_STORYSYNC`). Both modules read these flags (`ts_coop_feature`).
 - **Messages** (mod messages of section 9):
 
   | Subtype | Direction | Body | Meaning |
   |---|---|---|---|
-  | `40` | server -> client | `u8 proto (1), u8 flags, u8 difficulty (0-2, 255 none), u8 max players, u8 len, version` | the session's settings and the host's mod version; sent when the client's slot is joined and ready, again every 3 s until answered (5 times), and again after every level change |
+  | `40` | server -> client | `u8 proto (1), u8 flags, u8 difficulty (0-2, 255 none), u8 max players, u8 len, version` | the session's settings and the host's mod version; sent when the client's slot is joined and ready, and as the answer to every `42` |
   | `41` | client -> server | `u8 proto, u8 result (0 same version, 1 other), u8 len, version` | the answer |
+  | `42` | client -> server | `u8 proto, u8 0` | "send me `40`": a client that runs the level and has no session info asks every 3 s (20 times at most) |
+
+  The first version repeated `40` every 3 s from the moment the client's slot was joined; such messages went to a
+  client that was still loading the level (section 9d).
 
 - **Client**: same version -> `$ui.SetStr("CoopSession", "client")` and the host's difficulty
   (`$ui.SetVariable("Multiplayer", "Difficulty", ...)`); other version -> `CoopError =
@@ -824,7 +865,35 @@ Built and checked against the executable only; not yet run in a game.
   shows "The host plays with co-op mod version X, you have version Y ...". Version strings from the network
   are reduced to `[0-9A-Za-z.+_-]` before they go into script text.
 - **Open**: a client without the mod (or with a build older than this file) is not refused, only logged
-  by the server ("never answered"); the stock game's reaction to the mod's message id `0x7C01` is not known.
+  by the server ("never answered" after 90 s); the stock game's reaction to the mod's message id `0x7C01` is not known.
+
+| Check **(observed)** | Result | Run (`workuns\`) |
+|---|---|---|
+| Join through the Co-op menu (direct connection, production frames + lab recipe) | every pair run: host "client 1 joined", client "host version 0.0.1-dev (same); flags 0x7, difficulty 1, max players 4" 10-15 s after its level start, "joined the host's co-op session" | e.g. n100pair-20261025-121754, 124850 |
+| Version check | client with `TS_COOP_VERSION=0.0.0-test` (lab: says it has another version): "host version 0.0.1-dev, here 0.0.0-test: leaving", back in the main menu with the Russian message "the server has co-op mod version 0.0.1-dev, you have 0.0.0-test; install the server's version" (client `shot108`) | n100pair-20261025-131715 |
+
+## 9d. Joining a running level: lost connections
+
+On the N100 pair a client that joins a running co-op level lost the connection in a third of the joins: the client's level loads (15-20 s on the N100 with the host running beside it), then the client shows
+the stock message "server closed" (`UI_ERROR_SERVER_CLOSED`, frame `ClientFrame`) and the host's slot list drops it.
+`netfix.c` now logs the network layer's events: on the host `event 9`, `event 5 (peer left)` while the client is
+still loading; on the client `event 6 (connection lost), reason: UI_NET_ERR_CLOSED_BY_THE_HOST` at the end of its
+load. No kick (`PEER_NETWORK` `+0x20`) is called.
+
+| Variant (client 20 or 45 s after the host; most runs: the host kills and creates a soldier while the client loads) | Joins | Lost |
+|---|---|---|
+| Build before this work (`ea109c3`) | 3 | 1 |
+| This work before the fix below | 13 | 4 |
+| Mod messages only to clients whose slot says they run the level (slot flag 1; coopnet.c), clients ask for names/the dead after the session info | 9 | 2 (in both the host had sent nothing to the client: not caused by mod messages) |
+| The same with `TS_AISYNC=0` | 4 | 0 |
+
+So it is older than this work, the mod's own messages to a loading client made it more frequent, and the rest
+appears together with the mod's AI replication. The engine sends regular updates only to clients whose slot has
+flag 1 (`0x63c1d0`), so the AI updates themselves do not reach a loading client; what else differs during the load
+(entity creation messages of adopted AI, which carry motion components) is the next thing to measure, e.g. by logging
+the sizes of `0x63ea90` sends per peer during a join. The stock game's own limit: `PEER_NETWORK +0x44` (`0x768300`)
+reports at most 2000 free bytes of a peer's send queue. Lost joins happened with the client 20 s and 45 s after the
+host. Not checked yet: whether a second join attempt of the same client succeeds.
 
 ## 10. Open questions
 
