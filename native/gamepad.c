@@ -419,6 +419,16 @@ static void write_codes(float *v, XINPUT_GAMEPAD *g, int menu, float *lxy, float
     lxy[0] = lx, lxy[1] = ly, rxy[0] = rx, rxy[1] = ry;
 }
 
+/* Which device player 1 used last (for prompts that name a button: split.c). */
+static DWORD last_pad_use, last_kbm_use;
+
+int gamepad_pad_active(int player)
+{
+    if (player == 1)
+        return 1;   /* (player 2 has only its pad) */
+    return last_pad_use && (int)(last_pad_use - last_kbm_use) >= 0;
+}
+
 static void pad_poll(BYTE *raw)
 {
     static int frame;
@@ -443,6 +453,8 @@ static void pad_poll(BYTE *raw)
     float l[2], r[2];
     write_codes(v, g, menu, l, r);
     float lx = l[0], ly = l[1], rx = r[0], ry = r[1];
+    if (g->wButtons || g->bLeftTrigger > 30 || g->bRightTrigger > 30 || lx * lx + ly * ly > 0.09f || rx * rx + ry * ry > 0.09f)
+        last_pad_use = GetTickCount();
     menu_repeat(v, menu);
 
     if (padlog) {
@@ -503,6 +515,14 @@ static void THISCALL hook_kb_poll(void *raw)
         return;
     }
     real_kb_poll(raw);
+    {   /* (keyboard keys and mouse buttons pressed: player 1 uses keyboard and mouse) */
+        float *v = (float *)((BYTE *)raw + 0x10);
+        for (int c = 0; c < 0x108; c++)
+            if (v[c] > 0.5f) {
+                last_kbm_use = GetTickCount();
+                break;
+            }
+    }
     pad_poll((BYTE *)raw);
     if (after_poll)
         after_poll();

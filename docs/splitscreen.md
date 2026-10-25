@@ -297,13 +297,19 @@ Host started by the lab recipe (`AutoTest="host"`, `AutoTestMap="ts2_city_part02
 | Host without split screen | no "Ожидание сервера." during the host's death; the multiplayer death screen and prompt as the game has them | `20261025-180700` `shot137-145.png` |
 | Respawn prompt with a pad | the prompt is GAME_PLAYER_IS_DEAD_MP_FORCE_PC ("Нажмите {PARAM}", {PARAM} the first binding of the fire command: the mouse button); the game has pad variants (GAME_PLAYER_IS_DEAD_MP_FORCE "Отклоните {PARAM}") used on consoles. Not changed yet (the pad's RT does respawn, fire is bound to it) | strings tables |
 
+### Round 14 (2026-10-25, main PC): prompts name the pad button
+
+| Item | Result | Evidence |
+|---|---|---|
+| Respawn prompt and other "press {button}" prompts | the game picks the _PC strings when it loads the tables (`0x6901d0`: a key ending in _PC replaces the plain one), so the text stays; the button comes from the command's first binding (`0x707e30` copies slot 0 of the command's entry in the GAME context, a HUD element's naming method vtable +0x110 = `0x709bf0` names it as CTRL_<key name>). When the player whose half is drawn last used a pad (`gamepad_pad_active`, gamepad.c: pad input newer than keyboard/mouse input; player 2 always), the naming gets the command's pad binding (slot 3/4) instead. The pad codes are named PAD_* (gamepad.c), and CTRL_PAD_* strings in all 9 tables give "RT", "RB", "X", "D-pad up" ... | `20261025-182729` `shot141.png` ("Нажмите RT, чтобы возродиться сейчас."), `20261025-183014` `shot100/104.png` (time-power hint "нажмите RB"), log (`prompt in view 0 names pad code 0x10d instead of 0x21`: use) |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
   triggers, checkpoints, cutscenes, death and restart see player 1 only. The same audit as for network co-op
   (`player-audit.md`).
 - **Split screen with the network**: host side done (round 12), the client test is open.
-- The respawn prompt names the mouse button also when a pad is used (round 13).
+- Hint boxes are one for both halves: a hint naming a button names player 1's device when both see it.
 - Old notes on the network (round 5 goal 6): What blocks it: the
   network co-op runs the multiplayer game mode (2) and the multi-thread frame, split screen needs the
   single-thread frame; player 2 is a campaign `player` spawned locally, which the server's entity replication

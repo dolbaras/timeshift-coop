@@ -1465,6 +1465,81 @@ static void TSCALL hook_text_draw(BYTE *e, void *arg)
     real_text_draw(e, arg);
 }
 
+/* Prompts that name a command's buttons ("Нажмите {PARAM}" with a command name: the respawn prompt, use hints):
+ * a HUD element's naming method (vtable +0x110 = 0x709bf0, thiscall (element, int *count, int *codes, x)) names
+ * the first one or two codes of the command's bindings, the keyboard/mouse ones first. When the player whose half
+ * is drawn last used a pad, the pad codes (0x108-0x153) are put first, so the prompt names the pad button. */
+int gamepad_pad_active(int player);   /* gamepad.c */
+static void (TSCALL *real_name_codes)(void *, int *, int *, void *);
+static void TSCALL hook_name_codes(void *e, int *count, int *codes, void *x)
+{
+    int v = view >= 0 && p2 ? view : 0;
+    if (splitlog) {
+        static int nl;
+        if (nl++ < 20)
+            ts_log("split: prompt naming from %p: count %d codes %x %x %x, x %p, pad %d", __builtin_return_address(0), count ? *count : -1,
+                   count && codes && *count > 0 ? codes[0] : 0, count && codes && *count > 1 ? codes[1] : 0,
+                   count && codes && *count > 2 ? codes[2] : 0, x, gamepad_pad_active(v));
+    }
+    /* (the prompt passes the command's first binding only (0x707e30 copies slot 0 of the command's entry in the
+     * GAME context): the entry is found by that binding and its pad slot (slot 3 or 4, gamepad.c's) named instead) */
+    BYTE *im = *(BYTE **)0xfcabb4;
+    if (count && codes && *count >= 1 && *count <= 3 && !(codes[0] >= 0x108 && codes[0] < 0x154) && im && gamepad_pad_active(v)) {
+        typedef struct { float value; struct { int n; int code[3]; } slot[5]; char unknown[0x10]; unsigned flags; } cmd_e;
+        BYTE *ctx = ((BYTE *(TSCALL *)(void *, const char *))(*(void ***)im)[0x38 / 4])(im, "GAME");
+        cmd_e *e = ctx ? *(cmd_e **)(ctx + 4) : NULL;
+        int first = ctx ? *(int *)(ctx + 8) : 0, end = ctx ? *(int *)(ctx + 12) : 0;
+        for (int i = 0; e && i < end - first && i < 512; i++) {
+            if (e[i].slot[0].n != *count || memcmp(e[i].slot[0].code, codes, *count * 4))
+                continue;
+            for (int k = 3; k < 5; k++)
+                if (e[i].slot[k].n >= 1 && e[i].slot[k].n <= 3 && e[i].slot[k].code[0] >= 0x108 && e[i].slot[k].code[0] < 0x154) {
+                    static int nl;
+                    if (splitlog && nl++ < 10)
+                        ts_log("split: prompt in view %d names pad code %#x instead of %#x", v, e[i].slot[k].code[0], codes[0]);
+                    *count = e[i].slot[k].n;
+                    memcpy(codes, e[i].slot[k].code, *count * 4);
+                    i = end;
+                    break;
+                }
+        }
+    }
+    if (count && codes && *count > 1 && *count <= 8 && !IsBadReadPtr(codes, *count * 4) && gamepad_pad_active(v)) {
+        int tmp[8], k = 0;
+        for (int i = 0; i < *count; i++)
+            if (codes[i] >= 0x108 && codes[i] < 0x154)
+                tmp[k++] = codes[i];
+        int pads = k;
+        for (int i = 0; i < *count; i++)
+            if (!(codes[i] >= 0x108 && codes[i] < 0x154))
+                tmp[k++] = codes[i];
+        if (pads && pads < *count) {
+            static int n;
+            if (splitlog && n++ < 10)
+                ts_log("split: prompt in view %d names the pad button first (code %#x before %#x)", v, tmp[0], codes[0]);
+            memcpy(codes, tmp, *count * 4);
+        }
+    }
+    real_name_codes(e, count, codes, x);
+}
+
+static void install_name_hook(void)
+{
+    {   /* (the element classes that name a command's buttons, see hook_name_codes) */
+        static const DWORD nv[] = {0xd9f2e8, 0xd9f410, 0xda0498, 0xda0870, 0xda0be8, 0xdafb20, 0xdb0578, 0xdb0968,
+                                   0xdb2b58, 0xdb2c80, 0xdb2da8, 0xdb2ed0, 0xdb33b8, 0xdb3620, 0xdb3768};
+        int nn = 0;
+        for (int i = 0; i < (int)(sizeof nv / sizeof nv[0]); i++)
+            if (*(DWORD *)nv[i] == 0x709bf0) {
+                void *vt = (void *)nv[i];
+                void *t = ts_patch_vtable(&vt, 0, (void *)hook_name_codes);
+                if (t)
+                    real_name_codes = t, nn++;
+            }
+        ts_log("split: %d prompt naming slots hooked (pad buttons named for pad players)", nn);
+    }
+}
+
 static void install_msg_hook(void)
 {
     static int done;
@@ -2577,6 +2652,7 @@ void split_install(void)
         }
     fx_off = ts_env("TS_SPLIT_FXSHARED", v, sizeof v) && v[0] == '1';
     hudlog = splitlog > 0;
+    install_name_hook();   /* (also without split screen: player 1 with a pad) */
     if (ts_env("TS_SPLIT_NETLOCAL", v, sizeof v))
         net_local = v[0] != '0';
     if (ts_env("TS_SPLIT_MSGNEXT", v, sizeof v))

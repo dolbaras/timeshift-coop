@@ -166,6 +166,24 @@ STRINGS = [
         "czech": "SPUSTIT",
         "hungarian": "INDÍTÁS",
     }),
+    # Pad button names for prompts ("Press {PARAM}"): the game looks up CTRL_<key name>, the mod names pad codes
+    # PAD_* (native/gamepad.c); split.c names the pad binding when a player uses a pad
+    ("CTRL_PAD_A", {l: "A" for l in LANGS}),
+    ("CTRL_PAD_B", {l: "B" for l in LANGS}),
+    ("CTRL_PAD_X", {l: "X" for l in LANGS}),
+    ("CTRL_PAD_Y", {l: "Y" for l in LANGS}),
+    ("CTRL_PAD_LB", {l: "LB" for l in LANGS}),
+    ("CTRL_PAD_RB", {l: "RB" for l in LANGS}),
+    ("CTRL_PAD_BACK", {l: "BACK" for l in LANGS}),
+    ("CTRL_PAD_START", {l: "START" for l in LANGS}),
+    ("CTRL_PAD_LS", {l: "LS" for l in LANGS}),
+    ("CTRL_PAD_RS", {l: "RS" for l in LANGS}),
+    ("CTRL_PAD_LT", {l: "LT" for l in LANGS}),
+    ("CTRL_PAD_RT", {l: "RT" for l in LANGS}),
+    ("CTRL_PAD_DPAD_UP", {'english': 'D-pad up', 'russian': 'крестовина вверх', 'german': 'Steuerkreuz oben', 'french': 'croix haut', 'italian': 'croce su', 'spanish': 'cruceta arriba', 'polish': 'krzyżak w górę', 'czech': 'kříž nahoru', 'hungarian': 'iránypad fel'}),
+    ("CTRL_PAD_DPAD_DOWN", {'english': 'D-pad down', 'russian': 'крестовина вниз', 'german': 'Steuerkreuz unten', 'french': 'croix bas', 'italian': 'croce giù', 'spanish': 'cruceta abajo', 'polish': 'krzyżak w dół', 'czech': 'kříž dolů', 'hungarian': 'iránypad le'}),
+    ("CTRL_PAD_DPAD_LEFT", {'english': 'D-pad left', 'russian': 'крестовина влево', 'german': 'Steuerkreuz links', 'french': 'croix gauche', 'italian': 'croce sinistra', 'spanish': 'cruceta izquierda', 'polish': 'krzyżak w lewo', 'czech': 'kříž doleva', 'hungarian': 'iránypad balra'}),
+    ("CTRL_PAD_DPAD_RIGHT", {'english': 'D-pad right', 'russian': 'крестовина вправо', 'german': 'Steuerkreuz rechts', 'french': 'croix droite', 'italian': 'croce destra', 'spanish': 'cruceta derecha', 'polish': 'krzyżak w prawo', 'czech': 'kříž doprava', 'hungarian': 'iránypad jobbra'}),
     # Video options (PC): screen mode, applied at the next start (native/display.c)
     ("COOP_VIDEO_DISPLAY", {
         "english": "Screen mode",
