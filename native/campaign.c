@@ -1,7 +1,8 @@
 /*
- * Whole-campaign co-op rules on top of storysync.c (patch 1.2 exe only). NOT YET RUN IN A GAME: built and checked
- * against the executable and the level scripts only (mod/docs/campaign-audit.md). Off unless TS_CAMPAIGN=1; it acts
- * only in a co-op session whose host runs the story (storysync.c, COOP_F_STORYSYNC).
+ * Whole-campaign co-op rules on top of storysync.c (patch 1.2 exe only). Live-tested on the N100 pair 2026-10-26
+ * (mod/docs/campaign-audit.md section 3b: what was proven and what is still open). On by default in co-op sessions
+ * (coopsession.c sets TS_CAMPAIGN=1 when it is not set; TS_CAMPAIGN=0 off); it acts only in a co-op session whose host
+ * runs the story (storysync.c, COOP_F_STORYSYNC).
  *
  * storysync.c makes a story domain count as entered while ANY player is inside (the first player to arrive starts
  * the story). A few campaign domains need another rule in co-op; they are listed per level in `rules` below
@@ -1159,7 +1160,7 @@ void campaign_install(void)
             ts_log("campaign: native at %08lx not as expected (other exe): not hooked", h->addr);
     }
     enabled = 1;
-    ts_log("campaign: on (NOT YET RUN: domain rules %s, gather after %d s, death domains %s, seats/rides %s, force"
+    ts_log("campaign: on (domain rules %s, gather after %d s, death domains %s, seats/rides %s, force"
            " fields on clients %s, late joiners %s, AI nearest player %s, %d native hook(s))", use_rules ? "on" : "off",
            gather_after, use_kill ? "kill per player" : "as storysync", use_seats ? "on" : "off",
            use_setspeed ? "on" : "off", use_latejoin ? "on" : "off", use_ai ? "on" : "off", n_hooked);

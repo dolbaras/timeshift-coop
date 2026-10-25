@@ -1,6 +1,7 @@
 /*
- * Time reversal in co-op, the quick variant (patch 1.2 exe only). NOT YET RUN IN A GAME. Off unless TS_COOP_REVERSE=1;
- * acts only where timesync.c runs the campaign time powers (a co-op session on a campaign level).
+ * Time reversal in co-op (patch 1.2 exe only). Live-tested on the N100 pair 2026-10-26 (campaign-audit.md 3b). On by
+ * default in co-op sessions (coopsession.c sets TS_COOP_REVERSE=1 and TS_COOP_REWIND=1 when not set; =0 off); acts
+ * only where timesync.c runs the campaign time powers (a co-op session on a campaign level).
  *
  * Why: in a network game the engine never starts its time recorder (0x5846b0 returns unless the game mode is 1), so
  * the reverse key fails (0x5847c0: "no recorded frames") and timesync.c refuses reverse anyway. Several campaign
@@ -30,7 +31,7 @@
  *   80 client -> server  {u8 1, u8 what (1 = start, 0 = stop), u8 tenths of a second}
  *   81 server -> client  {u8 1, u8 on, u8 yours, u8 tenths left, i32 owner}   (repeated every second while on)
  *
- * Real rewind on the host (TS_COOP_REWIND=1, with TS_COOP_REVERSE=1; NOT YET RUN): the engine's own time recorder.
+ * Real rewind on the host (TS_COOP_REWIND=1, with TS_COOP_REVERSE=1): the engine's own time recorder.
  * It takes a snapshot of every isSyncTR object every 0.1 s through the save serializer [0x1095f94] (0x5849c0, flags
  * 0x800000 save / 0x1000000 load in [0xfcace8]) and plays them back during a reverse (0x584170 asks, 0x584720
  * broadcasts 0x3ff and 0x584bf0 sets the playback flag 0x400000; 0x584870 ends with 0x400). Players are not
@@ -803,8 +804,8 @@ void coopreverse_install(void)
         ok += ts_patch_bytes(0x584960, want_tick, tr, 5);
         n++;
         stock = ok == n;
-        ts_log("coopreverse: stock rewind on the host %s (%d/%d recorder sites)", stock ? "on (NOT YET RUN)" : "off", ok, n);
+        ts_log("coopreverse: stock rewind on the host %s (%d/%d recorder sites)", stock ? "on" : "off", ok, n);
     }
-    ts_log("coopreverse: on (NOT YET RUN: %.1f s per reverse, %.2f energy/s, %d puzzle objects in the table)",
+    ts_log("coopreverse: on (%.1f s per reverse, %.2f energy/s, %d puzzle objects in the table)",
            (double)rev_seconds, (double)rev_cost, N_REV);
 }

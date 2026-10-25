@@ -494,6 +494,13 @@ void coopsession_install(void)
         SetEnvironmentVariableA("TS_STORYSYNC", "1");
         ts_log("coopsession: TS_STORYSYNC=1 (default for co-op sessions)");
     }
+    /* campaign.c and coopreverse.c (live-tested on the N100 pair 2026-10-26): on by default as well; =0 switches off */
+    static const char *const more[] = {"TS_CAMPAIGN", "TS_COOP_REVERSE", "TS_COOP_REWIND", NULL};
+    for (int i = 0; more[i]; i++)
+        if (!ts_env(more[i], v, sizeof v)) {
+            SetEnvironmentVariableA(more[i], "1");
+            ts_log("coopsession: %s=1 (default for co-op sessions)", more[i]);
+        }
     if (ts_env("TS_COOP_VERSION", v, sizeof v)) {   /* (lab: act as another version, to test the check) */
         clean_version(my_version, sizeof my_version, (const unsigned char *)v, (int)strlen(v));
         ts_log("coopsession: TS_COOP_VERSION: this machine says it has version %s", my_version);
