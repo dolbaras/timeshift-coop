@@ -240,6 +240,7 @@ static BYTE *shown_node;        /* the other player's body node, shown for this 
 static DWORD shown_flags;
 static BYTE *body_of(BYTE *pl);
 static void place_p2(BYTE *p1);
+static void place_player(BYTE *pl, BYTE *partner);
 static BYTE *rc;                /* the render camera: a copy of the view's camera with the half-screen fov */
 static BYTE *cam2;              /* player 2's camera (stage 2: an offset copy of player 1's) */
 
@@ -812,15 +813,32 @@ static int install_dispatch_hook(void)
 typedef void (TSCALL *die_t)(void *, int);
 static die_t real_die;
 
+#define HEALTH 0x234   /* the player's life, 100 at full; a rifle hit took 3 (measured: TS_SPLIT_MSGLOG, run 20261025-103150) */
+static DWORD died_at[2];
+
 static void TSCALL hook_die(void *pl, int arg)
 {
-    if (!p2 || pl != p2) {
+    BYTE *p1 = p1_of();
+    int who = pl == p2 ? 1 : pl == p1 ? 0 : -1;
+    if (!p2 || who < 0) {
         real_die(pl, arg);
         return;
     }
-    *(float *)(p2 + 0x468) = 0;
-    place_p2(p1_of());
-    ts_log("split: player 2 died: respawned next to player 1");
+    /* Down together (the partner died less than 5 s ago): the game's own death, the restart for both. */
+    DWORD now = GetTickCount();
+    if (died_at[!who] && now - died_at[!who] < 5000) {
+        ts_log("split: player %d died while player %d was down: the game's death", who + 1, 2 - who);
+        real_die(pl, arg);
+        return;
+    }
+    died_at[who] = now;
+    /* (the script's Kill sets the dying flags first: +0x39c 0x1000 by vtable +0x370, 0x400000 by +0x3a4 (1);
+     * cleared again for a living player) */
+    *(DWORD *)((BYTE *)pl + 0x39c) &= ~(0x1000u | 0x400000u);
+    *(float *)((BYTE *)pl + HEALTH) = 100.0f;
+    *(float *)((BYTE *)pl + 0x468) = 0;
+    place_player(pl, who ? p1 : p2);
+    ts_log("split: player %d died: respawned next to player %d", who + 1, 2 - who);
 }
 
 /* The player's event handler (vtable +0x22c, 0x40b120(this, event*), ret 4; a switch on the event code, word +4):
@@ -889,28 +907,74 @@ static BYTE *body_of(BYTE *pl)
 
 /* Player 2 next to player 1, facing the same way (TS_SPLIT_P2FACE=1, tests: 2.5 m in front, facing player 1),
  * placed with the player's own vtable +0x210 as player 2. */
-static void place_p2(BYTE *p1)
+/* Respawn spots: each player's own trail of positions (every half second in play). A spot where the partner
+ * stood a few seconds ago is ground it walked on; the partner's current place plus an offset is the fallback. */
+#define TRAIL 24
+static struct { float p[TRAIL][3]; int n, head; DWORD last; } trail[2];
+
+static void trail_add(int who, BYTE *pl)
 {
-    BYTE *node1 = p1 ? *(BYTE **)(p1 + 0x230) : NULL;
-    if (!node1 || !p2)
+    BYTE *node = pl ? *(BYTE **)(pl + 0x230) : NULL;
+    DWORD now = GetTickCount();
+    if (!node || now - trail[who].last < 500)
+        return;
+    trail[who].last = now;
+    memcpy(trail[who].p[trail[who].head], node + 0x68, 12);
+    trail[who].head = (trail[who].head + 1) % TRAIL;
+    if (trail[who].n < TRAIL)
+        trail[who].n++;
+}
+
+/* The newest spot at least 4 samples (2 s) old and 1.5 m away from where the partner is now. */
+static int trail_pick(int who, const float *now_pos, float *out)
+{
+    for (int age = 4; age < trail[who].n; age++) {
+        float *q = trail[who].p[(trail[who].head - 1 - age + 2 * TRAIL) % TRAIL];
+        float dx = q[0] - now_pos[0], dy = q[1] - now_pos[1], dz = q[2] - now_pos[2];
+        if (dx * dx + dy * dy + dz * dz >= 1.5f * 1.5f) {
+            memcpy(out, q, 12);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void trail_clear(void)
+{
+    memset(trail, 0, sizeof trail);
+}
+
+/* Player `pl` (player 1 or 2) put next to its partner, facing the partner's way, with the player's own vtable
+ * +0x210 as that player (TS_SPLIT_P2FACE=1, tests: player 2 2.5 m in front of player 1, facing it). */
+static void place_player(BYTE *pl, BYTE *partner)
+{
+    BYTE *node1 = partner ? *(BYTE **)(partner + 0x230) : NULL;
+    if (!node1 || !pl)
         return;
     float *fw = (float *)(node1 + 0x58), *pp = (float *)(node1 + 0x68);
     float pos[3] = {pp[0] + fw[2] * 1.5f, pp[1] + 0.3f, pp[2] - fw[0] * 1.5f};
     float dir[3] = {fw[0], fw[1], fw[2]};
+    const char *how = "beside";
     char v[8];
-    if (ts_env("TS_SPLIT_P2FACE", v, sizeof v) && v[0] == '1') {
+    if (pl == p2 && ts_env("TS_SPLIT_P2FACE", v, sizeof v) && v[0] == '1') {
         pos[0] = pp[0] + fw[0] * 2.5f, pos[2] = pp[2] + fw[2] * 2.5f;
         dir[0] = -fw[0], dir[1] = -fw[1], dir[2] = -fw[2];
-    }
-    BYTE *pa = PLAYER_A, *pb = PLAYER_B, *cam = CAM;
-    PLAYER_A = PLAYER_B = p2;
-    CAM = cam2;
-    ((place_t)(*(void ***)p2)[SLOT_PLACE])(p2, pos, dir, 1);
-    PLAYER_A = pa;
-    PLAYER_B = pb;
-    CAM = cam;
-    ts_log("split: player 1 at %.2f %.2f %.2f, player 2 placed at %.2f %.2f %.2f", pp[0], pp[1], pp[2], pos[0], pos[1],
-           pos[2]);
+        how = "facing";
+    } else if (trail_pick(partner == p2 ? 1 : 0, pp, pos))
+        how = "on the partner's trail";
+    if (pl == p2) {
+        p2_enter();
+        ((place_t)(*(void ***)p2)[SLOT_PLACE])(p2, pos, dir, 1);
+        p2_leave();
+    } else
+        ((place_t)(*(void ***)pl)[SLOT_PLACE])(pl, pos, dir, 1);
+    ts_log("split: player %d placed %s at %.2f %.2f %.2f (partner at %.2f %.2f %.2f)", pl == p2 ? 2 : 1, how, pos[0],
+           pos[1], pos[2], pp[0], pp[1], pp[2]);
+}
+
+static void place_p2(BYTE *p1)
+{
+    place_player(p2, p1);
 }
 
 static const char *script_name(BYTE *ent)
@@ -992,6 +1056,9 @@ static void spawn_p2(BYTE *p1)
         ts_log("split: no command context for player 2 (no pad input)");
     p2 = e;
     p2_born = GetTickCount();
+    if (!(*(float *)(e + HEALTH) > 0))   /* (a spawned player starts without life: full, as player 1 began) */
+        *(float *)(e + HEALTH) = 100.0f;
+    ts_log("split: player 2 health %.1f (player 1 %.1f)", *(float *)(e + HEALTH), *(float *)(p1 + HEALTH));
     ts_log("split: player 2 spawned %p (script name \"%s\"; player 1 %p \"%s\")", (void *)e, script_name(e), (void *)p1,
            script_name(p1));
     /* (single player names the object "player" in its init: player 2 gets its own name back) */
@@ -1036,9 +1103,9 @@ static void split_tick(float dt)
                     ts_log("split:   player %d camera at %.2f %.2f %.2f", i + 1, c[0], c[1], c[2]);
                 }
                 if (pl)
-                    ts_log("split:   player %d body %p node +4 %08lx +8 %08lx vis %d; player node +4 %08lx +8 %08lx damage %.1f",
+                    ts_log("split:   player %d body %p node +4 %08lx +8 %08lx vis %d; player node +4 %08lx +8 %08lx health %.1f",
                            i + 1, (void *)b, n ? *(DWORD *)(n + 4) : 0, n ? *(DWORD *)(n + 8) : 0, node_visible(n),
-                           pn ? *(DWORD *)(pn + 4) : 0, pn ? *(DWORD *)(pn + 8) : 0, *(float *)(pl + 0x468));
+                           pn ? *(DWORD *)(pn + 4) : 0, pn ? *(DWORD *)(pn + 8) : 0, *(float *)(pl + 0x234));
             }
         }
     }
@@ -1058,11 +1125,19 @@ static void split_tick(float dt)
     static DWORD last_tick;
     DWORD now = GetTickCount();
     static int placed;
-    if (now - last_tick > 500)
-        placed = 0;   /* (a level load: the tick stopped) */
-    if (!in_play() || cinematic() || now - last_tick > 500)
+    int gap = now - last_tick > 500;   /* (a level load: the tick stopped) */
+    if (gap)
+        placed = 0;
+    if (!in_play() || cinematic() || gap)
         p1_since = now;
     last_tick = now;
+    if (gap || !p1)
+        trail_clear();   /* (a level load: the old level's spots are gone) */
+    else if (in_play() && !cinematic()) {
+        trail_add(0, p1);
+        if (p2)
+            trail_add(1, p2);
+    }
     if (p1 && !p2 && p2_failed < 3 && now - p1_since >= (DWORD)p2_delay * 1000)
         spawn_p2(p1);
     /* Player 2 survives a level change like player 1 (both are objects of the game, not of the level): it is put

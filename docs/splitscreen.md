@@ -177,12 +177,21 @@ Without `TS_SPLIT` the same level load runs as before (control run `20261025-071
 | Double placement at the spawn (fixed after round 2) | fixed: one `player 2 placed` line at the spawn | `20261025-091255` |
 | Each player sees the other's body | works: in each half the other player's third-person model stands where it is (face to face test). The render prep skips nodes with +4 bit 0x10000 in the main view (view entry flags 0, `0x9a1389`); the local player's body has it, and both players are local here. The bit is cleared on the other player's body node from the frame start to the frame end of each view | `20261025-091649` `shot125.png` |
 
-Not started in round 3: player 2's health and HUD values, player 1's respawn while player 2 lives, respawn on a
-navigable spot, per-view screen effects. For the health: `TS_SPLIT_MSGLOG=1` now logs every field of player 1
-that a hit message (`0x4e3`) changes, and `TS_SPLIT_FF=1` lets the players hit each other for that test (player 2
-facing player 1 with `TS_SPLIT_P2FACE=1`, `lab/split_cmds4.txt` gives both a rifle, `lab/split_p2moves3.json`
-fires); the field found there is the one to reset at player 2's respawn (it now dies again at once) and to show in
-its HUD.
+Round 3, continued after the limit reset (main PC, Direct3D 9Ex on, the default now):
+
+| Item | Result | Evidence |
+|---|---|---|
+| Player 2's first-person weapon | partly: the shared weapon geometry's owner (+0xbc, a node) is set to player 2's node while player 2's objects update and for view 1, and each view hides the other player's first-person nodes (+4 bit 0). Player 1's weapon stays right; player 2's half now shows its hands at the lower right, but not the weapon. Without the hiding, player 2's half showed a weapon and player 1's lost its own (`20261025-101810`) | `20261025-102447`, `20261025-102821` `shot124.png` |
+| Player 2's health | found: the player's life is +0x234 (100 at full; each rifle hit took 3, measured with the hit diff `TS_SPLIT_MSGLOG`) | `20261025-103150` log |
+| Death and respawn of both | a death of either player becomes a respawn next to the partner with full life (+0x234 = 100), as long as the partner did not die in the last 5 s; when both are down within 5 s the game's own death runs ("you died", the restart). Checked with deaths by damage (enemies, and the other player with `TS_SPLIT_FF=1`) and by `$player.Kill()` / `$player2.Kill()` | `20261025-103525`, `20261025-103902` (log: `player 1 died: respawned next to player 2`, `player 2 died while player 1 was down: the game's death`) |
+| Respawn spot | each player's positions are kept every half second in play; a respawn goes to the newest spot of the partner that is at least 2 s old and 1.5 m from it (ground the partner walked on), else beside the partner as before | `20261025-103525` (`player 2 placed on the partner's trail at ...`) |
+
+Still open from round 3:
+- **Player 2's weapon model**: see above; the hands show, the weapon does not. The pose of the shared geometry seems to come from the last node animated with it, and the weapon's own node of player 2 may not be the one drawn. Next: log which node the first-person pass draws in view 1 (bucket 3 entries) for the weapon geometry.
+- **After `Kill`**: the script's `Kill` sets the dying state before the death (`+0x370`, `+0x3a4`); the respawn clears the flags it sets on the player (+0x39c 0x1000, 0x400000), but the red blurred death view stays. Deaths by damage call the death directly; their respawn did not show this, but it was not checked in frames.
+- **HUD values**: the HUD widgets read the player through the swapped pointers; the life (+0x234) has no bar of its own (the red edges of the screen show low life), and the ammo counter in player 2's half did not change while it fired.
+- **Per-view screen effects**: each player's update fills its own effect record (player +0x5b4, `0x446600`, called from the player's update at `0x409e62`), but the red tint of low life and of a death shows in both halves: something global is set from it after that. Not found yet.
+- **Respawn by the partner when it stands still**: the fallback is beside the partner, which can be inside a wall; a nearby checkpoint (`Check_Point_<n>`, as in `storysync.c`) or the level's respawn points (mp_rules_sys +0x114) would be better.
 
 ## Open problems
 
@@ -198,13 +207,9 @@ its HUD.
   player 1's half while it was hit, `20261025-081604` `shot136.png`), but the red tint and blur of the damage and
   death effects, the time-power effects and HDR adaptation are global and show in both halves. Their parameters
   still have to be found and kept per player.
-- **Player 2's damage.** After a respawn it dies again after a few enemy hits within a second (respawned at the
-  same place near the enemies); its life value is not understood (+0x468 is a damage value, not the life). Health
-  pick-ups and time energy for player 2 are untested; the HUD's ammo counter in player 2's half did not drop while
-  it fired (it may read player 1's weapon set).
-- **Respawn placement**: next to player 1 by a fixed offset, snapped by the engine's placement; on a roof (part 3
-  start) player 2 ended on the street below.
-- **Player 1 is not covered**: player 1's death still ends the game for both (single-player rules).
+- **Player 2's life and pick-ups**: the life is +0x234 (round 3); health pick-ups and time energy for player 2 are
+  untested.
+- **Respawn placement**: see round 3 (partner's trail; a checkpoint or respawn point would be better).
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
   triggers, checkpoints, cutscenes, death and restart see player 1 only. The same audit as for network co-op
   (`player-audit.md`).
