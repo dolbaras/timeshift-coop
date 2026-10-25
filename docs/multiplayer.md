@@ -480,46 +480,73 @@ Measured on the N100 pair **(observed)**, level `ts2_city_part02`, run `work\run
 | `$farm.Create("ai_house_second_room_4")` after the join | client: "object net 2570 named ai_house_second_room_4"; `string($ai_house_second_room_4)` gives the name on both |
 | Earlier experiment `n100pair-20261025-104724` | the visual death with authority turned `police4_v2` into a ragdoll matching the host's (client `shot181`, host `shot204`) |
 
-### AI weapon fire on clients (findings, not built yet)
+### AI weapon fire on clients (`aisync.c`, 2026-10-25)
 
-Static analysis and one diagnostic run (`TS_FIREDEBUG=1` on the host logs the code addresses on the stack of the
-first 12 projectile dispatches; run `n100pair-20261025-131715`):
+A soldier's shot runs on the server only. Its strike logic (authority only) sends engine message `0x4e4` with a
+strike record to the weapon (`0x84f0d0`: `0x946ee0(weapon, 0x4e4, record, 0)`, reached from a scheduled `0x4e4` to the
+soldier, `0x83a510`). The weapon's handler (weapon vtbl `+0x200` = `0x82cf90`, thiscall (weapon, record), ret 4) calls
+`0x827c60` on the weapon's attack set (`+0x278`):
 
-- A soldier's shot: the strike logic (authority only) sends engine message `0x4e4` with its strike record to the
-  weapon (`0x84f0d0`: `0x946ee0(weapon, 0x4e4, record, 0)`; the AI's own handler `0x83a510` forwards `0x4e4` the same
-  way), the weapon's handler (`0x82cf40` -> `0x82cf90` -> `0x827c60` on its sub-object `+0x278`) calls the attack's
-  fire (`attack->vtbl+0x24`, `0x5417e0` -> `0x8c1fa0` for `atk_spread`), counts ammunition (not on a client) and
-  plays `0x7fa420` (shells/flash of the weapon). Stack seen: `0x8c1ff8 <- 0x5417ee <- 0x827c85 <- 0x82cfc0 <-
-  0x82cf70 <- 0x946ec4 <- ... <- 0x84f103 <- 0x83a6ff`; shot info `+0xc` = the soldier, `+8` its weapon.
-- The projectile dispatchers (`0x7f7ee0`, `0x7f8340`; vtables `0xdbd038 +0x58/+0x88`, `0xd943d0 +0x1c`,
-  `0xd95658 +0x270`) **return at once in game mode 3**: a client never creates a projectile, so a shot replayed on a
-  client cannot hurt anybody twice. The AI tracer class (`wpn_ai_tracer` -> `plw_sfx_tracer` -> `sw_pjl` -> `pjl_base`)
-  is not `isSyncMP` (no projectile of a player's bullet either; only grenade/crossbow stickers are networked), so
-  clients get no tracers from the server.
-- Cheapest replay: the server counts the shots of each soldier (the dispatch hook above sees them, with the
-  soldier) and sends the count with the AI update extras (unreliable, no extra message); a client that sees the
-  count grow sends `0x4e4` to its own copy of the weapon with a strike record like the server's (attack index at
-  `+4`, shots at `+5`): the weapon's effects run, the dispatch does nothing. Still to find out: the strike record
-  layout on a client (built by `0x852f10`), whether the weapon's effects need the authority bit, and whether
-  sounds play from the weapon handler or from the attack's fire.
+1. the attack's fire (`attack->vtbl+0x24` with the shot info at record `+8`; `0x5417e0` -> `0x8c1fa0` -> the projectile
+   dispatcher `0x7f7ee0`/`0x7f8340`, which creates the projectile entity, here `wpn_ai_tracer`: tracer, flash and sound
+   of the shot). Both dispatchers **return at once in game mode 3**;
+2. the ammunition (skipped for a proxy on a client);
+3. the weapon's shot effects `0x7fa420` (edi = the attack's clip entry, stdcall (owner, count), each listener's
+   `+0x44`): only `ai_shells` (vtable `0xdc6800`), the ejected cases.
+
+Layouts **(observed, host log)**: record = `14 40 0c 00 | u8 attack | u8 1 | 3f 01 | shot info *`; shot info (a
+global, `0x10cc180` on the server) = `+0 0x0054400d, +4 2, +8 weapon, +0xc shooter, +0x10 1.0, +0x18 origin (the
+muzzle, ~1.35 m above the body), +0x24 direction (unit), +0x3c target point, +0x4c 0x2002`. A soldier has two weapon
+objects (`!ai weapons`), both owned by it (owner = the weapon's interface `+0x274`, vtbl `+0xc`); the one that shoots
+is the one with shot effects. The soldier's own fields did not hold it at a fixed place (`+0x270 -> +0xe8` in one
+run, nowhere in another), so a client searches the objects by owner.
+
+What the mod does: the server hooks `+0x200` of the six AI weapon vtables (`0xd92e78` arifle/crb/pmg/rlauncher/grenade/
+shotgun, `0xd93158` pistol, `0xd93438` uzi, `0xd939f8`, `0xd93d28` sniper, `0xdbefa0` `gs_wpn_ai`), counts each
+soldier's shots and keeps the last shot's origin, direction and target distance. The count (6 bits) and the attack
+(1 bit) ride in the AI update's state byte; when the count changed since the last update, 14 more bytes (origin
+relative to the body in cm, direction, distance in dm; marker `a5 5b` instead of `a5 5a`) and the soldier is marked
+"send now". A client that sees the count grow runs the weapon's own handler `0x82cf90` on its copy of that weapon
+with a record and shot info built the same way (one shot per ~70 ms, at most 6 queued), with the two dispatchers'
+mode test (`0x7f7f25`, `0x7f838e`, now a call) reading mode 3 as 1 during that call only. The projectile is a local
+object of the client: role `0x40`, no authority bit, net id -1 (logged); the server's own shot does the damage
+(the client never had an authority-side projectile before; the server's projectiles also exist on the client as
+replicas, role `0x43`, but drew nothing there). `TS_AIFIRE=1` shows only the shells, `TS_AIFIRE=0` nothing.
+
+Measured **(observed)**, N100 pair, `ts2_city_part02`, the host in god mode among the start soldiers, the client next
+to it looking at a soldier, frames saved right after each shot shown (`TS_FIREDEBUG=2`):
+
+| Check | Result | Run (`work\runs\`) |
+|---|---|---|
+| Server counts | ~10 shots/s per firing soldier; `police3`, `police4_v2_MM`, `police4_v3_MM` | n100pair-20261025-163246 |
+| Shells only (first build) | 40 shots shown as "effects", no tracers in the client's frames | n100pair-20261025-162752 |
+| Whole shot | 40 of 40 shots "effects, projectile"; client frames `shot7811`-`shot7920` show `police3` firing with yellow/red tracers leaving its weapon towards the host, several per frame (the stock look of AI fire); no crash | n100pair-20261025-164556, -164115 |
+| Local projectiles | `wpn_ai_tracer` role `0x40`, net -1 (no authority); the server's replicas role `0x43` with net ids | n100pair-20261025-164556 |
+
+Not checked: the shot sound (test instances are muted); a separate muzzle-flash sprite is not distinguishable in
+the frames (the muzzle is small at that distance), the tracers start at the muzzle.
 
 Still open:
 
 - Soldiers playing scripted sequences (the level-start actors `*_MM`/`*_CR`, body animation id -2 on the server)
-  stand in their idle on the client.
-- AI weapon fire effects (muzzle flash, tracers, sounds) are not seen on the client (findings above).
-- The client's ragdoll falls from its own pose with a neutral push, not with the server's hit direction.
+  stand in their idle on the client: the server plays an animation that is not one of the AI's animation ids (-2),
+  started by the level script, which storysync runs on the host only; showing it needs the sequence's name and
+  time from the server. Not done.
+- The client's ragdoll falls from its own pose with a neutral push, not with the server's hit direction (the hit
+  info layout of the death call is not known yet). Not done.
 
 | Environment | Effect |
 |---|---|
 | `TS_AISYNC=0` | leave the AI as the game has it (the mod's AI replication is on by default; it acts only on AI with `isSyncMP` in a network session) |
 | `TS_AIDEBUG=<s>` | every `<s>` seconds (on the clock) each AI's net id, role bits, body position, animation and update counters in the log; with it a client also reads `<TS_SHOTDIR>\follow.req` (`side back up` in metres) and puts its player next to the host's body, facing the same way, so both machines can render the same scene |
-| `TS_FIREDEBUG=1` | (lab) the code addresses on the stack of the first 12 projectile dispatches, with the shooting soldier |
+| `TS_AIFIRE=0/1/2` | AI shots on clients: nothing / shells only / the whole shot (default) |
+| `TS_FIREDEBUG=1` | (lab) shots, shot info, weapons and projectiles in the log; `=2` also a frame after each shot shown (and each server shot); `=3` the code addresses on the stack of the first 12 projectile dispatches |
 
 Test console (`TS_CONSOLE`): `!ai list <part of a name>|*` (each soldier's net id, role, flags, animation, ragdoll,
 corpse state), `!ai kill <ai>` (the death state as the server's message sets it), `!ai show <ai> [push]` (show
 its death here), `!ai named` (client: objects asked for and named), `!ai mem <object> <hex offset> [dwords]`,
-`!ai wpn <ai>`, `!ai strikes <ai>` (weapon holder `+0x520`, strike manager `+0x530`).
+`!ai wpn <ai>`, `!ai strikes <ai>` (weapon holder `+0x520`, strike manager `+0x530`), `!ai weapons` (every AI weapon
+object with its owner), `!ai fire <ai>` (shells of one shot here).
 
 ### Script facts found on the way
 
@@ -802,12 +829,13 @@ a level rebuilt under the same name (team restart) clears the class table on bot
 
 Second round, 2026-10-25 afternoon **(observed)**:
 
-| Test | Expected | Observed | Run (`workuns\`) |
+| Test | Expected | Observed | Run (`work\runs\`) |
 |---|---|---|---|
 | T8 natural level exit | the host's player walks into the exit; everybody loads the next level | `$dom_reload.Unlock()` (in the level a rebel's `OnBhvEnd("RUN_TO_EXIT")` unlocks it), `!ss goto dom_reload` put the host's player into the domain (bounds 205.3 -7.3 -16.0 .. 209.6 -5.3 -11.7, a tunnel under the street): 1 s later "level change to ts2_city_part03 requested" from the reload domain's `LOAD_LEVEL`, then the server's map change; host and client on part03, the client still joined (`IsServer` No), both at the level start (frames `shots-20261025-124159`) | n100pair-20261025-124159, 124850 (113324: host only, the client had dropped) |
 | T9 `OnEye` report | a client's look trigger is held back, reported (22), run once by the host | `!ss fire look_door_knock OnEye 1` on the client (its own detection path): the host ran the handler and created `ai_house_third_room_1`; on the client the soldier exists under its name and lives (the verbose story log was off in that run, so the held-back and reported lines are not in it) | n100pair-20261025-124159 |
 | Default on, no `TS_STORYSYNC` anywhere | as with `TS_STORYSYNC=1` | log "TS_STORYSYNC=1 (default for co-op sessions)" on both; roles 2/3; T1 (client entry -> host created `ai_house_first_room_2`, named on the client, alive), T4 (`AutoSave(2)` -> "checkpoint 2"), T5 (client `FailMission`, respawn), time powers (host V: host `0x41`, client `0x4041`; client G: host `0x42`, client `0x4042`), T8 (natural exit, both on part03), T6 (client `$ui.LoadLevel` refused), T7 (host `FailMission` -> "restarted at checkpoint 2") | n100pair-20261025-124850 |
-| T7 again (fix) | both at `Check_Point_2` after the restart | in 124850 both stood at the level start after the restart: the restore ran 3 s after the level start, before the players existed (they spawn ~6 s in on the N100). The restore now waits for the host's player (+2 s), a client's replays wait for its player (up to 30 s), 4 s after the restore a host's player more than 10 m away is put at the checkpoint, and a lower checkpoint id after a restore is ignored (the restarted level's own `AutoSave(1)` had moved the respawn points back). Host alone: at -169.62 -11.88 -145.22 = `Check_Point_2` (125817, 132139). With a client in the session (part02 -> natural exit -> part03 -> `AutoSave(2)` -> `FailMission`): the client lost the connection while reloading part03 (section 9d) and the host was then at the level start, not at the checkpoint (the 4 s check had not acted: the host was still at the checkpoint then; it was moved back to the start later, around the client's drop); the client side of T7 is therefore not confirmed | n100pair-20261025-125817, 132139, 134709, 135403 |
+| T7 again (fix) | both at `Check_Point_2` after the restart | in 124850 both stood at the level start after the restart: the restore ran 3 s after the level start, before the players existed (they spawn ~6 s in on the N100). The restore now waits for the host's player (+2 s), a client's replays wait for its player (up to 30 s), 4 s after the restore a host's player more than 10 m away is put at the checkpoint, and a lower checkpoint id after a restore is ignored (the restarted level's own `AutoSave(1)` had moved the respawn points back). Host alone: at -169.62 -11.88 -145.22 = `Check_Point_2` (125817, 132139). With a client in the session (part02 -> natural exit -> part03 -> `AutoSave(2)` -> `FailMission`): the client lost the connection while reloading part03 (section 9d) and the host was then at the level start, not at the checkpoint (the 4 s check had not acted: the host was still at the checkpoint then; it was moved back to the start later, around the client's drop); the client side of T7 was therefore not confirmed then | n100pair-20261025-125817, 132139, 134709, 135403 |
+| T7 with a client, after the join fixes of 9d | both reload part03, stay connected and stand at `Check_Point_2` (host -169.62 -11.88 -145.22, client -168.63 -11.88 -145.09) | as expected | n100pair-20261025-181337 |
 
 ### Not covered yet
 
@@ -867,46 +895,66 @@ direct connection); results at the end of this section.
 - **Open**: a client without the mod (or with a build older than this file) is not refused, only logged
   by the server ("never answered" after 90 s); the stock game's reaction to the mod's message id `0x7C01` is not known.
 
-| Check **(observed)** | Result | Run (`workuns\`) |
+| Check **(observed)** | Result | Run (`work\runs\`) |
 |---|---|---|
 | Join through the Co-op menu (direct connection, production frames + lab recipe) | every pair run: host "client 1 joined", client "host version 0.0.1-dev (same); flags 0x7, difficulty 1, max players 4" 10-15 s after its level start, "joined the host's co-op session" | e.g. n100pair-20261025-121754, 124850 |
 | Version check | client with `TS_COOP_VERSION=0.0.0-test` (lab: says it has another version): "host version 0.0.1-dev, here 0.0.0-test: leaving", back in the main menu with the Russian message "the server has co-op mod version 0.0.1-dev, you have 0.0.0-test; install the server's version" (client `shot108`) | n100pair-20261025-131715 |
 
-## 9d. Joining a running level: lost connections
+## 9d. Joining a running level (fixed 2026-10-25, `netfix.c`, `coopnet.c`)
 
-On the N100 pair a client that joins a running co-op level lost the connection in a third of the joins: the client's level loads (15-20 s on the N100 with the host running beside it), then the client shows
-the stock message "server closed" (`UI_ERROR_SERVER_CLOSED`, frame `ClientFrame`) and the host's slot list drops it.
-`netfix.c` now logs the network layer's events: on the host `event 9`, `event 5 (peer left)` while the client is
-still loading; on the client `event 6 (connection lost), reason: UI_NET_ERR_CLOSED_BY_THE_HOST` at the end of its
-load. No kick (`PEER_NETWORK` `+0x20`) is called.
+Before: on the N100 pair a client that joined a running co-op level was dropped while it loaded ("server closed",
+`UI_ERROR_SERVER_CLOSED`): 9 of 9 joins into `ts2_city_part03`, about 1 in 8 into part02, also with the build
+before the co-op work. Four causes, found one behind the other; all are the stock game's, the campaign levels'
+object counts expose them.
 
-| Variant, `ts2_city_part02` unless named (client 20 or 45 s after the host; most runs: the host kills and creates a soldier while the client loads) | Joins | Lost |
+**1. Too many unacknowledged packets (the drop).** The close came from the host: the transport's closed callback
+(`0x77f6e0`, now logged with the reason and stack) said "local close", called from the channel send pump `0x77e3c0`,
+which disconnects a peer whose channel holds more than 500 unacknowledged reliable packets (`cmp [channel+0xc],
+0x1f4` at `0x77e4d2`). A loading client acknowledges nothing for 10-20 s, and reliable messages do go to loading
+clients (`0x697f30` skips only unreliable ones for slots without flag 1). The bulk was message `0x43a`: the base
+entity's frame handler (`0x6442f0`, message 1000) broadcasts it reliably every frame for each `isSyncMP`+`isSyncSML`
+object whose state machine raised a signal in that frame (64-bit signal mask at entity `+0x3c`, 16-byte body). On
+part03 that was ~650 a second, one more unacknowledged packet every frame: unacked 39 -> 526 in 5 s, then the close
+(TS_NETDEBUG, `n100pair-20261025-152109`). On part02 the replicated AI tracers (`wpn_ai_tracer`, short-lived) send it.
+Fix: the host holds `0x43a` for a slot that does not run the level yet, ORs the masks per object and sends one per
+object once the client runs it ("client 1 runs the level: 4871 state-machine messages held during its load sent as
+9"; objects that ended meanwhile are dropped from the table every second, at most 512 objects are held, more go
+out as before). `TS_JOINHOLD=0` = stock.
+
+**2. A crash on the client right after the join.** With the drop gone, 3 of 4 part03 joins crashed the client 2 s
+into the level (`0x8672d3`, reading `[garbage + 4]`): the AI manager `[0x1095b6c]` keeps a list of vehicle-type
+objects (`+0x1a0` count, `+0x1a4`, filled by `0x8671a0` from `0x8a1d70`), removal `0x867210` refuses in game mode 3
+and without the manager's flag `+0xa8` bit 2. A joining client ends the objects the server no longer has, their
+pointers stayed, and the next AI initialised there built its target list from freed memory (`0x867440` ->
+`0x8672a0`). With `TS_AILIST=0` (stock) the TS_NETDEBUG check showed "list 7 entries, 1 not objects" just before the
+crash (`n100pair-20261025-154126`). Fix: the removal runs in every mode and without the flag (two `je` nopped).
+
+**3. Slow join state.** The transport's per-connection rate control (`0x77e890`) works between limits from `0x77ee10`:
+1500 bytes/s minimum and `(players + ...) x 375 + 3625` maximum (4000 with one client) on the server, 650-4000 on a
+client. The join state of part02 (descriptors of every object, ~60 KB) took 13 s at 1.5-4 KB/s after the client's
+load; meanwhile the host's unacknowledged packets reached 300+, and in 2 of 13 part02 joins the client never got
+through (`n100pair-20261025-170123`, `-171200`). Fix: in a co-op session every connection gets at least 16 KB/s minimum
+and 96 KB/s maximum (`TS_NETRATE=<min>,<max>`, `0` = stock); measured: the client ran the level 0.4 s after its load
+instead of 8-13 s, unacknowledged packets stayed below 50 (`n100pair-20261025-172759`).
+
+**4. Acknowledgements.** A client acknowledges only in the packets it sends; until it runs the level it sent ~3 a
+second. It now sends one empty unreliable mod message (sub 3) every frame in a co-op session (`TS_ACKPUMP=0` off);
+after cause 3 this matters little, it is kept as a cheap margin.
+
+Not the cause (measured before): the server's 5 s silence check in `0x769850` (raised to 30 s, joins still dropped),
+the mod's own messages (already only to clients that run the level), AI replication (`TS_AISYNC=0` dropped too).
+
+| Check **(observed)**, N100 pair, client 20-30 s after the host | Result | Runs (`work\runs\`) |
 |---|---|---|
-| Build before this work (`ea109c3`) | 3 | 1 |
-| This work before the fix below | 13 | 4 |
-| Mod messages only to clients whose slot says they run the level (slot flag 1; coopnet.c), clients ask for names/the dead after the session info | 8 | 1 (the host had sent nothing to the client then: not caused by mod messages) |
-| The same with `TS_AISYNC=0` | 4 | 0 |
+| Joins into `ts2_city_part03`, causes 1+2 fixed | 10 of 10 stay, no crash | n100pair-20261025-154348 .. -155920 |
+| Joins into `ts2_city_part02`, causes 1+2 fixed | 9 of 10 (one stalled: cause 3) | n100pair-20261025-165100 .. -170634 |
+| All four fixed, `TS_NETDEBUG=1`, AI fire on: part03 / part02 | **10 of 10 / 10 of 10** stay, no crash; the client runs the level 0-1 s after its load (before: 8-13 s); peak unacknowledged packets 12-88 (before: 300-526); 40 AI shots shown on the client in each | n100pair-20261025-172957 .. -174531 (part03), -174715 .. -180245 (part02) |
+| Join after a level change (host part02 -> `!ss exit ts2_city_part03`, the client joins part03 22-29 s later) | stays, "joined the host's co-op session" 0.5 s after its load; 8737 held state-machine messages sent as 92 | n100pair-20261025-180455, -181044 |
+| Team restart with a client (T7 client side): part02 -> exit -> part03 -> `AutoSave(2)` -> host `FailMission` | both reload part03 and stay connected; host at -169.62 -11.88 -145.22, client at -168.63 -11.88 -145.09 (= `Check_Point_2`); client frame `shot247` in the station | n100pair-20261025-181337 (frames `shots-20261025-181337`) |
 
-| Join into `ts2_city_part03` (client 20 s after the host, nothing else done) | 9 | **9**: with this work, with `TS_AISYNC=0` (2), with the build before this work (1) |
-
-On part03 every join was dropped, always 5.6-7 s after the host's "client 1 joined" and while the client was still
-loading (its level start came 8 s later, then "connection lost" at once). A client that is already in the session
-when the host changes to part03 (story level exit, team restart) stays: that path is fine. So the drop is the stock
-game's, depends on the level (part03 has many more networked objects than part02), and the mod's AI replication
-only makes it more likely on part02. It is not the server's 5 s silence check in the network update (`0x769850`,
-per peer flag 8 and 16-bit stamp `+0x52`, `cmp ax, 0x1388` at `0x7699b2`): raised to 30 s, part03 joins were still
-dropped at 5.7 s (3 of 3, patch removed again). The close starts in the lower transport (`0x77e500` -> event 4 ->
-`0x77eac0`; the per-connection transfer time-outs of 20/30/60 s are in `0x77ec90`), then `0x76a560` reports
-`event 9`/`event 5` on the host and sends "closed by remote" to the client.
-
-So it is older than this work, the mod's own messages to a loading client made it more frequent, and the rest
-appears together with the mod's AI replication on part02 and always on part03. **Late joining into a running
-level is therefore not usable yet**; joining at the start and staying through level changes is. The engine sends regular updates only to clients whose slot has
-flag 1 (`0x63c1d0`), so the AI updates themselves do not reach a loading client; what else differs during the load
-(entity creation messages of adopted AI, which carry motion components) is the next thing to measure, e.g. by logging
-the sizes of `0x63ea90` sends per peer during a join. The stock game's own limit: `PEER_NETWORK +0x44` (`0x768300`)
-reports at most 2000 free bytes of a peer's send queue. Lost joins happened with the client 20 s and 45 s after the
-host. Not checked yet: whether a second join attempt of the same client succeeds.
+Test tools: `TS_NETDEBUG=1` logs every second each connection's state, rate and limits, unacknowledged packets,
+sequence numbers and the packets received, and the messages sent to loading slots by id; `TS_NETQUEUE=<n>` moves the
+500 limit (lab).
 
 ## 10. Open questions
 

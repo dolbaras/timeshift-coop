@@ -312,14 +312,14 @@ static void closes_install(void)
 #define SEND_TO_SLOT_FN 0x0063ea90            /* ecx body, edx flags; (slot, entity, u16 msg id); ret 0xc */
 #define FIND_BY_NET_ID 0x00947c10             /* thiscall (scheduler 0xecb7f8, net id) -> entity or 0; ret 4 */
 #define MSG_SML_SIGNALS 0x43a
-#define HELD_MAX 256
+#define HELD_MAX 512
 #define HELD_SLOTS 32
 static int netdebug, joinhold = 1;
 static struct { unsigned short id; unsigned char reliable; int n; } dbg_sends[64];
 static int n_dbg_sends;
 typedef struct { int net_id; DWORD body[4]; } Held;
 static Held held[HELD_SLOTS][HELD_MAX];
-static int n_held[HELD_SLOTS], held_client[HELD_SLOTS], held_msgs[HELD_SLOTS], held_lost[HELD_SLOTS];
+static int n_held[HELD_SLOTS], held_client[HELD_SLOTS], held_msgs[HELD_SLOTS], held_lost[HELD_SLOTS], held_gone[HELD_SLOTS];
 static int sending_held;
 
 /* (TS_NETDEBUG) packets a channel receives: count, sequence range, the channel's latency estimate +0x220 */
@@ -379,9 +379,9 @@ static int __attribute__((cdecl, used)) filter_send(DWORD *args, DWORD flags, DW
         return 1;
     int net_id = *(int *)(ent + 0x18), k;
     if (n_held[s] && held_client[s] != *(int *)slot)
-        n_held[s] = 0, held_msgs[s] = 0, held_lost[s] = 0;   /* (another client in the slot) */
+        n_held[s] = 0, held_msgs[s] = 0, held_lost[s] = 0, held_gone[s] = 0;   /* (another client in the slot) */
     if (!n_held[s] && held_client[s] != *(int *)slot)
-        held_msgs[s] = 0, held_lost[s] = 0;
+        held_msgs[s] = 0, held_lost[s] = 0, held_gone[s] = 0;
     held_client[s] = *(int *)slot;
     held_msgs[s]++;
     for (k = 0; k < n_held[s] && held[s][k].net_id != net_id; k++)
@@ -461,8 +461,21 @@ static void held_frame(void)
             n_held[s] = 0;
             continue;
         }
-        if (!(*(int *)(slot + 8) & 1))
+        if (!(*(int *)(slot + 8) & 1)) {
+            static DWORD last_purge;
+            DWORD now = GetTickCount();
+            if (now - last_purge >= 1000) {   /* (objects that ended meanwhile, e.g. tracers, make room) */
+                last_purge = now;
+                int w = 0;
+                for (int k = 0; k < n_held[s]; k++)
+                    if (find_by_net_id(held[s][k].net_id))
+                        held[s][w++] = held[s][k];
+                    else
+                        held_gone[s]++;
+                n_held[s] = w;
+            }
             continue;
+        }
         int sent = 0;
         sending_held = 1;
         for (int k = 0; k < n_held[s]; k++) {
@@ -472,7 +485,8 @@ static void held_frame(void)
         }
         sending_held = 0;
         ts_log("net: client %d runs the level: %d state-machine messages held during its load sent as %d (%d objects "
-               "gone, %d not held)", held_client[s], held_msgs[s], sent, n_held[s] - sent, held_lost[s]);
+               "gone, %d not held)", held_client[s], held_msgs[s], sent, n_held[s] - sent + held_gone[s], held_lost[s]);
+        held_gone[s] = 0;
         n_held[s] = 0;
     }
 }
