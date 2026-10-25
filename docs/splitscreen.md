@@ -260,6 +260,15 @@ player 1 to move, time-power effects showed in one half only, split screen with 
 | HUD laid out for the half | the HUD's elements are laid out once when the HUD is made (element vtable +0xbc = `0x6ffc30`, each element a share of its parent, the HUD frame takes the canvas). It is now laid out again for the half's canvas when split screen starts drawing (and back for the whole screen when it stops), and the half's canvas is kept between frames. In both halves now: the radar (missing before in side-by-side halves), the zeppelin status widget next to it, the hint ("Новое задание.") whole inside the half | `20261025-162434` `shot100/120/160/180.png`, `20261025-162851` `shot140.png`, `20261025-163139` `shot110.png`, `20261025-163337` `shot110.png` |
 | Player 1's HUD on the zeppelin deck at the start | the same without split screen: the time/weapon panel is not shown there (only the zeppelin status and the radar) | `20261025-161607` `shot095-135.png` |
 
+### Round 10 (2026-10-25, main PC)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Viewer's own body | for each view the viewer's own body gets the "local body" bit (node +4 0x10000, skipped in the main view) and the partner's body loses it, both put back at the frame end; the game marks only player 1's body, so in player 2's view player 2's own body could be drawn. Player 2 turned away from player 1: no body in its half | `20261025-165935` `shot110.png` (skyscraper), `20261025-170135` `shot125/140.png` (part02) |
+| Message line per player | **not done.** The owner of each message is known (the message manager `[0x1095ec8]` vtable +0xc is hooked: inside player 2's swap, a pick-up by either player, or player 1's own objects; the log says `HUD message for player 2`), but hiding the text in the other half failed: the text is the HUD element `MessageText` (with the hint boxes `MessageBox`, `MessageBoxBig`), and setting its hidden bit (+0x18 bit 1) after its update, for the drawn view or the next one, did not remove it from the picture. The hiding is switched off; messages show in both halves as before | `20261025-164210` to `20261025-165705` |
+| `ts2_city_part01` after the opening | the same without split screen: no HUD and no first-person weapon in the level's scripted wake-up | `20261025-170432` `shot215/240.png` (no split) |
+| Frame rate | measured in split screen on the main PC (`ts2_city_part02`, test window 1912x1000): 67-73 frames/s, so each view 34-37 updates/s. Drawing both views every frame would cost the same two scene passes per shown frame (about 35 frames/s with both views each); the alternating views stay | `20261025-164210` log (`frames/s`) |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
@@ -281,8 +290,6 @@ player 1 to move, time-power effects showed in one half only, split screen with 
   update and the globals cannot simply be held for the render span; the swap would have to be limited to the
   frame start, the HUD update and the frame end (see the research notes), and live camera reads in the render job
   checked.
-- `ts2_city_part01`: in the first split-screen frames after the opening (`20261025-153629` `shot215.png`) neither
-  half has a HUD or a first-person weapon; not checked whether the level keeps them hidden there without split.
 - The player's double-tap state (input manager +0xa4/+0xa5) and the rumble of pad 2 are not handled.
 
 ## Combining with network co-op (notes)

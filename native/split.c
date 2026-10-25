@@ -315,6 +315,8 @@ __attribute__((naked)) static void spawn_trampoline(void)
 }
 
 /* ---- state ---- */
+typedef struct { LONG refs; int len, cap; char s[1]; } EStr;
+int split_msg_owner(void);
 static int view = -1;           /* the view this frame renders (-1: no split this frame) */
 static unsigned frame_no;
 static int swapped;
@@ -355,6 +357,8 @@ static void hud_relayout(const char *why)
 }
 static BYTE *shown_node;        /* the other player's body node, shown for this view */
 static DWORD shown_flags;
+static BYTE *own_node;          /* the viewer's own body node, hidden for this view */
+static DWORD own_flags;
 static BYTE *body_of(BYTE *pl);
 static void fx_apply_view(int k);
 static void fx_restore(void);
@@ -537,6 +541,9 @@ static void restore_globals(void)
     if (shown_node)
         *(DWORD *)(shown_node + 4) = (*(DWORD *)(shown_node + 4) & ~0x10000u) | (shown_flags & 0x10000u);
     shown_node = NULL;
+    if (own_node)
+        *(DWORD *)(own_node + 4) = (*(DWORD *)(own_node + 4) & ~0x10000u) | (own_flags & 0x10000u);
+    own_node = NULL;
     swapped = 0;
 }
 
@@ -600,6 +607,15 @@ static void TSCALL hook_fstart(void *r)
                 shown_flags = *(DWORD *)(n + 4);
                 *(DWORD *)(n + 4) &= ~0x10000u;
             }
+            /* (and the viewer's own body hidden: the game marks only the local player's, and while player 2's
+             * view is drawn the local player is player 1) */
+            BYTE *mine = view == 0 ? saved_pb : p2;
+            BYTE *ob = body_of(mine), *on = ob ? *(BYTE **)(ob + 0x230) : NULL;
+            own_node = on != n ? on : NULL;
+            if (own_node) {
+                own_flags = *(DWORD *)(on + 4);
+                *(DWORD *)(on + 4) |= 0x10000u;
+            }
             n_fp_hidden = 0;
             BYTE **objs = view == 0 ? own2 : own1;
             int no = view == 0 ? n_own2 : n_own1;
@@ -634,6 +650,20 @@ static void TSCALL hook_fstart(void *r)
         logged++;
         ts_log("split: frame start view %d thread %lu cam %p pa %p pb %p p2 %p cores %d", view, GetCurrentThreadId(),
                (void *)CAM, (void *)PLAYER_A, (void *)PLAYER_B, (void *)p2, CORES);
+    }
+    {   /* (frames per second: all frames and the split ones, logged every 10 s) */
+        static DWORD t0;
+        static int nall, nsplit;
+        DWORD now = GetTickCount();
+        nall++, nsplit += view >= 0;
+        if (!t0)
+            t0 = now;
+        else if (now - t0 >= 10000) {
+            if (nsplit)
+                ts_log("split: %.1f frames/s, %.1f split frames/s (each view %.1f/s)", nall * 1000.0f / (now - t0),
+                       nsplit * 1000.0f / (now - t0), nsplit * 500.0f / (now - t0));
+            t0 = now, nall = nsplit = 0;
+        }
     }
     real_fstart(r);
 }
@@ -1092,6 +1122,11 @@ typedef int (__stdcall *dispatch_t)(BYTE *, int, int, int);
 static dispatch_t dispatch_tramp;
 
 static int msglog, p1_depth, allow_ff, p2_removing;
+static int in_pickup;
+int split_msg_owner(void)
+{
+    return as2.depth ? 2 : in_pickup ? in_pickup : p1_depth ? 1 : 0;
+}
 static BYTE *(TSCALL *find_task)(void *, int) = (void *)0x947c10;   /* scheduler: object by id */
 
 static BYTE *p1_of(void)
@@ -1259,12 +1294,102 @@ static void TSCALL hook_event(void *pl, BYTE *ev)
     real_event(pl, ev);
 }
 
+/* The HUD message line (the widget at [0x1095ec8], its add method vtable +0xc: "Received: pistol", "ammo
+ * full", ...) is one for both halves. A message added for one player (inside player 2's swap, inside player 1's
+ * own objects, or during a pick-up by either) belongs to that player; the line is hidden in the other player's
+ * half while it shows (the message box's timeout 3.5 s plus fading, here 6 s after the last such message).
+ * Messages from elsewhere (level scripts) stay in both halves. */
+static void (TSCALL *real_msg_add)(void *, void *, void *, DWORD);
+static int msg_owner;          /* 0 shared, 1/2 player */
+static int msg_next = 1;       /* (TS_SPLIT_MSGNEXT=0, tests: hide for the view being drawn instead of the next) */
+static DWORD msg_time;
+static BYTE *msg_hidden;
+static DWORD msg_hidden_flags;
+
+static void TSCALL hook_msg_add(void *w, void *text, void *arg, DWORD t)
+{
+    if (w == *(void **)0x1095ec8 && p2) {
+        int o = split_msg_owner();
+        msg_owner = o;
+        msg_time = GetTickCount();
+        static int n;
+        if (splitlog && n++ < 40)
+            ts_log("split: HUD message for %s", o ? (o == 2 ? "player 2" : "player 1") : "both");
+    }
+    real_msg_add(w, text, arg, t);
+}
+
+/* The message boxes (hintBox widgets "MessageBox"/"MessageBoxBig", class 0xda34f8, updated per view like the other
+ * HUD widgets) are hidden after their update for the view of the other player while a player's own message
+ * shows. */
+static const char *elem_name(BYTE *e)
+{
+    BYTE *d = e ? *(BYTE **)(e + 8) : NULL, *n = d && !IsBadReadPtr(d, 0x14) ? *(BYTE **)(d + 0x10) : NULL;
+    return n && !IsBadReadPtr(n, 0x20) ? (const char *)(n + 0xc) : "";
+}
+
+static void msg_box(BYTE *w, int v)
+{
+    static BYTE *hid[4];
+    int k = 0;
+    while (k < 4 && hid[k] && hid[k] != w)
+        k++;
+    if (k == 4)   /* (a free slot) */
+        for (k = 0; k < 4 && hid[k]; k++)
+            ;
+    int hide = v >= 0 && msg_owner && msg_owner != v + 1 && GetTickCount() - msg_time < 6000;
+    static int nl;
+    if (splitlog && hide && nl++ < 10)
+        ts_log("split: message box %p hidden for view %d (flags %08lx)", (void *)w, v, *(DWORD *)(w + 0x18));
+    if (hide) {
+        if (k < 4 && !hid[k] && !(*(DWORD *)(w + 0x18) & 2))
+            hid[k] = w, *(DWORD *)(w + 0x18) |= 2;
+        else if (k < 4 && hid[k] == w)
+            *(DWORD *)(w + 0x18) |= 2;
+    } else if (k < 4 && hid[k] == w) {
+        *(DWORD *)(w + 0x18) &= ~2u;
+        hid[k] = NULL;
+    }
+}
+
+/* (after the HUD frame's update, class 0xda34f8, which updates its children: the message boxes among them) */
+__attribute__((unused)) static void msg_after_update(BYTE *hud, int v)
+{
+    static int listed;
+    for (BYTE *c = *(BYTE **)(hud + 0x44); c && !IsBadReadPtr(c, 0x4c); c = *(BYTE **)(c + 0x48)) {
+        if (splitlog && !listed)
+            ts_log("split: HUD child %p %s \"%s\" flags %08lx", (void *)c, elem_name(c),
+                   *(EStr **)(c + 0x24) && !IsBadReadPtr(*(EStr **)(c + 0x24), 0x18) ? (*(EStr **)(c + 0x24))->s : "?", *(DWORD *)(c + 0x18));
+        EStr *nm = *(EStr **)(c + 0x24);   /* (the element's name; elem_name gives its type) */
+        if (nm && !IsBadReadPtr(nm, 0x18) && (strncmp(nm->s, "MessageBox", 10) == 0 || strcmp(nm->s, "MessageText") == 0))
+            msg_box(c, v);
+    }
+    listed = 1;
+}
+
+static void install_msg_hook(void)
+{
+    static int done;
+    BYTE *w = *(BYTE **)0x1095ec8;
+    if (done || !w || IsBadReadPtr(w, 4))
+        return;
+    done = 1;
+    void *o = ts_patch_vtable(w, 0xc / 4, (void *)hook_msg_add);
+    if (o)
+        real_msg_add = o;
+    ts_log("split: HUD message line %p (vtable %08lx): %s", (void *)w, *(DWORD *)w, o ? "per player" : "not hooked");
+}
+
 /* Pick-ups: the item calls the toucher's vtable +0x17c (0x420470: the item's class checked, +0x2a4 decides,
  * +0x284 takes it). Logged with the player it went to. */
 static int (TSCALL *real_pickup)(void *, void *);
+
 static int TSCALL hook_pickup(void *pl, void *item)
 {
+    int was = in_pickup;
+    in_pickup = pl == p2 ? 2 : 1;
     int r = real_pickup(pl, item);
+    in_pickup = was;
     static int n;
     if (n++ < 200) {
         ts_log("split: pick-up %p by player %d (%p): %s", item, pl == p2 ? 2 : 1, pl, r ? "taken" : "not taken");
@@ -1613,7 +1738,6 @@ static const char *script_name(BYTE *ent)
  * as unnamed"). The manager keeps named objects in an array sorted by name (manager +0x14: items, +0x18 count;
  * byte-wise compare, 0x428b20), searched by `$name`; the instance gets the name and goes into the array as the
  * engine's own insert (0x8fb000) would put it. */
-typedef struct { LONG refs; int len, cap; char s[1]; } EStr;
 static void *(__cdecl *eng_alloc)(int, int, int) = (void *)0x7e4620;
 static void (__cdecl *eng_free_)(void *) = (void *)0x7e4700;
 static void (TSCALL *arr_insert)(void *, int, void *, int) = (void *)0x8fb000;
@@ -2146,6 +2270,7 @@ static void split_tick(float dt)
     }
     if (stage < 3)
         return;
+    install_msg_hook();
     item_test(PLAYER_B != p2 ? PLAYER_B : NULL);
     if (support_check && (int)(GetTickCount() - support_check) >= 0 && p2 && PLAYER_B && PLAYER_B != p2) {
         support_check = 0;
@@ -2317,6 +2442,8 @@ void split_install(void)
         }
     fx_off = ts_env("TS_SPLIT_FXSHARED", v, sizeof v) && v[0] == '1';
     hudlog = splitlog > 0;
+    if (ts_env("TS_SPLIT_MSGNEXT", v, sizeof v))
+        msg_next = v[0] != '0';
     fp_noscale = ts_env("TS_SPLIT_FPNOSCALE", v, sizeof v) && v[0] == '1';
     if (stage >= 3 || !forced) {   /* (the weapon pass's projection rebuild, see split_fp_proj) */
         static const unsigned char want[5] = {0xe8, 0x74, 0x3d, 0xfa, 0xff};
