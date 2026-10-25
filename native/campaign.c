@@ -986,7 +986,7 @@ int campaign_console(const char *text, char *out, int size)
         if (!is_domain(dom) || !node)
             return snprintf(out, size, "%s is not a domain (or no player)", a1), 1;
         float *mn = (float *)(dom + DOM_MIN), *mx = (float *)(dom + DOM_MAX);
-        float at[3] = {(mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2};
+        float at[3] = {(mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2 < mn[1] + 1.2f ? (mn[1] + mx[1]) / 2 : mn[1] + 1.2f, (mn[2] + mx[2]) / 2};
         float dir[3] = {*(float *)(node + NODE_DIR), *(float *)(node + NODE_DIR + 4), *(float *)(node + NODE_DIR + 8)};
         ((void (TSCALL *)(void *, float *, float *, int))(*(void ***)pl)[PLAYER_PLACE / 4])(pl, at, dir, flag);
         float pos[3];
