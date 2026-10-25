@@ -65,6 +65,13 @@ child = [
             text        = UI_BTN_DIRECT_CONNECT
          }
          {
+            type        = button
+            name        = Split
+            posX        = center, 100%
+            posY        = 250, 30
+            text        = COOP_BTN_SPLIT
+         }
+         {
             type      = text
             name      = ModVersion
             posX      = 8%, 85%
@@ -124,6 +131,10 @@ ssl = <<<
 
    override OnButtonPressed("JoinDirect")
       $ui.ShowFrame("AddressInputFrame")
+   end
+
+   override OnButtonPressed("Split")
+      $ui.SwitchFrame("CoopSplit")
    end
 
    override OnButtonPressed("Back")

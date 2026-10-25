@@ -96,6 +96,76 @@ STRINGS = [
         "czech": "Kooperační mod {STRING}",
         "hungarian": "Kooperatív mod {STRING}",
     }),
+    # Split screen (Co-op menu -> Split screen; native/split.c)
+    ("COOP_BTN_SPLIT", {   # Co-op menu entry (upper case like the stock entries next to it)
+        "english": "SPLIT SCREEN",
+        "russian": "РАЗДЕЛЁННЫЙ ЭКРАН",
+        "german": "GETEILTER BILDSCHIRM",
+        "french": "ÉCRAN PARTAGÉ",
+        "italian": "SCHERMO CONDIVISO",
+        "spanish": "PANTALLA DIVIDIDA",
+        "polish": "PODZIELONY EKRAN",
+        "czech": "ROZDĚLENÁ OBRAZOVKA",
+        "hungarian": "OSZTOTT KÉPERNYŐ",
+    }),
+    ("COOP_FRAME_SPLIT", {   # frame title
+        "english": "Split Screen",
+        "russian": "Разделённый экран",
+        "german": "Geteilter Bildschirm",
+        "french": "Écran partagé",
+        "italian": "Schermo condiviso",
+        "spanish": "Pantalla dividida",
+        "polish": "Podzielony ekran",
+        "czech": "Rozdělená obrazovka",
+        "hungarian": "Osztott képernyő",
+    }),
+    ("COOP_HINT_SPLIT", {
+        "english": "Two players on this PC, the screen split in two. Connect two gamepads: player 2 plays "
+                   "with the second one, player 1 with the first one or keyboard and mouse.",
+        "russian": "Два игрока на этом ПК, экран разделён на две части. Подключите два геймпада: игрок 2 "
+                   "играет на втором, игрок 1 на первом или на клавиатуре и мыши.",
+        "german": "Zwei Spieler an diesem PC, der Bildschirm wird geteilt. Schließe zwei Gamepads an: "
+                  "Spieler 2 spielt mit dem zweiten, Spieler 1 mit dem ersten oder mit Tastatur und Maus.",
+        "french": "Deux joueurs sur ce PC, l'écran partagé en deux. Branchez deux manettes : le joueur 2 "
+                  "joue avec la deuxième, le joueur 1 avec la première ou au clavier et à la souris.",
+        "italian": "Due giocatori su questo PC, lo schermo diviso in due. Collega due gamepad: il giocatore 2 "
+                   "usa il secondo, il giocatore 1 il primo oppure tastiera e mouse.",
+        "spanish": "Dos jugadores en este PC, con la pantalla dividida en dos. Conecta dos mandos: el jugador 2 "
+                   "juega con el segundo y el jugador 1 con el primero o con teclado y ratón.",
+        "polish": "Dwóch graczy na tym komputerze, ekran podzielony na dwie części. Podłącz dwa pady: gracz 2 "
+                  "gra na drugim, gracz 1 na pierwszym albo na klawiaturze i myszy.",
+        "czech": "Dva hráči na tomto PC, obrazovka rozdělená na dvě části. Připoj dva gamepady: hráč 2 hraje "
+                 "na druhém, hráč 1 na prvním nebo na klávesnici a myši.",
+        "hungarian": "Két játékos ezen a gépen, a képernyő kettéosztva. Csatlakoztass két gamepadet: a 2. játékos "
+                     "a másodikkal játszik, az 1. játékos az elsővel vagy billentyűzettel és egérrel.",
+    }),
+    ("COOP_ERR_PAD2", {
+        "english": "Split screen needs a second gamepad for player 2. Connect two gamepads and try again.",
+        "russian": "Для разделённого экрана нужен второй геймпад для игрока 2. Подключите два геймпада и попробуйте снова.",
+        "german": "Der geteilte Bildschirm braucht ein zweites Gamepad für Spieler 2. Schließe zwei Gamepads an "
+                  "und versuche es erneut.",
+        "french": "L'écran partagé a besoin d'une deuxième manette pour le joueur 2. Branchez deux manettes et "
+                  "réessayez.",
+        "italian": "Lo schermo condiviso richiede un secondo gamepad per il giocatore 2. Collega due gamepad e "
+                   "riprova.",
+        "spanish": "La pantalla dividida necesita un segundo mando para el jugador 2. Conecta dos mandos y "
+                   "vuelve a intentarlo.",
+        "polish": "Podzielony ekran wymaga drugiego pada dla gracza 2. Podłącz dwa pady i spróbuj ponownie.",
+        "czech": "Rozdělená obrazovka potřebuje druhý gamepad pro hráče 2. Připoj dva gamepady a zkus to znovu.",
+        "hungarian": "Az osztott képernyőhöz kell egy második gamepad a 2. játékosnak. Csatlakoztass két "
+                     "gamepadet, és próbáld újra.",
+    }),
+    ("COOP_BTN_START", {   # starts the chosen level (upper case like the stock buttons)
+        "english": "START",
+        "russian": "НАЧАТЬ",
+        "german": "STARTEN",
+        "french": "COMMENCER",
+        "italian": "INIZIA",
+        "spanish": "EMPEZAR",
+        "polish": "ROZPOCZNIJ",
+        "czech": "SPUSTIT",
+        "hungarian": "INDÍTÁS",
+    }),
     # Video options (PC): screen mode, applied at the next start (native/display.c)
     ("COOP_VIDEO_DISPLAY", {
         "english": "Screen mode",

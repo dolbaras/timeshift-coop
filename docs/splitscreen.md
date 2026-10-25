@@ -1,14 +1,18 @@
 # Local split screen (prototype)
 
 Two players on one PC: player 1 on keyboard, mouse and pad 1, player 2 on pad 2. The screen is split side by
-side on wide screens and top and bottom on others. This is a prototype, off unless the environment variable
-`TS_SPLIT=1` is set. The code is `native/split.c`; the static research behind it is in the private notes
-(`work/re/splitscreen.md`).
+side on wide screens and top and bottom on others. The player turns it on in the mod's Co-op menu: **Co-op ->
+Split screen** shows the campaign's chapters (as the Co-op host frame) and the difficulty; **Start** starts the
+chapter as a single-player game with split screen on. Without a second pad the frame says so (`COOP_ERR_PAD2`)
+and starts nothing. Going back to the main menu ends split screen (player 2 is removed). The environment
+variable `TS_SPLIT=1` still forces it on for tests (`TS_SPLIT=0`: never). The code is `native/split.c`; the
+menu is `data/ui/coopsplit.ui` and `data/coop_menu.py`, its texts `data/coop_strings.py`; the static research
+behind it is in the private notes (`work/re/splitscreen.md`).
 
 Status (2026-10-25, prototype, main PC, `ts2_city_part02`/`part03`, single player): both views render on alternate
 frames into their halves with a HUD each; player 2 is spawned next to player 1 with its own first-person weapons,
 moves, turns and fires with pad 2, has the script name `player2`, cannot hurt player 1, respawns next to player 1
-instead of ending the game, stays through a level change, and each player sees the other's body. Not ready for players: see "Open problems".
+instead of ending the game, stays through a level change, and each player sees the other's body. Started from the Co-op menu (round 5); not finished: see "Open problems".
 
 ## Why it has to be built
 
@@ -128,7 +132,7 @@ Player 1's raw input, context and look state are restored afterwards.
 
 | Variable | Meaning |
 |---|---|
-| `TS_SPLIT=1` | on |
+| `TS_SPLIT=1` | on from the start (tests); `0`: never; unset: the player's choice in the Co-op menu (UI string `CoopSplit`) |
 | `TS_SPLIT_STAGE=1/2/3` | 1: the normal frame in one half; 2: a second camera (player 1's, offset) on alternate frames; 3 (default): player 2 |
 | `TS_SPLIT_LAYOUT=v/h` | side by side / top and bottom (default: side by side when the screen is wider than 3:2) |
 | `TS_SPLIT_MT=1` | keep the engine's worker threads (the split then stays off and says so in the log) |
@@ -136,6 +140,9 @@ Player 1's raw input, context and look state are restored afterwards.
 | `TS_SPLITLOG=1` | frame phases, threads, globals and the game state in the log (2: also the players' weapon sets) |
 | `TS_SPLIT_MSGLOG=1` | tests: messages to the players and player 2's events in the log |
 | `TS_SPLIT_P2FACE=1` | tests: player 2 is placed 2.5 m in front of player 1, facing it |
+| `TS_SPLIT_FXVIEW=8,10` | the screen effects (post-effect indices) kept per view; the others show in both halves |
+| `TS_SPLIT_FXSHARED=1` | tests: all screen effects as the game has them (both halves) |
+| `TS_SPLIT_HUDNEXT=0` | tests: the HUD weapon panel takes player 2 on the other frame parity (default 1 is right) |
 
 Pad assignment is `gamepad.c`'s: player 1 gets the first connected pad (or `[Gamepad] Pad=`), player 2 the next one.
 
@@ -195,50 +202,47 @@ Round 3, continued after the limit reset (main PC, Direct3D 9Ex on, the default 
 | Per-view screen effects | works for the low-life tint and blur: player 1 at 10 life has the red, blurred picture in its half, player 2 (84) a clear one while it fires. The post-effect manager (`0x1096f18` = renderer +0x24) has 13 effect objects at +0x14f4 (vtable +4 on, +8 off, +0x14 strength; +8 bit 0 on). The players start and set them by index (`0x665f70`, `0x504b40`; off: `0x665fa0`, `0x504b80`): the death effect is 8, the low-life tint 10 (set every frame from the player's update, `0x446600`). These four entries are replaced: each call is done as before and kept per player (player 2's: made while its swap is on); for each view the effect objects get that view's player's state (on/off, strength) from the frame start to the frame end. `TS_SPLIT_FXSHARED=1` turns it off | `20261025-110134` `shot134.png`, `shot140.png` |
 | Respawn spot when the partner has not moved | a respawn goes to the partner's trail (2 s old, 1.5 m away), else to the dying player's own trail near the partner (ground it stood on), never to a fixed offset; player 2 joins (and is placed again after a level change) only once player 1 has walked 0.8 m, on a spot player 1 stood on | `20261025-110431` (`placed on its own trail`), `20261025-111123` `shot135.png` (player 2 joins on player 1's start spot) |
 
-Still open after round 4:
-- **Ammunition is shared**: after player 2 fired a full magazine (12 s), both players' rifles show the empty-magazine
-  light and both HUDs keep the same counter (reserve 210): the clip and reserve live in one store for both, not
-  in the weapon objects (run `20261025-112058` `shot145.png`). Player 2's own ammunition needs that store found
-  and kept per player (as the effects are). Life has no bar; the low-life tint is per view.
-- **Joining**: player 2 joins once player 1 has moved 0.8 m (from a spot it stood on 2 s before); if player 1 never
-  moves, player 2 does not come in.
-- **Time-power effects**: they are effect objects too, so they now show in the half of the player who started them;
-  whether that is wanted (the world's time is one for both) is to be decided.
-- **Split screen with the network** (goal 6 of round 4): not started. What blocks it: the network co-op runs the
-  multiplayer game mode (2) and the multi-thread frame, split screen needs the single-thread frame; player 2 is a
-  campaign `player` spawned locally, which the server's entity replication (0x42a CREATE_ENT) would send to clients
-  as a second campaign player (clients would make a local `player` of it); the network layer's per-player records
-  (score, team, respawn) know one local player per machine. A test also needs two machines (the main PC may run
-  one game; the N100 was busy). Plan: on the host, keep player 2 out of replication and send it to clients as a
-  `player_mp` puppet (as remote players are), with its position from the host's player 2.
+Still open after round 4 (all four taken up in round 5 below): ammunition looked shared, player 2 waited for
+player 1 to move, time-power effects showed in one half only, split screen with the network.
+
+### Round 5 (2026-10-25, main PC, Direct3D 9Ex; the Co-op menu entry; menu runs driven with virtual pad 1)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Co-op menu entry | **Co-op -> Split screen** (new frame `CoopSplit`, `data/ui/coopsplit.ui`): the 24 chapters with their pictures, a hint, the difficulty (kept with the host frame's), Back / Start. Start sets the UI string `CoopSplit` = "1", the difficulty, and loads the chapter (single player). The DLL's hooks are always in place and pass everything through while it is off; the script tick reads `CoopSplit` once a second and turns split screen on (single-thread frame) or off. Texts in the 9 string tables (`COOP_BTN_SPLIT`, `COOP_FRAME_SPLIT`, `COOP_HINT_SPLIT`, `COOP_ERR_PAD2`, `COOP_BTN_START`); `build_pak.py` passes | `20261025-114051` `shot083.png` (frame), `shot139/159.png` (split screen after Start, player 2 in); `20261025-113601` `shot129.png` (Co-op menu with the entry) |
+| No second pad | the frame shows `COOP_ERR_PAD2` and starts nothing. The DLL tells the menu (UI string `CoopPad2`) after each input poll (`gamepad.c` `gamepad_after_poll`), which runs in the menus too (the script tick does not); pad 2 unplugged -> message, plugged in again -> Start works | `20261025-113601` `shot193.png` (message), log `split: on (chosen in the Co-op menu ...)` |
+| Leaving split screen | the main menu clears `CoopSplit`; player 2 is removed then. A player's removal (message 2, vtable +0x144 = `0x4082f0`) stops the game on purpose unless bit 2 of the game flags `[0xfcace8]` is set (single player never sets it; the first try crashed there, `20261025-114051`); for player 2's own removal the bit is set for the call. Back in the menu: `player 2 removal message handled`, `player 2 destroyed`, no crash | `20261025-114805` log 11:55:43 |
+| Time-power effects | in both halves (the world's time is one for both): only the player's own condition stays per view: damage tint and blur (effect 6), death (8), low life (10); `TS_SPLIT_FXVIEW` overrides the list | `20261025-112535` `shot129.png` (time freeze grey in both halves); `20261025-120358` `shot146.png` (player 2 at 23 life: red only in its half), `shot152.png` (both low: both red) |
+| Joining without player 1 moving | player 2 comes in 3 s after the delay even if player 1 stands still: "ahead of the partner" (1.5 m along player 1's horizontal facing, the last-resort spot of `place_player`); with player 1 walking, on its trail as before | `20261025-112535` and `20261025-114805` logs (`player 2 placed ahead of the partner`, 8 s after the level start) |
+| Ammunition | each player already has its own weapon set and ammunition: player vtable +0x248 -> weapon set, its virtual base's vtable +0x4c (0 primary, 1 secondary) -> record +8 total (float), +0xc magazine; player 2 firing took only its own (240 -> 210), player 1's stayed, and the other way round. Only the HUD was shared: its weapon panel (update `0x5bbcd0`, vtable slot `0xda1f84`) reads `[0xfc8180]` in the UI update, outside the view span. The panel is now updated for the view the next frame draws (views alternate per frame: `frame_no & 1`) with that view's player: each half shows its own counter and grenades | `20261025-115824` log (records per player), `20261025-120358` `shot136/138.png` (210 left, 180 right) |
+| Pick-ups | by code the ammunition and health pick-ups are methods of the player that touched them (`0x441c90`, `0x4433d0`, called on the toucher), so they go to that player's own weapon set; not yet seen in a run (no pick-up reached with the test pads). The "ammo full" message goes to the shared HUD message line | `work/re/pickup.c` |
+| Deaths by damage | no tint or blur stays after a respawn: player 2 died twice and player 1 three times by enemy fire, both halves clear after each respawn | `20261025-112535` `shot151/155.png` |
 
 ## Open problems
 
-- **Player 2's first-person model is not drawn.** Its weapons exist, fire, and their scene nodes are set up
-  like player 1's (round 3 log, `20261025-091649`: player 2's rifle and hands at its camera position, +4 bits
-  0/1 clear, so not hidden; the only difference is +4 bit 0x4000000 on all of player 2's nodes). Lead for the
-  next step: a mesh's geometry +0xbc is not just a flag but the node that owns the shared geometry (the "in use"
-  value at the spawn was player 1's own weapon node, e.g. `7ce111c8` = player 1's pistol node), and the mesh
-  pass (`0x9a1070`) reads it. Try making player 2's weapon node the owner of each weapon geometry for the span of
-  view 1 (record geometry and node in the node-creation wrapper at its spawn, swap +0xbc in the frame start and
-  back in the frame end, as for the bodies).
-- **Per-view screen effects: not done.** Hit/blood overlays are HUD widgets and follow the view (blood only in
-  player 1's half while it was hit, `20261025-081604` `shot136.png`), but the red tint and blur of the damage and
-  death effects, the time-power effects and HDR adaptation are global and show in both halves. Their parameters
-  still have to be found and kept per player.
-- **Player 2's life and pick-ups**: the life is +0x234 (round 3); health pick-ups and time energy for player 2 are
-  untested.
-- **Respawn placement**: see round 3 (partner's trail; a checkpoint or respawn point would be better).
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
   triggers, checkpoints, cutscenes, death and restart see player 1 only. The same audit as for network co-op
   (`player-audit.md`).
+- **Split screen with the network**: not started (round 5 goal 6: later, needs both PCs). What blocks it: the
+  network co-op runs the multiplayer game mode (2) and the multi-thread frame, split screen needs the
+  single-thread frame; player 2 is a campaign `player` spawned locally, which the server's entity replication
+  (0x42a CREATE_ENT) would send to clients as a second campaign player; the network layer's per-player records
+  (score, team, respawn) know one local player per machine. Plan: on the host, keep player 2 out of replication
+  and send it to clients as a `player_mp` puppet (as remote players are), with its position from the host's
+  player 2. The menu's split screen starts a single-player game, so it never meets a network session.
+- **Joining spot**: "ahead of the partner" is not checked against the level's collision; in `ts2_city_part02`
+  player 2 lands on a crate 1 m above player 1 (it stands there). A check (ray or the engine's own placement
+  test) is still to be added; on a walked trail the spot is ground player 1 stood on.
+- Other HUD widgets than the weapon panel (time-power energy, messages) still read `[0xfc8180]` in the UI update:
+  player 1's in both halves. The same per-frame swap as the weapon panel would serve them.
 - Saving and loading with player 2 are untested.
 - The pause menu and loading screens are full screen (UI command context); cutscenes with the scene camera are
   full screen. Player 2 has no menu control (only player 1's pad and keyboard drive the menus).
 - Each view runs at half the frame rate; no frame cap yet.
-- Multi-thread frame: off in split mode. With the engine's workers the render job overlaps the game update and
-  the globals cannot simply be held for the render span; the swap would have to be limited to the frame start,
-  the HUD update and the frame end (see the research notes), and live camera reads in the render job checked.
+- Multi-thread frame: off while split screen is on. With the engine's workers the render job overlaps the game
+  update and the globals cannot simply be held for the render span; the swap would have to be limited to the
+  frame start, the HUD update and the frame end (see the research notes), and live camera reads in the render job
+  checked.
 - In the test window the back buffer (1912x1000) is larger than the game's picture (1768x992); the strip outside
   the picture is not cleared (as without the mod).
 - HUD: in the side-by-side layout the radar is missing from both halves (it shows in top and bottom); the

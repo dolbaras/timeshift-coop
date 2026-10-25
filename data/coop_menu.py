@@ -1,6 +1,7 @@
 """The Co-op menu.
 
-Main menu -> "Co-op" (new frame CoopMenu): Host / Join LAN / Join Internet / Direct connection / Back.
+Main menu -> "Co-op" (new frame CoopMenu): Host / Join LAN / Join Internet / Direct connection / Split screen /
+Back.
 Host -> new frame CoopHost: the 24 campaign levels in campaign order (names: the game's own GAME_<level>
 strings, preview: the chapter's loading picture), difficulty, max players 2-4, LAN or Internet, optional
 password. "Create" hands the choices to the game's own server set-up: CreateGame, CommSettings and
@@ -12,9 +13,13 @@ multiplayer settings are set aside first and put back by the main menu and the M
 Joining uses the stock LAN list, Internet list and direct connection; co-op servers are named
 "[COOP]<player name>". The version check runs in the DLL (native/coopsession.c); a client that has to
 leave finds the reason in the UI string CoopError, which the main menu shows.
+Split screen -> new frame CoopSplit: the same level list and difficulty; "Start" starts the level as a
+single-player game with the UI string CoopSplit = "1" (native/split.c turns split screen on; the main menu
+clears it). Without a second pad (UI string CoopPad2, set by the DLL) it shows COOP_ERR_PAD2 instead.
 
 UI strings shared with the DLL and the lab's test recipe: CoopSession ("host" / "client" / ""),
-CoopDifficulty, CoopMaxPlayers, CoopLevel, CoopStage, CoopAuto, CoopError, CoopDataVersion.
+CoopDifficulty, CoopMaxPlayers, CoopLevel, CoopStage, CoopAuto, CoopError, CoopDataVersion, CoopSplit,
+CoopPad2.
 """
 import re
 
@@ -151,6 +156,7 @@ def build(ctx):
     # (a placeholder named in a comment once got the 24 level lines too, and the broken frame never opened)
     host = fill(ctx.data_file("ui/coophost.ui"), {"%LEVEL_LINES%": "\n".join(lines), "%MAPID_LINES%": "\n".join(ids)})
     ctx.add("CacheBlock/ps/coophost.ui", host)
+    ctx.add("CacheBlock/ps/coopsplit.ui", fill(ctx.data_file("ui/coopsplit.ui"), {"%LEVEL_LINES%": "\n".join(lines)}))
     ctx.add("CacheBlock/ps/coopmenu.ui", fill(ctx.data_file("ui/coopmenu.ui"), {"%VERSION%": v}))
 
     restore = RESTORE_FUNCS.replace("%RESTORE%", "\n".join(
@@ -200,6 +206,7 @@ def build(ctx):
       CoopRestoreProfile()
       $ui.SetStr("CoopSession", "")
       $ui.SetStr("CoopStage", "")
+      $ui.SetStr("CoopSplit", "")
       if $ui.GetStr("CoopError") != ""
          CoopShowError($ui.ShowFrame("ErrorMsg"))
       end

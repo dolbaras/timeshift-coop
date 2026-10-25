@@ -487,6 +487,15 @@ static void pad2_poll(BYTE *raw)
     last_buttons = st.Gamepad.wButtons;
 }
 
+/* Called after each input poll, also in the menus (the script tick stops there): split.c tells the menu
+ * whether a second pad is there. */
+static void (*after_poll)(void);
+
+void gamepad_after_poll(void (*fn)(void))
+{
+    after_poll = fn;
+}
+
 static void THISCALL hook_kb_poll(void *raw)
 {
     if (poll_player2) {
@@ -495,6 +504,8 @@ static void THISCALL hook_kb_poll(void *raw)
     }
     real_kb_poll(raw);
     pad_poll((BYTE *)raw);
+    if (after_poll)
+        after_poll();
 }
 
 /* The engine's vibration mixer (0x657930) sends the motor levels (0..1) every frame. */

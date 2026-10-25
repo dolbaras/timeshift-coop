@@ -97,6 +97,24 @@ static void (TSCALL *eval_commands)(void *) = (void *)0x6595e0;   /* (fastcall e
 static void (TSCALL *node_name)(void *, const char *) = (void *)0x94c730;
 
 static int stage, layout_cfg, splitlog, keep_mt, p2_delay = 5;
+static int forced;   /* TS_SPLIT: 1 on, -1 never, 0 the player's choice (CoopSplit) */
+static DWORD mt_saved;
+static int mt_set;
+
+/* The engine's single-thread frame (as [CONFIG] DisableMultithreading = 1): the frame takes the core count from
+ * [0x10de018] every frame once [0x10de01c] bit 0 says the setting was read; split screen needs 1. */
+static void set_single_thread(int on)
+{
+    if (keep_mt || on == mt_set)
+        return;
+    if (on) {
+        mt_saved = (MT_ONCE & 1) ? MT_OFF : 0;
+        MT_ONCE |= 1;
+        MT_OFF = 1;
+    } else
+        MT_OFF = mt_saved;
+    mt_set = on;
+}
 
 /* ---- engine calls with register arguments ---- */
 /* 0x624690: rebuild the projection and frustum from near/far/fov (eax = camera). */
@@ -487,6 +505,10 @@ static float fx_last[N_FX];
 static int fx_view = -1;
 static DWORD fx_saved_flags[N_FX];
 static int fx_off;   /* TS_SPLIT_FXSHARED=1: effects as the game has them (shared) */
+/* Per view only the player's own condition: the damage tint and blur (6), the death effect (8) and the low-life
+ * tint (10). The time powers' effects stay as the game has them, in both halves: the world's time is one for
+ * both players (TS_SPLIT_FXVIEW=6,8,10,... overrides the list). */
+static DWORD fx_per_view = (1u << 6) | (1u << 8) | (1u << 10);
 
 typedef void (TSCALL *fx_call_t)(void *);
 typedef void (TSCALL *fx_set_t)(void *, float);
@@ -505,6 +527,8 @@ __attribute__((used)) void __cdecl split_fx_start(BYTE *pm, int i, float v)
     ((fx_set_t)(*(void ***)e)[5])(e, v);
     *(DWORD *)(pm + 0x2c) |= 0x10000;
     int who = p2_depth() ? 1 : 0;
+    if (splitlog > 1 && !fx[who][i].seen)
+        ts_log("split: effect %d first started by player %d (%.2f)", i, who + 1, v);
     fx[who][i].seen = fx[who][i].on = 1;
     fx[who][i].v = v;
     fx_last[i] = v;
@@ -595,7 +619,7 @@ static void fx_apply_view(int k)
         if (!e)
             continue;
         fx_saved_flags[i] = *(DWORD *)(e + 8);
-        if (!fx[0][i].seen && !fx[1][i].seen)
+        if ((!fx[0][i].seen && !fx[1][i].seen) || !(fx_per_view >> i & 1))
             continue;
         int on = fx[k][i].seen && fx[k][i].on;
         *(DWORD *)(e + 8) = (*(DWORD *)(e + 8) & ~1u) | (on ? 1u : 0u);
@@ -612,7 +636,7 @@ static void fx_restore(void)
         return;
     for (int i = 0; i < N_FX; i++) {
         BYTE *e = fx_obj(pm, i);
-        if (!e || (!fx[0][i].seen && !fx[1][i].seen))
+        if (!e || (!fx[0][i].seen && !fx[1][i].seen) || !(fx_per_view >> i & 1))
             continue;
         *(DWORD *)(e + 8) = fx_saved_flags[i];
         if (fx_saved_flags[i] & 1)
@@ -895,7 +919,7 @@ static void TSCALL hook_update(void *pl)
 typedef int (__stdcall *dispatch_t)(BYTE *, int, int, int);
 static dispatch_t dispatch_tramp;
 
-static int msglog, p1_depth, allow_ff;
+static int msglog, p1_depth, allow_ff, p2_removing;
 static BYTE *(TSCALL *find_task)(void *, int) = (void *)0x947c10;   /* scheduler: object by id */
 
 static BYTE *p1_of(void)
@@ -962,9 +986,20 @@ static int __stdcall hook_dispatch(BYTE *task, int msg, int a, int b)
         p1_depth -= mine;
         return r;
     }
+    /* Removing player 2 (split screen turned off): the player's removal (message 2, vtable +0x144 = 0x4082f0)
+     * stops the game on purpose unless bit 2 of the game flags (0xfcace8) is set, which single player never sets
+     * (a player there lives as long as the game). For player 2's own removal the bit is set for the call. */
+    int removing = task == p2 && msg == 2 && p2_removing;
+    DWORD flags = *(DWORD *)0xfcace8;
+    if (removing)
+        *(DWORD *)0xfcace8 = flags | 4;
     p2_enter();
     int r = dispatch_tramp(task, msg, a, b);
     p2_leave();
+    if (removing) {
+        *(DWORD *)0xfcace8 = (*(DWORD *)0xfcace8 & ~4u) | (flags & 4u);
+        ts_log("split: player 2 removal message handled");
+    }
     return r;
 }
 
@@ -1062,6 +1097,7 @@ static void *TSCALL hook_dtor(void *pl, int flags)
     }
     BYTE *pa = PLAYER_A, *pb = PLAYER_B;
     p2 = NULL;
+    p2_removing = 0;
     p1_since = GetTickCount();   /* (a level change removes it: a new one after the delay in the next level) */
     p2_failed = 0;
     void *r = real_dtor(pl, flags);
@@ -1160,9 +1196,13 @@ static void place_player(BYTE *pl, BYTE *partner)
     if (!node1 || !pl)
         return;
     float *fw = (float *)(node1 + 0x58), *pp = (float *)(node1 + 0x68);
-    float pos[3] = {pp[0] + fw[2] * 1.5f, pp[1] + 0.3f, pp[2] - fw[0] * 1.5f};
+    /* (the last resort, when neither player has walked yet: 1.5 m ahead of the partner, in the open space the
+     * partner looks into; a level starts its player facing into the playing area) */
+    float fl = sqrtf(fw[0] * fw[0] + fw[2] * fw[2]);
+    float ax = fl > 0.01f ? fw[0] / fl : 0, az = fl > 0.01f ? fw[2] / fl : 0;
+    float pos[3] = {pp[0] + ax * 1.5f, pp[1] + 0.3f, pp[2] + az * 1.5f};
     float dir[3] = {fw[0], fw[1], fw[2]};
-    const char *how = "beside";   /* (the last resort: only when neither player has walked yet) */
+    const char *how = "ahead of the partner";
     char v[8];
     if (pl == p2 && ts_env("TS_SPLIT_P2FACE", v, sizeof v) && v[0] == '1') {
         pos[0] = pp[0] + fw[0] * 2.5f, pos[2] = pp[2] + fw[2] * 2.5f;
@@ -1281,10 +1321,105 @@ static void spawn_p2(BYTE *p1)
     place_p2(p1);
 }
 
+/* The menu asks whether a second pad is there (UI string CoopPad2 = "1"/"0"; the Co-op menu's "Split screen"
+ * refuses to start without one). Called after each input poll (gamepad.c), which also runs in the menus where
+ * the script tick stops; once a second. */
+void gamepad_after_poll(void (*fn)(void));   /* gamepad.c */
+
+static void publish_pad2(void)
+{
+    static DWORD last, logged;
+    DWORD now = GetTickCount();
+    if (now - last < 1000)
+        return;
+    last = now;
+    char out[64], ssl[96];
+    snprintf(ssl, sizeof ssl, "$ui.SetStr(\"CoopPad2\", \"%d\")", gamepad_slot(1) >= 0);
+    ts_script_run(ssl, out, sizeof out);
+    if (!logged++)
+        ts_log("split: pad 2 %s (told to the menu from thread %lu)", gamepad_slot(1) >= 0 ? "there" : "missing",
+               GetCurrentThreadId());
+}
+
+/* The player's choice (the Co-op menu's "Split screen"): the menu sets the UI string CoopSplit to "1" and
+ * starts the level; the main menu clears it. Once a second. */
+static void split_choice(void)
+{
+    static DWORD last;
+    DWORD now = GetTickCount();
+    if (now - last < 1000)
+        return;
+    last = now;
+    char out[64];
+    if (forced)
+        return;
+    ts_script_run("return $ui.GetStr(\"CoopSplit\")", out, sizeof out);
+    int want = strcmp(out, "1") == 0;
+    if (want && !stage) {
+        stage = 3;
+        set_single_thread(1);
+        ts_log("split: on (chosen in the Co-op menu; player 2 on XInput pad %d)", gamepad_slot(1) + 1);
+    } else if (!want && stage) {
+        if (p2) {   /* (player 2 belongs to the game, not the level: removed when split screen ends) */
+            p2_removing = 1;
+            ts_script_run("$player2.Terminate()", out, sizeof out);
+            ts_log("split: player 2 removed (%s)", out);
+        }
+        stage = 0;
+        set_single_thread(0);
+        restore_globals();
+        pic_ok[0] = pic_ok[1] = 0;
+        ts_log("split: off");
+    }
+}
+
+/* The HUD's weapon panel (ammunition, grenades, weapon icons; update 0x5bbcd0, vtable slot at 0xda1f84) reads
+ * the local player [0xfc8180] in the UI update, outside the frame's view span: both halves showed player 1's
+ * numbers. Each player has its own weapon set and ammunition (below). The panel is updated for the view the
+ * next frame draws (the views alternate per frame), with that view's player. */
+static void (TSCALL *real_hud_weapons)(void *, float);
+static int hudlog, hud_view1 = 1;   /* (frame_no & 1 at the panel update when the next frame draws view 1) */
+
+static void TSCALL hook_hud_weapons(void *w, float dt)
+{
+    int next = (int)(frame_no & 1);
+    if (hudlog && hudlog++ < 12)
+        ts_log("split: HUD weapon panel update: frame %u, next view %d, view span %d", frame_no, next, swapped);
+    if (stage < 3 || !p2 || swapped || as2.depth || !PLAYER_B || PLAYER_B == p2 || !split_wanted() || next != hud_view1) {
+        real_hud_weapons(w, dt);
+        return;
+    }
+    BYTE *pa = PLAYER_A, *pb = PLAYER_B;
+    PLAYER_A = PLAYER_B = p2;
+    real_hud_weapons(w, dt);
+    PLAYER_A = pa;
+    PLAYER_B = pb;
+}
+
+/* The HUD's ammunition source (0x5bbcd0): the player's vtable +0x248 gives its weapon set, whose virtual base's
+ * vtable +0x4c (0 primary, 1 secondary) gives an ammunition record: +8 the total (float), +0xc the rounds in
+ * the magazine (the HUD shows total - magazine). Tests: which record each player has. */
+static BYTE *ammo_rec(BYTE *pl, int which, BYTE **set_out)
+{
+    if (!pl || IsBadReadPtr(pl, 4) || *(DWORD *)pl != PLAYER_VTBL)
+        return NULL;
+    BYTE *set = ((BYTE *(TSCALL *)(void *))(*(void ***)pl)[0x248 / 4])(pl);
+    if (set_out)
+        *set_out = set;
+    if (!set || IsBadReadPtr(set, 8) || IsBadReadPtr(*(BYTE **)(set + 4), 8))
+        return NULL;
+    BYTE *vb = set + 4 + *(int *)(*(BYTE **)(set + 4) + 4);
+    if (IsBadReadPtr(vb, 4) || IsBadReadPtr(*(void **)vb, 0x50))
+        return NULL;
+    BYTE *rec = ((BYTE *(TSCALL *)(void *, int))(*(void ***)vb)[0x4c / 4])(vb, which);
+    return rec && !IsBadReadPtr(rec, 0x24) ? rec : NULL;
+}
+
 /* main thread, script tick */
 static void split_tick(float dt)
 {
     (void)dt;
+    split_choice();
     if (splitlog) {
         static DWORD last;
         DWORD now = GetTickCount();
@@ -1311,7 +1446,7 @@ static void split_tick(float dt)
                             BYTE **ml = *(BYTE ***)(on + 0x1c4);
                             int nm = *(int *)(on + 0x1c8);
                             ts_log("split:       geometry %p meshes %p x%d", *(void **)(on + 0x1c0), (void *)ml, nm);
-                            for (int m = 0; ml && !IsBadReadPtr(ml, 4) && m < nm && m < 3; m++) {
+                            for (int m = 0; (DWORD)ml > 0x10000 && !IsBadReadPtr(ml, 4) && m < nm && m < 3; m++) {
                                 BYTE *me = ml[m];
                                 if (me && !IsBadReadPtr(me, 0xc0))
                                     ts_log("split:       mesh %p +0 %08lx +4 %08lx +10 %08lx +28 %08lx +bc %08lx", (void *)me,
@@ -1320,6 +1455,11 @@ static void split_tick(float dt)
                             }
                         }
                     }
+                if (pl) {
+                    BYTE *set = NULL, *rec = ammo_rec(pl, 0, &set);
+                    ts_log("split:   player %d weapon set %p ammo record %p total %.1f magazine %d", i + 1, (void *)set,
+                           (void *)rec, rec ? *(float *)(rec + 8) : -1.0f, rec ? *(int *)(rec + 0xc) : -1);
+                }
                 if (pl) {
                     float *c = (float *)((i ? cam2 : (as2.depth ? as2.cam : (swapped ? saved_cam : CAM))) + 0x30);
                     ts_log("split:   player %d camera at %.2f %.2f %.2f", i + 1, c[0], c[1], c[2]);
@@ -1364,11 +1504,14 @@ static void split_tick(float dt)
      * 2 s before; the same after a level change) */
     float spot[3], *p1pos = p1 && *(BYTE **)(p1 + 0x230) ? (float *)(*(BYTE **)(p1 + 0x230) + 0x68) : NULL;
     int walked = p1pos && trail_pick_away(0, p1pos, spot, 0.8f);
-    if (p1 && !p2 && p2_failed < 3 && now - p1_since >= (DWORD)p2_delay * 1000 && walked)
+    /* (or after 3 s more without that: ahead of player 1, see place_player) */
+    if (p1 && !p2 && p2_failed < 3 && now - p1_since >= (DWORD)p2_delay * 1000
+        && (walked || now - p1_since >= (DWORD)p2_delay * 1000 + 3000))
         spawn_p2(p1);
     /* Player 2 survives a level change like player 1 (both are objects of the game, not of the level): it is put
      * next to player 1 again once the new level is in play. */
-    if (p1 && p2 && !placed && now - p1_since >= (DWORD)p2_delay * 1000 && walked) {
+    if (p1 && p2 && !placed && now - p1_since >= (DWORD)p2_delay * 1000
+        && (walked || now - p1_since >= (DWORD)p2_delay * 1000 + 3000)) {
         placed = 1;
         if ((int)(now - p2_born) > 2000)   /* (not the one just spawned and placed) */
             place_p2(p1);
@@ -1388,10 +1531,18 @@ static int patch_slot(DWORD vtbl, int slot, void *hook, void **orig)
 void split_install(void)
 {
     char v[32];
-    if (!ts_env("TS_SPLIT", v, sizeof v) || v[0] != '1')
-        return;
-    stage = 3;
-    if (ts_env("TS_SPLIT_STAGE", v, sizeof v) && v[0] >= '1' && v[0] <= '3')
+    /* Split screen is a player feature (the Co-op menu's "Split screen": UI string CoopSplit = "1" while it is
+     * chosen); the hooks are in place from the start and pass everything through while it is off.
+     * TS_SPLIT=1 forces it on for tests (TS_SPLIT=0: never). */
+    if (ts_env("TS_SPLIT", v, sizeof v)) {
+        forced = v[0] == '1' ? 1 : -1;
+        if (forced < 0) {
+            ts_log("split: off (TS_SPLIT=0)");
+            return;
+        }
+    }
+    stage = forced > 0 ? 3 : 0;
+    if (forced > 0 && ts_env("TS_SPLIT_STAGE", v, sizeof v) && v[0] >= '1' && v[0] <= '3')
         stage = v[0] - '0';
     if (ts_env("TS_SPLIT_LAYOUT", v, sizeof v) && (v[0] == 'v' || v[0] == 'h'))
         layout_cfg = v[0];
@@ -1423,13 +1574,14 @@ void split_install(void)
     int n = patch_slot(R_VTBL, SLOT_FSTART, (void *)hook_fstart, (void **)&real_fstart)
             + patch_slot(R_VTBL, SLOT_FEND, (void *)hook_fend, (void **)&real_fend)
             + ts_patch_bytes(QUAD_CALL, want, rep, 5);
-    if (stage >= 3)
+    if (stage >= 3 || !forced)
         n += patch_slot(PLAYER_VTBL, SLOT_UPDATE, (void *)hook_update, (void **)&real_update)
              + patch_slot(PLAYER_VTBL, SLOT_DTOR, (void *)hook_dtor, (void **)&real_dtor)
              + patch_slot(PLAYER_VTBL, 0x2e8 / 4, (void *)hook_die, (void **)&real_die)
              + patch_slot(PLAYER_VTBL, 0x22c / 4, (void *)hook_event, (void **)&real_event)
+             + (*(DWORD *)0xda1f84 == 0x5bbcd0 && patch_slot(0xda1f84, 0, (void *)hook_hud_weapons, (void **)&real_hud_weapons))
              + patch_slot(IM_VTBL, SLOT_EVAL, (void *)hook_eval, (void **)&real_eval);
-    if (stage >= 3)
+    if (stage >= 3 || !forced)
         for (int i = 0; i < 5; i++) {   /* (weapons: 0x447a2e, 0x447a55; hands 0x442868; body: 0x4074b4, 0x4074f9) */
             static const DWORD sites[5] = {0x447a2e, 0x447a55, 0x442868, 0x4074b4, 0x4074f9};
             DWORD at = sites[i];
@@ -1439,23 +1591,31 @@ void split_install(void)
             ts_patch_bytes(at, w, r, 5);
         }
     fx_off = ts_env("TS_SPLIT_FXSHARED", v, sizeof v) && v[0] == '1';
-    if (stage >= 3 && !fx_off && !install_fx_hooks())
+    hudlog = splitlog > 0;
+    if (ts_env("TS_SPLIT_HUDNEXT", v, sizeof v))   /* (tests: which frame parity the HUD panel takes player 2 on) */
+        hud_view1 = v[0] == '0' ? 0 : 1;
+    if (ts_env("TS_SPLIT_FXVIEW", v, sizeof v)) {
+        fx_per_view = 0;
+        for (char *t = strtok(v, ","); t; t = strtok(NULL, ","))
+            if (atoi(t) >= 0 && atoi(t) < N_FX)
+                fx_per_view |= 1u << atoi(t);
+    }
+    if ((stage >= 3 || !forced) && !fx_off && !install_fx_hooks())
         ts_log("split: screen effect calls not found (effects shared by both views)");
-    if (stage >= 3 && !install_dispatch_hook())
+    if ((stage >= 3 || !forced) && !install_dispatch_hook())
         ts_log("split: scheduler dispatch not found (player 2's weapons run as player 1)");
-    if (stage >= 3) {
+    if (stage >= 3 || !forced) {
         unsigned char w[5] = {0xe8}, r[5] = {0xe8};
         *(DWORD *)(w + 1) = 0x95dcf0 - (0x6551be + 5);
         *(DWORD *)(r + 1) = (DWORD)hook_mknode - (0x6551be + 5);
         if (!ts_patch_bytes(0x6551be, w, r, 5))
             ts_log("split: node creation call not found");
     }
-    if ((stage >= 3 || splitlog) && !ts_frame_add(split_tick))
+    gamepad_after_poll(publish_pad2);
+    if ((stage >= 3 || splitlog || !forced) && !ts_frame_add(split_tick))
         ts_log("split: no script tick, player 2 is never spawned");
-    if (!keep_mt) {   /* (as [CONFIG] DisableMultithreading = 1: the frame reads it once, into these) */
-        MT_ONCE |= 1;
-        MT_OFF = 1;
-    }
-    ts_log("split: on, stage %d, layout %s, %d hooks, %s frame", stage, layout_cfg ? (layout_cfg == 'v' ? "side by side" : "top/bottom") : "auto",
-           n, keep_mt ? "multi-thread" : "single-thread");
+    if (stage)
+        set_single_thread(1);
+    ts_log("split: %s, stage %d, layout %s, %d hooks, %s frame", forced > 0 ? "on (TS_SPLIT)" : "ready (Co-op menu)", stage, layout_cfg ? (layout_cfg == 'v' ? "side by side" : "top/bottom") : "auto",
+           n, keep_mt ? "multi-thread" : "single-thread (while split screen is on)");
 }

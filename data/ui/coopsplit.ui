@@ -1,0 +1,228 @@
+// Co-op mod: split screen on one PC (written for the mod; the same level list and difficulty as the CoopHost
+// frame). "Start" sets the UI string CoopSplit to "1" (the DLL, native/split.c, turns split screen on; the
+// main menu clears it) and starts the level as a single-player game. The DLL tells the frame whether a second
+// pad is there (UI string CoopPad2). The level lines below are filled in by build_pak.py.
+name           = CoopSplit
+style          = styMenu
+type           = PreCreateGame
+
+child = [
+   {
+      type      = text
+      text      = COOP_FRAME_SPLIT
+      posX      = 0, 100%
+      posY      = 6%, 30
+      textScale = 15
+      textAlign = centerX centerY
+      font      = font_main
+   }
+   {
+      type        = background
+      border      = true
+      posY        = 60, 355
+
+      child       = [
+         {
+            name        = LevelList
+            type        = scroll
+            posX        = 0, 50%
+            posY        = 15, -10
+
+            lines       = 12
+            linesX      = 0, 100%
+            linesY      = 25, -25
+            selectorX   = center, 90%
+            selectorY   = center, 100%
+            ctrlX       = center, 85%
+            ctrlY       = 0 0
+
+            line {
+               type        = text
+               textScale   = 8
+               textAlign   = centerX centerY
+            }
+
+            child = [
+               {
+                  type     = button
+                  texture  = arrow_up
+                  name     = up
+                  posX     = center, 30
+                  posY     = 0, 30
+                  textureMirror  = false
+                  texHighlighted = true
+               }
+               {
+                  type     = button
+                  texture  = arrow_down
+                  name     = down
+                  posX     = center, 30
+                  posY     = -30, 30
+                  textureMirror  = false
+                  texHighlighted = true
+               }
+            ]
+         }
+         {
+            type        = text
+            name        = Preview
+            posX        = -275, -15
+            posY        = 15, 160
+            edged       = true
+         }
+         {
+            type      = text
+            name      = Hint
+            text      = COOP_HINT_SPLIT
+            posX      = 52%, -15
+            posY      = 180, 20
+            textScale = 8
+            textAlign = leftX centerY
+            textColor = 255 255 255 255
+            wordwrap  = yes
+         }
+         {
+            type        = select
+            name        = CoopDifficulty
+            posX        = 52%, -15
+            posY        = 310, 30
+            text        = UI_ADVSERV_DIFFICULTY
+            textAlign   = left centerY
+            section     = Multiplayer
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+      ]
+   }
+   {
+      type        = box
+      border      = true
+      posY        = -65, 40
+      child       = [
+         {
+            type        = esc_button
+            name        = Back
+            text        = UI_BTN_BACK
+            textAlign   = left centerY
+            textScale   = 12
+            posX        = 10, 100
+            posY        = 5, 30
+            XBoxShortCut = B
+         }
+         {
+            type        = button
+            name        = Start
+            text        = COOP_BTN_START
+            posX        = -160, 150
+            posY        = 5, 30
+            textAlign   = right centerY
+            textScale   = 12
+            XBoxShortCut = A
+            ok          = Yes
+         }
+      ]
+   }
+]
+
+ssl = <<<
+
+   override OnInit
+      FillLevels(Element("LevelList"))
+      Element("CoopDifficulty").AddItem("UI_ADVSERV_DIFF_0", "0")
+      Element("CoopDifficulty").AddItem("UI_ADVSERV_DIFF_1", "1")
+      Element("CoopDifficulty").AddItem("UI_ADVSERV_DIFF_2", "2")
+      var v : string
+      v := $ui.GetUserVar("CoopDifficulty")
+      if v == "null" or v == ""
+         v := "1"
+      end
+      Element("CoopDifficulty").SetVal(v)
+   end
+
+   // CoopAuto (UI string) starts by itself with the CoopLevel UI string; only tests set it
+   override OnUpdate
+      if $ui.GetStr("CoopAuto") == "split_go"
+         $ui.SetStr("CoopAuto", "")
+         Launch($ui.GetStr("CoopLevel"), Element("CoopDifficulty").GetVal())
+      end
+   end
+
+   func FillLevels(win : object)
+%LEVEL_LINES%
+   end
+
+   func AddLine(win : object, str : string, level : string, splash : string)
+      win.AddElem("line")
+      win.LastElem().SetText(str)
+      win.LastElem().SetStr("Level", level)
+      win.LastElem().SetStr("Splash", splash)
+   end
+
+   override OnScrollSelection("LevelList")
+      Element("Preview").SetTexture(Element("LevelList").GetCurSel().GetStr("Splash"))
+   end
+
+   override OnScrollAction("LevelList")
+      Start()
+   end
+
+   override OnButtonPressed("Start")
+      Start()
+   end
+
+   override OnButtonPressed("Back")
+      $ui.BackFrame()
+   end
+
+   func Start()
+      $ui.SetUserVar("CoopDifficulty", Element("CoopDifficulty").GetVal())
+      $ui.FlushCfg()
+      Launch(Element("LevelList").GetCurSel().GetStr("Level"), Element("CoopDifficulty").GetVal())
+   end
+
+   // a single-player game with split screen on (no second pad: a message instead)
+   func Launch(level : string, diff : string)
+      if $ui.GetStr("CoopPad2") != "1"
+         $ui.ShowErrorMsg("COOP_ERR_PAD2")
+         return
+      end
+      if level == ""
+         return
+      end
+      $ui.SetStr("CoopSession", "")
+      $ui.SetStr("CoopSplit", "1")
+      $ui.SetVariable("Multiplayer", "Difficulty", "int", diff)
+      $ui.LoadLevel(level)
+   end
+>>>
