@@ -2,8 +2,8 @@
 
 The mod ships no game files. Its data changes are **recipes** in `data/`: short anchored find/replace
 edits of members of the player's own archives, plus files written for the mod. `tools/build_pak.py`
-applies them to the player's copy of the game and writes the mod's archives. The installer will run it
-on the player's PC (Python comes with the mod, as in the Jericho mod); for development it runs on a test
+applies them to the player's copy of the game and writes the mod's archives. The installer runs it
+on the player's PC with the embeddable Python that comes with the mod (docs/releasing.md); for development it runs on a test
 copy.
 
 ```

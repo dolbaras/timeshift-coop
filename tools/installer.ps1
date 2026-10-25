@@ -454,7 +454,8 @@ function Do-Uninstall($g) {
         Set-ArcName $g $back
         Ui-Log (L "ini_back" $back)
     }
-    $all = @($m.files + $m.built)
+    # (+ the log the mod's DLL writes next to the exe)
+    $all = @($m.files + $m.built + "bin\ts_coop.log")
     $i = 0
     foreach ($rel in $all) {
         $i++
@@ -730,7 +731,16 @@ function Do-Install($g) {
     $snap = Join-Path ([IO.Path]::GetTempPath()) ("timeshift-coop-payload-" + $PID)
     Remove-Item -LiteralPath $snap -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item -LiteralPath $payload $snap -Recurse -Force
-    $payload = $snap
+    try { Install-From $g $snap }
+    finally {
+        foreach ($d in $snap, (Join-Path ([IO.Path]::GetTempPath()) ("timeshift-coop-build-" + $PID))) {
+            Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# The install itself, from the payload's snapshot.
+function Install-From($g, $payload) {
     # (the package's list of its files: all of them here, or the game is not touched)
     $plist = Join-Path $payload "coop\payload.txt"
     if (-not (Test-Path -LiteralPath $plist)) { Ui-Log "missing: coop\payload.txt"; throw (L "incomplete") }
@@ -851,7 +861,6 @@ function Do-Install($g) {
     try { $links = @(Make-Shortcuts $g $old) } catch { Ui-Log "shortcut: $($_.Exception.Message)"; $links = @($old.shortcuts | Where-Object { Test-Path -LiteralPath $_ }) }
     & $writeRecord
     if ($versionFile) { Copy-Item -LiteralPath $versionFile.FullName (Join-Path $g "coop\version.txt") -Force }
-    Remove-Item -LiteralPath $snap -Recurse -Force -ErrorAction SilentlyContinue
     Ui-Step "finish" "done"
     Ui-Progress 100 ""
     @{ old = $old.version; paks = $pk.state; links = $links.Count }
