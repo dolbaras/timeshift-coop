@@ -998,6 +998,15 @@ int campaign_console(const char *text, char *out, int size)
         }
         return 1;
     }
+    if (!strcmp(cmd, "ent")) {   /* "!cp ent <object>": net id, role/net flags +0x2c, sync flags +0x98, position (lab) */
+        char *e = find_ent(a1);
+        float pos[3] = {0, 0, 0};
+        if (!e)
+            return snprintf(out, size, "%s: none", a1), 1;
+        ent_pos(e, pos);
+        return snprintf(out, size, "%s: net %d, +2c %x, +98 %x, motion %p, at %.2f %.2f %.2f", a1, *(int *)(e + 0x18),
+                        *(unsigned *)(e + 0x2c), *(unsigned *)(e + 0x98), *(void **)(e + 0x34), pos[0], pos[1], pos[2]), 1;
+    }
     if (!strcmp(cmd, "where")) {   /* "!cp where": this machine's player position (lab) */
         float pos[3] = {0, 0, 0};
         int ok = ent_pos(PLAYER, pos);
