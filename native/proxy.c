@@ -307,6 +307,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
                                                                  (void *)hook_TerminateProcess);
         real_FatalAppExitA = (FatalAppExitA_t)ts_patch_iat("KERNEL32.dll", "FatalAppExitA", (void *)hook_FatalAppExitA);
         compat_install();
+        d3dex_install();
         testmode_install();
         console_install();
         coopnet_install();

@@ -64,6 +64,10 @@ void gamepad_poll_player2(int on);   /* split.c: the next input polls read pad 2
 /* split.c: local split screen, player 2 on pad 2 (TS_SPLIT=1, prototype) */
 void split_install(void);
 
+/* d3dex.c: Direct3D 9Ex instead of 9 (TS_D3D9EX=1: no lost device in a window), resource census (TS_D3DCENSUS=1) */
+void d3dex_install(void);
+struct IDirect3D9 *d3dex_create(UINT sdk, struct IDirect3D9 *(WINAPI *create9)(UINT));   /* testmode.c's Direct3DCreate9 hook */
+
 /* testmode.c: window, render adapter and focus handling for test instances */
 void testmode_install(void);
 void testmode_wrap_dinput(void *dinput);
