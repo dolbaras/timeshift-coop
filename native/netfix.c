@@ -6,10 +6,18 @@
  * adapter (Radmin, Hamachi, ZeroTier...) the request never reaches the real LAN and the list stays
  * empty (seen 2026-10-25). Each such send is repeated to the directed broadcast address of every
  * other IPv4 network the PC is on.
+ *
+ * Internet play: GameSpy's servers are gone (2014), so hosting an Internet game failed ("Unable to start
+ * server": the lookups of timeshift.available.gamespy.com, timeshift.master.gamespy.com and
+ * motd.gamespy.com fail). Every name under gamespy.com is looked up under a replacement domain instead,
+ * by default openspy.net, the community's GameSpy replacement that serves TimeShift (the same change
+ * the community's exe edit makes). TS_MASTER=<domain> picks another, TS_MASTER=off keeps gamespy.com.
  */
 #include <winsock2.h>
 #include <iphlpapi.h>
 #include <windows.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "ts.h"
 
@@ -76,7 +84,51 @@ static int WINAPI hook_sendto(SOCKET s, const char *buf, int len, int flags, con
     return r;
 }
 
+/* ---- gamespy.com -> replacement domain ---- */
+typedef struct hostent *(WINAPI *gethostbyname_t)(const char *);
+typedef HANDLE (WINAPI *WSAAsyncGetHostByName_t)(HWND, u_int, const char *, char *, int);
+static gethostbyname_t real_gethostbyname;
+static WSAAsyncGetHostByName_t real_WSAAsyncGetHostByName;
+static char master[64] = "openspy.net";
+
+/* "x.gamespy.com" -> "x.<master>"; returns the name to look up. The mapped names live in a small ring of
+ * static buffers: an asynchronous lookup may read its name after the call returned. */
+static const char *map_name(const char *name)
+{
+    static char ring[8][256];
+    static LONG next;
+    char *out = ring[InterlockedIncrement(&next) & 7];
+    int size = sizeof ring[0];
+    static const char gs[] = "gamespy.com";
+    size_t n = name ? strlen(name) : 0, g = sizeof gs - 1;
+    if (!master[0] || n < g || _stricmp(name + n - g, gs) != 0 || (n > g && name[n - g - 1] != '.'))
+        return name;
+    snprintf(out, size, "%.*s%s", (int)(n - g), name, master);
+    static LONG logged;
+    if (InterlockedIncrement(&logged) <= 8)
+        ts_log("net: %s looked up as %s", name, out);
+    return out;
+}
+
+static struct hostent *WINAPI hook_gethostbyname(const char *name)
+{
+    return real_gethostbyname(map_name(name));
+}
+
+static HANDLE WINAPI hook_WSAAsyncGetHostByName(HWND w, u_int msg, const char *name, char *out, int len)
+{
+    return real_WSAAsyncGetHostByName(w, msg, map_name(name), out, len);
+}
+
 void netfix_install(void)
 {
     real_sendto = (sendto_t)ts_patch_ws2("sendto", (void *)hook_sendto);
+    char v[64];
+    if (ts_env("TS_MASTER", v, sizeof v))
+        strcpy(master, _stricmp(v, "off") == 0 ? "" : v);
+    if (master[0]) {
+        real_gethostbyname = (gethostbyname_t)ts_patch_ws2("gethostbyname", (void *)hook_gethostbyname);
+        real_WSAAsyncGetHostByName = (WSAAsyncGetHostByName_t)ts_patch_ws2("WSAAsyncGetHostByName",
+                                                                           (void *)hook_WSAAsyncGetHostByName);
+    }
 }

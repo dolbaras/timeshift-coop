@@ -146,9 +146,33 @@ button), with a short "game starting" countdown **(observed)**.
 
 The executable also contains `natneg1..3.gamespy.com` (NAT negotiation), the MOTD/version-check URLs and
 the CD-key code of the GameSpy SDK ("Received cdkey query but not using qr2-cdkey integration"); none of
-them was used in LAN or direct play. Ways to bring back Internet hosting: answer the three lookups with a
-GameSpy replacement (OpenSpy) through a hook on `gethostbyname`, or keep servers in LAN mode and connect
-by address (works through port forwarding of UDP 7777 on the host).
+them was used in LAN or direct play.
+
+### What the mod does (`native/netfix.c`, checked on two PCs 2026-10-25)
+
+- **LAN list:** every query broadcast to 255.255.255.255 is repeated to the directed broadcast address of
+  each IPv4 network of the PC. With a VPN adapter on the querying PC the list was empty; with the fix the
+  other PC's server shows (name, map, mode, players).
+- **Internet:** every name under `gamespy.com` is looked up under `openspy.net` (the community's GameSpy
+  replacement; `TS_MASTER=<domain>` or `off`). Hosting with `NetworkMode = yes` now works: the game passes
+  the availability check (`timeshift.available`, UDP 27900), registers with the master server (UDP 27900
+  heartbeat and challenge, then UDP 29910), and the server shows in another PC's Internet list (TCP 28910
+  to `timeshift.ms<N>`, then the list pings the server's public address). Joining over the Internet was
+  not tested yet (both test PCs share one router; a host needs UDP 7777 reachable from outside).
+
+| Situation | Before | With the mod |
+|---|---|---|
+| LAN server, direct connect | works | works |
+| LAN list | empty behind a VPN adapter | lists the LAN's servers |
+| Internet server | "Unable to start server" | registers on OpenSpy |
+| Internet list | could not work | lists OpenSpy servers |
+
+## 6a. The game's own windowed mode
+
+With `VIDEO_FullScr = no` in the profile the Direct3D device was lost at the first level load (the main
+menu level) and never reset: the game kept running and drew nothing (Intel UHD 630, 2026-10-25). With
+`yes` and the proxy's test mode making the device windowed, everything renders. Players' windowed and
+borderless modes are a job for the mod's display settings (as in the Jericho mod).
 
 ## 7. Test tools in the mod's DLL
 
