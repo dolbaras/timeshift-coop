@@ -1817,20 +1817,6 @@ static void TSCALL hook_item_update(BYTE *item)
     if (h)
         *h = h_was;
     static BYTE *last;   /* (logged once per item in a row) */
-    if (!r && item != last && splitlog > 1) {   /* (tests: which check refused it) */
-        BYTE *p1 = PLAYER_B != p2 ? PLAYER_B : NULL;
-        p2_enter();
-        int c2 = ((int (TSCALL *)(void *, void *, int))vt[0x208 / 4])(item, p2, 1);
-        int d2 = ((int (TSCALL *)(void *, void *))(*(void ***)p2)[0x2a4 / 4])(p2, item);
-        p2_leave();
-        int c1 = p1 ? ((int (TSCALL *)(void *, void *, int))vt[0x208 / 4])(item, p1, 1) : -1;
-        int d1 = p1 ? ((int (TSCALL *)(void *, void *))(*(void ***)p1)[0x2a4 / 4])(p1, item) : -1;
-        int f2 = (unsigned char)((int (TSCALL *)(void *, void *))vt[0x248 / 4])(item, p2);
-        int f1 = p1 ? (unsigned char)((int (TSCALL *)(void *, void *))vt[0x248 / 4])(item, p1) : -1;
-        ts_log("split: item %p vtable %08lx: check +0x208 player 2 %d player 1 %d; +0x248 %d %d; player +0x2a4 %d %d; +0x3f0 %.2f %.2f;"
-               " item +0x10c %d +0x270 %08lx", (void *)item, (DWORD)vt, c2, c1, f2, f1, d2, d1, *(float *)(p2 + 0x3f0),
-               p1 ? *(float *)(p1 + 0x3f0) : -1.0f, ((int (TSCALL *)(void *))vt[0x10c / 4])(item), *(DWORD *)(item + 0x270));
-    }
     if (r || item != last)
         ts_log("split: item %p (\"%.32s\", kind %d, game mode %d) in player 2's reach: %s", (void *)item,
                node && !IsBadReadPtr(*(char **)(node + 0x28), 1) ? *(char **)(node + 0x28) : "?", kind, md,
@@ -2374,6 +2360,8 @@ static void publish_pad2(void)
 
 /* The player's choice (the Co-op menu's "Split screen"): the menu sets the UI string CoopSplit to "1" and
  * starts the level; the main menu clears it. Once a second. */
+static int net_mode(void);
+
 static void split_choice(void)
 {
     static DWORD last;
@@ -2389,11 +2377,15 @@ static void split_choice(void)
     if (forced || remote_host || client_split)
         return;
     ts_script_run("return $ui.GetStr(\"CoopSplit\")", out, sizeof out);
-    int want = strcmp(out, "1") == 0;
+    /* (the Co-op menu's split screen (single player), or a co-op host with the Co-op frame's "Second player on
+     * pad 2" and a second pad) */
+    int host = net_mode() == 2 && client_choice && gamepad_slot(1) >= 0;
+    int want = strcmp(out, "1") == 0 || host;
     if (want && !stage) {
         stage = 3;
         set_single_thread(1);
-        ts_log("split: on (chosen in the Co-op menu; player 2 on XInput pad %d)", gamepad_slot(1) + 1);
+        ts_log("split: on (%s; player 2 on XInput pad %d)", host ? "a co-op host with \"Second player on pad 2\"" : "chosen in the Co-op menu",
+               gamepad_slot(1) + 1);
     } else if (!want && stage) {
         if (p2)   /* (player 2 belongs to the game, not the level: removed when split screen ends) */
             p2_remove("split screen off");

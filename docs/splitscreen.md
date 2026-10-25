@@ -14,6 +14,19 @@ frames into their halves with a HUD each; player 2 is spawned next to player 1 w
 moves, turns and fires with pad 2, has the script name `player2`, cannot hurt player 1, respawns next to player 1
 instead of ending the game, stays through a level change, and each player sees the other's body. Started from the Co-op menu (round 5); not finished: see "Open problems".
 
+## For players (summary)
+
+| | |
+|---|---|
+| What you need | two gamepads (XInput). Player 1 plays with keyboard and mouse or pad 1, player 2 with pad 2 |
+| Two players on one PC | main menu -> **Co-op** -> **Split screen**, pick the chapter and the difficulty, **Start**. The screen splits side by side on wide screens, top and bottom otherwise. Back to the main menu ends it |
+| Two players on one PC in a network co-op game | in the **Co-op** frame set **Second player on pad 2** to On (kept in the profile), then host or join a co-op game as usual. **Hosting**: your screen is split, player 2 plays on your PC and is seen by the other players (tested with `TS_SPLIT=1`, which this option now sets in a hosted game; the option itself on a host is not run yet). **Joining**: the host runs your second player, your screen is split (the host side is tested, the joining PC's second half is not tested yet, see round 18) |
+| Each player has | an own camera, first-person weapon, crosshair, HUD (life, ammunition, grenades, time energy), screen effects (damage, death, low life), pick-up messages, pick-ups and weapons; prompts name the button of the player's own device |
+| Time powers | either player's power works for everybody (as in co-op) |
+| Death | a player who dies comes back beside the other one; both down together restarts as in the game (single player); in a network game player 1 follows the network rules |
+| Not per player | the pause menu and loading screens (full screen, player 1 controls them), cutscenes (the scene camera, full screen), hint boxes (one for both). The scripts and the AI see player 1 as "the player" (e.g. which player an AI chases or a trigger waits for) |
+| Performance | each half is drawn every second frame (the frame rate of each half is half the game's) |
+
 ## Why it has to be built
 
 TimeShift on PC has no split-screen code left from the console versions. There is one local player, one camera,
