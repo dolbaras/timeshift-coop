@@ -308,7 +308,7 @@ warnings with `-Wall -Wextra`); the data archives are unchanged (no recipe neede
   (gathering a dead player is [G]); a client that steps out while a lift door closes can still be left behind (the
   `lift_door` check uses the host's player); the rules are by object name, checked against the 1.2 data only.
 
-## 3a. Round 2: reversal, seats, late joiners, AI targets (written, **not yet run**)
+## 3a. Round 2: reversal, seats, late joiners, AI targets (live results in 3b)
 
 Everything below builds (`build.sh`, `-Wall -Wextra` clean) and is off unless switched on; the per-level tables of
 section 2 still say "design" for these items: read them with this section.
@@ -371,7 +371,7 @@ the game-mode test at `0x5846b0` - is the full variant, L, with unknown effects 
 for the per-object rewind: RE of the animation time API 0.5 day, recorder + playback + event guard 1-2 days, live
 tuning per puzzle 1 day: **M (3-4 days)**.
 
-### Real rewind: the engine's own recorder on the host (`coopreverse.c`, `TS_COOP_REWIND=1`, **not yet run**)
+### Real rewind: the engine's own recorder on the host (`coopreverse.c`, `TS_COOP_REWIND=1`; live results in 3b)
 
 Checked first, as asked: the stock recorder can be switched on for the host, so no new recorder was written.
 
@@ -484,6 +484,37 @@ script manager's named list as aisync.c names objects created in play. Covers `M
 `helicopter_actor|tur01` (7), `ceilgun1..4` (14), `ai_swat1..5` in the lift (18), `STRIDER|tur_shoulder1` (24) and
 the ~230 scripted aims of ordinary soldiers. The choice is made once per call (as the script calls it); dead players
 are not skipped [G].
+
+## 3b. Live pass on the N100 pair (2026-10-26)
+
+Host `D:\Games\TimeShift-test`, client `TimeShift-test2` on the N100 (`lab\n100_pair.ps1`, DLL and paks built from a
+clean worktree of HEAD, paks = `work\coop_test_pak`). Runs in `work\runs\n100pair-<stamp>` (frames `host\shotNNN.png`,
+`client\shotNNN.png`, logs `ts_coop.log`). Since commit 20d8c4b `TS_CAMPAIGN`, `TS_COOP_REVERSE` and `TS_COOP_REWIND`
+are **on by default in co-op sessions** (coopsession.c; `=0` switches each off); stock maps are untouched
+(n100pair-20261026-014450: `multiplayer2`, modules idle, no recording, the reverse key keeps its stock use).
+
+| Test | Level | Result | Run(s) |
+|---|---|---|---|
+| Death domain (KILL) | 14 | client put into `dom_RIP_cine_start` (lab `!cp putin`): host `client in slot 1 ... killed`, no death cinematic, host alive. Fixed on the way: a client killed by `$player.Kill()` stayed "waiting for respawn" for good -> clients now die by `FailMission` (multiplayer death, respawned at 9.83 0.46 -200.57); a dead body left in the domain was killed again every 8 s -> once per entry | -225807, -230530, -231150 |
+| Reverse, quick variant on a client | 14 | client presses B (`lab\n100_key.ps1`) in the fan shaft after `cine1` started the fans: host runs its playback for the client (`client's reverse key: reverse for 5.0 s`), the client fires the shaft's 5 reverse objects and **rises up the shaft** (y -6.28 -> 19.5 -> 111), falls back when the reverse ends; reverse tint on both screens (client frame shot074). Fixed on the way: the key never reached the mod on a client (the engine offers reverse only with recorded frames, 0x43edd0: a fake frame count now), and the power start path 0x43e1b0 now asks the mod too | -232319 (also -231744) |
+| Real rewind on the host | 14, 5, 9 | the host records (`snapshots 216` = 21.6 s), its own B key runs the engine's reverse (sepia frame host shot127), a client's B key or `!rv start` runs the same playback for the client and ends after the client's time (`reverse ended (time up)`). Fixed on the way: the mod's frame (script tick) does not run during the playback -> the end and the network pushes now run in the recorder's own update (0x584960) | -224356, -225807, -011719, -010451 |
+| Client crash with the host recording | 5, 7 | clients crashed at the level start (AV 0x447a5c, player weapons) only when the host recorded (bisected: n100pair-20261026-000101 host-only rewind crashed, -235552 without rewind did not) -> the host pauses recording while a client loads; levels 7 and 5 load cleanly since | -000630, -011719 |
+| "All players" lift | 7 | host in `dom_lift__move_up`: `waits for 1 player(s)`, 20 s later `1 client(s) sent to dom_lift__move_up`, the lift goes up with both (both at y 54.33) | -001120 |
+| "All players" train | 22 | first the gate never opened (the host stood on the train with its body but no test point inside) -> the host now counts by its body too; then the client was gathered and rode the train away (229 -> 254 x) | -012515, -013926 |
+| Quad scanner, host only | 9 | client on foot in `dom_scanner_1`, host elsewhere: no mission failure (`restart 0/0`) | -010451 |
+| Zeppelin seats | 8 | host `!ss fire Check_Point_1 OnUnlocked`: `rebel_hmg1` removed, client `seat ...tur04 taken -> Ok`, client frame shot089 on the turret over the moving deck. Fixed on the way: the zeppelin has a net id but no motion data -> stood still on the client; driverless vehicles (zeppelin, dirigibles) now run their `StartRoute` on clients too (client within ~20 m of the host's zeppelin); a seat sent to a loading client is sent again when it runs the level | -002536, -003512 |
+| Armoured-car ride | 19 | client rides from `actor_start_chase` to `BR_pl_3` and ends next to the host at the exit (client -101.92 -10.78 -22.32, host -102.87 -9.29 -22.60; frames client shot099 / host shot119). Fixed on the way: clients follow the host's car position (sub 75, the client's copy of an AI-driven car does not move), local routes only for driverless vehicles (a client's `StartRoute` on AI vehicles crashed it) | -005950 |
+| Stock client crash, level 19 | 19 | also without the new modules (n100pair-20261026-005301): AV 0x49bddd when an AI biker died on the client (vehicle method 0x49bd70 without a physics body on clients) -> guarded in campaign.c (`TS_CAMPAIGN_VEHGUARD=0` off); no crash since | -005950 |
+| AI nearest player | 14 | client next to `ceilgun1`, host far: `ceilgun1..4 targets coop_player1 (nearest player)` | -224356 |
+| Late-join state | 14 | clients that started more than 20 s after the host got `player state (mask 21)` and applied it (`-> Ok`) | -224356 and later |
+
+Not proven live (open):
+- **Rewound actors seen on clients during a playback** (crane level 5, bridge 9, lift 10, train 19, cages 23): the
+  pushes run, but no frame shows a puzzle actor moving back on the client yet (the client died near the level 9
+  truck in two tries, level 5 had no visual set-up). Needs the per-level puzzle set-up of the test plan.
+- Container traps after a rewind (15), level 2's reverse zone, the force fields of 5, 16, 17, 19, 21 (only 14 proven).
+- Zeppelin 23 seats and cages, the level 18 lift, quads (remote driving), the truck ride at the start of level 9.
+- The host's own seat view on the zeppelin (host frames dark at `tur05`: check in a play pass).
 
 ## 4. Test plan for the live pass
 
