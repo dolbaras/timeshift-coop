@@ -322,6 +322,23 @@ static Held held[HELD_SLOTS][HELD_MAX];
 static int n_held[HELD_SLOTS], held_client[HELD_SLOTS], held_msgs[HELD_SLOTS], held_lost[HELD_SLOTS];
 static int sending_held;
 
+/* (TS_NETDEBUG) packets a channel receives: count, sequence range, the channel's latency estimate +0x220 */
+typedef void (__attribute__((thiscall)) *chrecv_t)(void *, unsigned char *, unsigned, int);
+static int rx_n, rx_min = 1 << 30, rx_max = -1, rx_lat;
+static void __attribute__((thiscall)) hook_chrecv(void *ch, unsigned char *buf, unsigned len, int flag)
+{
+    ((chrecv_t)0x79f390)(ch, buf, len, flag);
+    if (len >= 4) {
+        int seq = buf[2] | buf[3] << 8;
+        rx_n++;
+        if (seq < rx_min)
+            rx_min = seq;
+        if (seq > rx_max)
+            rx_max = seq;
+        rx_lat = *(int *)((char *)ch + 0x220);
+    }
+}
+
 static int slot_index(char *slot)
 {
     char *gm = GAME_MODE_PTR;
@@ -342,6 +359,13 @@ static int __attribute__((cdecl, used)) filter_send(DWORD *args, DWORD flags, DW
         int rel = (flags & 0x20000) != 0, k;
         for (k = 0; k < n_dbg_sends && !(dbg_sends[k].id == id && dbg_sends[k].reliable == rel); k++)
             ;
+        static int logged_ids;
+        if (id != MSG_SML_SIGNALS && id >= 2 && logged_ids < 20 && ent) {
+            logged_ids++;
+            ts_log("netdebug: %03x to a loading client: entity net %d vt %08lx, body %08lx %08lx %08lx", id,
+                   *(int *)(ent + 0x18), *(unsigned long *)ent, body ? body[0] : 0, body ? body[1] : 0,
+                   body ? body[2] : 0);
+        }
         if (k < n_dbg_sends)
             dbg_sends[k].n++;
         else if (n_dbg_sends < 64) {
@@ -370,6 +394,8 @@ static int __attribute__((cdecl, used)) filter_send(DWORD *args, DWORD flags, DW
         held[s][k].net_id = net_id;
         memcpy(held[s][k].body, body, 16);
         n_held[s]++;
+        if (netdebug && k < 12)
+            ts_log("netdebug: held 0x43a of net %d vt %08lx", net_id, *(unsigned long *)ent);
     } else
         for (int w = 1; w < 4; w++)
             held[s][k].body[w] |= body[w];
@@ -451,11 +477,42 @@ static void held_frame(void)
     }
 }
 
+/* ---- send rates in co-op sessions ----
+ * The transport's per-connection rate control (0x77e890: starts at the minimum, x1.15 per second while the peer keeps
+ * up, x0.8 or x0.5 on delays) works between limits set by 0x77ee10: on the server 1500 bytes/s minimum and
+ * (players + 2 x ...) x 375 + 3625 maximum per client, 4000 bytes/s with one client; on a client 650-4000 upwards.
+ * Made for 16 players of a 2007 match; a campaign level has hundreds of networked objects. A client that joined a
+ * running ts2_city_part02 got its join state (the descriptors of every object, ~60 KB) at 1.5-4 KB/s: 13 s of
+ * waiting after its load, the host's unacknowledged packets at 300+ (TS_NETDEBUG "c3 1500 (1500-4000)", run
+ * n100pair-20261025-172429), and in 2 of 13 joins it never got there. In a co-op session the limits are raised every
+ * frame to at least 16 KB/s minimum and 96 KB/s maximum per connection (TS_NETRATE=<min>,<max> in bytes/s; 0 = stock),
+ * and a connection below the minimum is put at it. */
+static int rate_min = 16000, rate_max = 96000;
+
+static void rate_frame(void)
+{
+    char *pn = PEER_NETWORK_PTR;
+    if (!rate_min || !pn || !ts_coop_active())
+        return;
+    for (int i = 0; i < 32; i++) {
+        int *conn = (int *)(pn + 0xb94 + i * 0x6c);
+        if (!conn[0] || !conn[1])
+            continue;
+        if (conn[0x17] < rate_min)
+            conn[0x17] = rate_min;
+        if (conn[0x18] < rate_max)
+            conn[0x18] = rate_max;
+        if (conn[3] < conn[0x17])
+            conn[3] = conn[0x17];
+    }
+}
+
 static void netfix_frame(float dt)
 {
     static DWORD last;
     (void)dt;
     held_frame();
+    rate_frame();
     if (!netdebug)
         return;
     DWORD now = GetTickCount();
@@ -484,11 +541,16 @@ static void netfix_frame(float dt)
         if (!conn[0] || !conn[1])
             continue;
         char *ch = (char *)conn[1];
-        snprintf(line + strlen(line), sizeof line - strlen(line), " [%d] state %d unacked %d sent %d err %d", i, conn[0],
-                 *(int *)(ch + 0xc), *(int *)(ch + 0x24), *(int *)(ch + 0x254));
+        snprintf(line + strlen(line), sizeof line - strlen(line),
+                 " [%d] state %d c3 %d (%d-%d) c7 %d c8 %d lat %d rate %d unacked %d sent %d err %d seq %d/%d/%d/%d win %d fl %x",
+                 i, conn[0], conn[3], conn[0x17], conn[0x18], conn[7], conn[8], *(int *)(ch + 0x220), *(int *)(pn + 0xb88 + 0xd98),
+                 *(int *)(ch + 0xc), *(int *)(ch + 0x24), *(int *)(ch + 0x254), *(unsigned short *)(ch + 0x198),
+                 *(unsigned short *)(ch + 0x19a), *(unsigned short *)(ch + 0x19c), *(unsigned short *)(ch + 0x19e),
+                 *(int *)(ch + 0x1a0), *(unsigned *)(ch + 0x1a4));
     }
     if (line[0])
-        ts_log("netdebug: connections%s", line);
+        ts_log("netdebug: connections%s; received %d packets, seq %d-%d, latency %d", line, rx_n, rx_min, rx_max, rx_lat);
+    rx_n = 0, rx_min = 1 << 30, rx_max = -1;
     if (n_dbg_sends) {
         line[0] = 0;
         for (int i = 0; i < n_dbg_sends; i++)
@@ -504,17 +566,26 @@ static void held_install(void)
     char v[16];
     netdebug = ts_env("TS_NETDEBUG", v, sizeof v) && v[0] == '1';
     joinhold = !(ts_env("TS_JOINHOLD", v, sizeof v) && v[0] == '0');
+    if (ts_env("TS_NETRATE", v, sizeof v)) {
+        rate_min = atoi(v);
+        const char *c = strchr(v, ',');
+        rate_max = c ? atoi(c + 1) : rate_min * 6;
+        ts_log("net: TS_NETRATE %d-%d bytes/s per connection in co-op sessions", rate_min, rate_max);
+    }
     if (!joinhold)
         ts_log("net: TS_JOINHOLD=0: state-machine messages go to loading clients as in the stock game");
-    if (joinhold || netdebug) {
+    if (joinhold || netdebug || rate_min) {
         static const unsigned char orig[5] = {0xb8, 0x24, 0x20, 0x00, 0x00};
         unsigned char jmp[5] = {0xe9};
         *(DWORD *)(jmp + 1) = (DWORD)hook_send_to_slot - (SEND_TO_SLOT_FN + 5);
         int ok = ts_patch_bytes(SEND_TO_SLOT_FN, orig, jmp, 5) && ts_tick_install() && ts_frame_add(netfix_frame);
         if (!ok)
             ts_log("net: per-peer sender not found (other exe): joins into running levels may drop");
-        if (netdebug)
-            ts_log("net: TS_NETDEBUG %s", ok ? "on" : "failed");
+        if (netdebug) {
+            void *o = (void *)0x79f390, *h = (void *)hook_chrecv;
+            ts_log("net: TS_NETDEBUG %s, receive count %s", ok ? "on" : "failed",
+                   ts_patch_bytes(0xdb573c, &o, &h, 4) ? "on" : "failed");
+        }
     }
     if (ts_env("TS_NETQUEUE", v, sizeof v) && atoi(v) > 0) {
         static const unsigned char o4[4] = {0xf4, 0x01, 0x00, 0x00};

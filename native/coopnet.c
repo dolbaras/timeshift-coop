@@ -14,6 +14,7 @@
  *
  * Subtypes:
  *   1  run this SSL text here (queued for the script tick, like the test console)
+ *   3  (client -> server, unreliable, every frame in a co-op session) nothing: carries acknowledgements
  *   2  (client -> server) run on every machine: the server runs it and relays it as 1 to all other clients
  *   10+ other parts of the mod (coopnet_listen): 10-19 time powers (timesync.c)
  * Running received SSL needs TS_COOPNET=1 or the test console (TS_CONSOLE); otherwise it is logged and
@@ -57,6 +58,7 @@
 
 #define SUB_RUN 1
 #define SUB_RUN_ALL 2
+#define SUB_ACK 3                            /* (client -> server, unreliable: carries acknowledgements) */
 
 #define SRV_HANDLER_SLOT 0xdab6c0            /* server net object vtable 0xdab6bc, slot 1 */
 #define SRV_HANDLER 0x697620
@@ -121,14 +123,19 @@ static char *slot_at(int i)
 }
 
 /* One message to one peer through the game's own per-peer sender (entity NULL: net id -2 on the wire). */
-static void send_to_slot(char *slot, const Notify *msg)
+static void send_to_slot_flags(char *slot, const Notify *msg, unsigned flags)
 {
-    unsigned fn = SEND_TO_SLOT, id = MSG_ID, flags = FLAG_RELIABLE;
+    unsigned fn = SEND_TO_SLOT, id = MSG_ID;
     const void *body = msg;
     __asm__ volatile("pushl %[id]\n\tpushl $0\n\tpushl %[slot]\n\tcall *%[fn]"
                      : "+c"(body), "+d"(flags)   /* (inputs, and clobbered by the call) */
                      : [slot] "r"(slot), [id] "r"(id), [fn] "r"(fn)
                      : "eax", "memory", "cc");
+}
+
+static void send_to_slot(char *slot, const Notify *msg)
+{
+    send_to_slot_flags(slot, msg, FLAG_RELIABLE);
 }
 
 /* target: -1 = every peer (server: every joined client; client: the server), else a slot index.
@@ -209,9 +216,11 @@ static int catch_message(int msg, int *data)
         return 1;
     }
     int len = m->size - 6;
-    if (InterlockedIncrement(&n_got_logged) <= LOG_FIRST)
+    if (m->sub != SUB_ACK && InterlockedIncrement(&n_got_logged) <= LOG_FIRST)
         ts_log("coopnet: got sub %u (%d bytes) from peer %d", m->sub, len, peer);
     switch (m->sub) {
+    case SUB_ACK:
+        break;   /* (only there to carry the sender's acknowledgements) */
     case SUB_RUN:
     case SUB_RUN_ALL: {
         char text[MAX_PAYLOAD + 1];   /* (the body lives in the codec's static buffer: copied) */
@@ -274,6 +283,40 @@ int coopnet_console(const char *text, char *out, int size)
     return 1;
 }
 
+/* ---- client: acknowledgements after joining a running level ----
+ * The host resends its reliable packets as the client's packets acknowledge them (each client packet carries the
+ * acknowledgement state). A client that joined a running level had dropped the packets sent during its load and,
+ * until its slot ran the level (8-12 s on the N100: it works through the join state), sent only ~3 packets a second:
+ * its receive position moved by ~1 packet a second while the host sent 10-20 (TS_NETDEBUG "seq" columns: client
+ * 15 -> 32 in 20 s, host at 479), and it jumped once the client ran the level and sent every frame. In 2 of 13 part02
+ * joins the client never got there and the host's unacknowledged packets grew towards the 500 limit
+ * (n100pair-20261025-170123, -171200). A client in a co-op session now sends one tiny unreliable message every frame
+ * (sub 3, no content): every frame carries its acknowledgements. Once the client runs the level it sends every frame
+ * anyway, so the message rides in packets that go out regardless. TS_ACKPUMP=0 switches it off. */
+static int ack_pump = 1;
+static LONG ack_logged;
+
+static void ack_frame(float dt)
+{
+    (void)dt;
+    if (!ack_pump || game_mode() != MODE_CLIENT || !in_network_game() || !ts_coop_active()
+        || NOTIFY_CODEC < 0 || NOTIFY_CODEC > 99)
+        return;
+    char *s = slot_at(0);
+    for (int i = 0; s; s = slot_at(++i))
+        if (*(int *)s == 0) {   /* (the server) */
+            Notify m;
+            m.codec = (unsigned char)NOTIFY_CODEC;
+            m.flags = 0x40;
+            m.size = 6;
+            m.sub = SUB_ACK;
+            send_to_slot_flags(s, &m, 0x10000);   /* (unreliable: nothing to acknowledge back) */
+            if (InterlockedIncrement(&ack_logged) == 1)
+                ts_log("coopnet: acknowledgement messages to the host every frame");
+            break;
+        }
+}
+
 /* ---- install ---- */
 static int patch_slot(DWORD slot, void *expect, void *hook)
 {
@@ -293,6 +336,11 @@ void coopnet_install(void)
         return;
     }
     hooks_in = 1;
+    char ap[8];
+    if (ts_env("TS_ACKPUMP", ap, sizeof ap) && ap[0] == '0')
+        ack_pump = 0;
+    else if (!ts_tick_install() || !ts_frame_add(ack_frame))
+        ts_log("coopnet: no frame hook: no acknowledgement pump");
     char con[16];
     remote_ssl = ((set && v[0] == '1') || ts_env("TS_CONSOLE", con, sizeof con)) && ts_tick_install();
     ts_log("coopnet: handlers in, remote SSL %s", remote_ssl ? "on" : "off");
