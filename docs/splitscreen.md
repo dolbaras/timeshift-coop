@@ -143,6 +143,7 @@ Player 1's raw input, context and look state are restored afterwards.
 | `TS_SPLIT_FXVIEW=8,10` | the screen effects (post-effect indices) kept per view; the others show in both halves |
 | `TS_SPLIT_FXSHARED=1` | tests: all screen effects as the game has them (both halves) |
 | `TS_SPLIT_ITEMTEST=<what>,<s>` | tests: <s> seconds after player 2 came in: `list`/`listall` log named objects (30 m / all), `nearitems` puts player 2 on the nearest recorded pick-up nodes one after another, `@name`, `name`, `#x/y/z` ("+"-separated, `!` = player 1) put a player on that object or spot; ammunition and life are logged before and 3 s after each |
+| `TS_SPLIT_FPNOSCALE=1` | tests: the weapon pass keeps the half's horizontal angle (first-person weapons cut at the sides) |
 | `TS_SPLITLOG=3` | tests: also every scene node made with its template, and the callers of a pick-up |
 | `TS_SPLIT_HUDNEXT=0` | tests: the HUD weapon panel takes player 2 on the other frame parity (default 1 is right) |
 
@@ -241,6 +242,16 @@ player 1 to move, time-power effects showed in one half only, split screen with 
 | Pick-ups | **not shown for player 2.** The way found: a pick-up item calls the toucher's vtable +0x17c (`0x420470`: item class check, +0x2a4 decides, +0x284 takes), from the item's own method `0x8ad570`; the mod logs each call with the player. One real pick-up by player 1 was logged (`pick-up .. by player 1: taken`, `20261025-134528`, 13:47:23, next to the level's ammo box). Player 2 was put on the level's pick-ups found in the script name table and the world's scene nodes (ammo box `s3d_refLocator55|ammobox`, the dropped pistol prop `wpn_drop_pistol`, a policeman's rifle dropped with the game's `DropWeapon()`, ground objects), with `X` (use) pressed: no +0x17c call for player 2 at all. What lets an item notice its toucher (possibly the local player only) is the next step | `20261025-131823`, `-132055`, `-132850`, `-133456`, `-134528`, `-134917`, `-135144` |
 | Join spot at a level start | trail spots must be beside the partner (1-12 m away horizontally, within 1.2 m in height); spots are tried at 1.6 m and 0.9 m. `ts2_city_part03` starts player 1 about 100 m up on something moving (its height swings by half a metre) with the ground below every spot around it: player 2 waits on the ground below and is placed again every 2 s (putting it on player 1's own spot pushed player 1 off and both died) | `20261025-140722`, `20261025-141144` log 14:15:38 |
 
+### Round 8 (2026-10-25, main PC; pick-ups for player 2, the ts2_city_part03 start, other levels)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Pick-ups for player 2 | found why none reached player 2: an item's update (`0x4f5aa0`, item vtable +0x13c) gives itself to the players of the game's player list (`[0xfcab34]` +0x28, 0xa4-byte records, +4 the player: the network players' list, which in single player holds player 1 only), through vtable +0x16c (in reach) and +0x20c (`0x8ad570`: check, the player's take +0x17c, done). The item update is hooked (its two vtable slots and the two calls of the subclasses): after it, the same is done for player 2, as player 2. Player 2 (pistol 102) on the level's pistol pick-up: `pick-up .. by player 2: taken`, its counter 96 -> 112 in its half, player 1's (unarmed) panel unchanged | `20261025-152204` log 15:23:50 and `shot105/107/109.png` |
+| `ts2_city_part03` start | the cause of the 100 m start: a level start puts both players on the level's player start; two bodies in one spot threw both 105 m up, where they hung (player 1's half was red from that). At the first tick of a level player 2 is now moved beside player 1 when both stand on one spot. Both start on the ground, player 2 1.6 m beside player 1, no red. For a partner on something the floor ray does not see, player 2 is put 1 m beside it at its height without the ray and kept there if it stays (checked after 1.5 s, 3 tries), else on the ground below with a new try every 2 s | `20261025-152900` log 15:31:30 (`both players on one spot at the level start`), `shot160/190.png` |
+| Opening scene of `ts2_city_part01` | the suit's start-up and the scripted arrival run with UI +0xc0 bit 0x10 (the game's camera unused at 0,0,0) and no cutscene flag: they were drawn into both halves (the same picture twice). That bit now counts as a cutscene: full screen | `20261025-153248` (before), `20261025-153629` `shot100-190.png` (after: full screen), `shot215.png` (split screen in play) |
+| First-person pistol missing in a half | the weapon pass (`0x680730`) takes its vertical angle from WPN_FOV and the horizontal one from the picture's shape (+0x154, the half's): in a side-by-side half the pistol at the lower right fell outside (the rifle was cut). For a split view the weapon pass now keeps the whole screen's horizontal angle with the matching vertical one (at its projection rebuild, the call at `0x680917`): the weapon is drawn smaller, in its usual place. `TS_SPLIT_FPNOSCALE=1` turns it off | `20261025-154504` (no split: the pistol), `20261025-155515` (split, missing), `20261025-160120` `shot105.png` (both pistols) |
+| `ts2_zepride1_part01` | split screen works on the zeppelin (player 1 at the gun turret, player 2 in the cabin, each with its HUD; the ship's status widget in both halves) | `20261025-160329` `shot100-195.png` |
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
@@ -253,10 +264,10 @@ player 1 to move, time-power effects showed in one half only, split screen with 
   (score, team, respawn) know one local player per machine. Plan: on the host, keep player 2 out of replication
   and send it to clients as a `player_mp` puppet (as remote players are), with its position from the host's
   player 2. The menu's split screen starts a single-player game, so it never meets a network session.
-- **Pick-ups for player 2**: no pick-up item ever called player 2's take method (round 7); the item's touch
-  detection is to be found (`0x8ad570` is called from the items' vtables).
-- **`ts2_city_part03` start**: player 1 starts 100 m up on something moving; player 2 waits on the ground below
-  until a spot beside player 1 holds. The line of sight of a joining spot is not checked (only the floor level).
+- The pick-up message line ("Received: pistol") and other HUD messages are one widget: they show in both halves.
+- HUD texts near a half's right edge are cut there (`ts2_zepride1_part01`: a button hint), and the radar is
+  missing in side-by-side halves (see below).
+- The line of sight of a joining spot is not checked (only the floor level).
 - The pause menu and loading screens are full screen (UI command context); cutscenes with the scene camera are
   full screen. Player 2 has no menu control (only player 1's pad and keyboard drive the menus).
 - Each view runs at half the frame rate; no frame cap yet.

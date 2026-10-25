@@ -359,7 +359,11 @@ static void complain(const char *what, long hr)
 
 static int cinematic(void)
 {
-    BYTE *c = CINE;
+    BYTE *c = CINE, *ui = *(BYTE **)0x1095fc8;
+    /* (UI +0xc0 bit 0x10: the level's opening scene of ts2_city_part01 (the suit's start-up, the scripted arrival)
+     * runs with it, the game's camera unused at 0,0,0; it is 0 in play. Full screen then, as for cutscenes.) */
+    if (ui && (*(DWORD *)(ui + 0xc0) & 0x10))
+        return 1;
     if (!c)
         return 0;
     int i = *(int *)(c + 0x10);
@@ -436,6 +440,44 @@ static int split_wanted(void)
         return 0;
     }
     return 1;
+}
+
+/* The first-person weapon in a half. The weapon pass (0x680730) draws it with its own vertical angle (console
+ * WPN_FOV into camera +0x150) and the horizontal one from the picture's shape (+0x154, which fit_fov sets for
+ * the half): in a side-by-side half the horizontal angle halved and the pistol at the lower right fell outside
+ * (the rifle was cut). For a view of a split frame the weapon pass keeps the whole screen's horizontal angle and
+ * gets the vertical angle that goes with it in the half: the weapon is drawn smaller, at its usual place. Done
+ * at the pass's projection rebuild (the call 0x680917 -> 0x624690, camera in eax/ebx). */
+static int fp_noscale;
+
+__attribute__((used)) void __cdecl split_fp_proj(BYTE *cam)
+{
+    if (fp_noscale || !swapped || view < 0 || !cam)
+        return;
+    int w, h;
+    bb_size(&w, &h);
+    RECT r;
+    half_rect(view, w, h, &r);
+    float hw = (float)(r.right - r.left), hh = (float)(r.bottom - r.top);
+    if (w <= 0 || h <= 0 || hw < 1 || hh < 1 || hw / hh >= (float)w / (float)h * 0.98f)
+        return;   /* (a half as wide as the screen or wider: nothing falls out at the sides) */
+    float *f = (float *)cam, v = f[0x150 / 4] * 0.0174532925f;
+    if (!(v > 0.05f && v < 3.0f))
+        return;
+    float th = tanf(v * 0.5f) * (float)w / (float)h;   /* (tan of half the whole screen's horizontal angle) */
+    f[0x14c / 4] = 2.0f * atanf(th) * 57.2957795f;
+    f[0x150 / 4] = 2.0f * atanf(th * hh / hw) * 57.2957795f;
+}
+
+__attribute__((naked)) static void fp_proj_stub(void)
+{
+    __asm__("push %eax\n\t"
+            "push %eax\n\t"
+            "call _split_fp_proj\n\t"
+            "add $4, %esp\n\t"
+            "pop %eax\n\t"
+            "mov $0x624690, %edx\n\t"
+            "jmp *%edx");
 }
 
 static void restore_globals(void)
@@ -1189,6 +1231,88 @@ static int TSCALL hook_pickup(void *pl, void *item)
     return r;
 }
 
+/* The items' give method (0x8ad570, thiscall (item, toucher, x): item +0x208 check, toucher +0x17c take, item
+ * +0x204 done), in the item classes' vtables. Tests: who calls it, for whom. */
+static int (TSCALL *real_give)(void *, void *, int);
+static int TSCALL hook_give(void *item, void *who, int x)
+{
+    int r = real_give(item, who, x);
+    static int n;
+    if (splitlog && n++ < 60) {
+        ts_log("split: item %p give to %s %p (%d): %d, called from %p", item, who == p2 ? "player 2" : who == PLAYER_B ? "player 1" : "?",
+               who, x, r, __builtin_return_address(0));
+        if (splitlog > 2 && n < 6) {
+            DWORD *sp = (DWORD *)__builtin_frame_address(0);
+            for (int k = 0; k < 64; k++)
+                if (sp[k] > 0x401000 && sp[k] < 0xd11000)
+                    ts_log("split:   give stack +%#x %08lx", k * 4, sp[k]);
+        }
+    }
+    return r;
+}
+
+/* Pick-ups for player 2. An item's update (0x4f5aa0, item vtable +0x13c) gives itself to the players of the
+ * game's player list ([0xfcab34] +0x28, 0xa4-byte records, +4 the player: the network players' list, which in
+ * single player holds player 1 only): for each, vtable +0x16c (0: in reach) and then +0x20c (0x8ad570: check,
+ * the player's take +0x17c, done). Player 2 is not in that list, so no item ever reached it. After the item's
+ * own update, the same is done for player 2 (as player 2), on the conditions of that loop (single player, the
+ * item's node shown, item +0x270 bit 1 clear). */
+static void (TSCALL *real_item_update)(void *);
+static void TSCALL hook_item_update(BYTE *item)
+{
+    real_item_update(item);
+    BYTE *gm = *(BYTE **)0xfcab34, *node = *(BYTE **)(item + 0x230);
+    if (stage < 3 || !p2 || !gm || *(int *)(gm + 0x3c) != 1 || !node || (*(DWORD *)(node + 4) & 3)
+        || (*(DWORD *)(item + 0x270) & 2) || as2.depth || *(DWORD *)p2 != PLAYER_VTBL)
+        return;
+    void **vt = *(void ***)item;
+    if (((int (TSCALL *)(void *, void *))vt[0x16c / 4])(item, p2))
+        return;   /* (not in reach) */
+    p2_enter();
+    int r = ((int (TSCALL *)(void *, void *, int))vt[0x20c / 4])(item, p2, 1);
+    p2_leave();
+    static BYTE *last;   /* (logged once per item in a row) */
+    if (r || item != last)
+        ts_log("split: item %p in player 2's reach: %s", (void *)item, r ? "taken by player 2" : "not taken");
+    last = r ? NULL : item;
+}
+
+static int install_item_hooks(void)
+{
+    int n = 0;
+    static const DWORD slots[2] = {0xd8c474, 0xd8c974};
+    for (int i = 0; i < 2; i++)
+        if (*(DWORD *)slots[i] == 0x4f5aa0) {
+            void *vt = (void *)slots[i];
+            void *o = ts_patch_vtable(&vt, 0, (void *)hook_item_update);
+            if (o)
+                real_item_update = o, n++;
+        }
+    static const DWORD calls[2] = {0x4f7463, 0x4f7813};   /* (subclass updates calling it) */
+    for (int i = 0; i < 2 && real_item_update; i++) {
+        unsigned char want[5] = {0xe8}, rep[5] = {0xe8};
+        *(DWORD *)(want + 1) = 0x4f5aa0 - (calls[i] + 5);
+        *(DWORD *)(rep + 1) = (DWORD)hook_item_update - (calls[i] + 5);
+        n += !!ts_patch_bytes(calls[i], want, rep, 5);
+    }
+    return n;
+}
+
+static int install_give_hooks(void)
+{
+    static const DWORD slots[] = {0xd8c2f4, 0xd8c544, 0xd8c7d4, 0xd8ca44, 0xdc52fc};
+    int n = 0;
+    for (int i = 0; i < 5; i++) {
+        if (*(DWORD *)slots[i] != 0x8ad570)
+            continue;
+        void *vt = (void *)slots[i];
+        void *o = ts_patch_vtable(&vt, 0, (void *)hook_give);
+        if (o)
+            real_give = o, n++;
+    }
+    return n;
+}
+
 /* The destructor clears both player pointers: player 2's must leave them on player 1. */
 static void *TSCALL hook_dtor(void *pl, int flags)
 {
@@ -1300,14 +1424,55 @@ static void trail_clear(void)
 static DWORD place_retry;
 static BYTE *place_retry_who;
 
-static void put_player(BYTE *pl, float *pos, float *dir)
+/* The placement (+0x210 = 0x409490, last argument: find the floor under the spot with a ray, filter 0x100100,
+ * which does not see moving objects; 0 = put it there). */
+static void put_player_f(BYTE *pl, float *pos, float *dir, int floor)
 {
     if (pl == p2) {
         p2_enter();
-        ((place_t)(*(void ***)p2)[SLOT_PLACE])(p2, pos, dir, 1);
+        ((place_t)(*(void ***)p2)[SLOT_PLACE])(p2, pos, dir, floor);
         p2_leave();
     } else
-        ((place_t)(*(void ***)pl)[SLOT_PLACE])(pl, pos, dir, 1);
+        ((place_t)(*(void ***)pl)[SLOT_PLACE])(pl, pos, dir, floor);
+}
+
+static void put_player(BYTE *pl, float *pos, float *dir)
+{
+    put_player_f(pl, pos, dir, 1);
+}
+
+/* No floor under any spot beside the partner (it stands on something moving, which the floor ray does not see):
+ * the player is put 1 m beside it at its height without the floor ray, and 1.5 s later it is checked that it
+ * stayed there (on the partner's support); up to 3 tries per level, then the ground below and a new try every
+ * 2 s. */
+static DWORD support_check;
+static BYTE *support_who;
+static int support_tries;
+
+static int put_on_support(BYTE *pl, const float *pp, float ax, float az, float *dir)
+{
+    static const float side[3][2] = {{-1, 0}, {0, 1}, {0, -1}};
+    if (support_tries >= 3)
+        return 0;
+    int k = support_tries % 3;
+    float pos[3] = {pp[0] + (ax * side[k][0] - az * side[k][1]) * 1.0f, pp[1] + 0.2f,
+                    pp[2] + (az * side[k][0] + ax * side[k][1]) * 1.0f};
+    float want = pos[1], first[3];
+    memcpy(first, pos, sizeof first);
+    put_player_f(pl, pos, dir, 0);
+    BYTE *n = *(BYTE **)(pl + 0x230);
+    if (n) {   /* (the placement raises the spot by the player's own offsets: asked again lower by what it added) */
+        float got = ((float *)(n + 0x68))[1];
+        first[1] = want - (got - want);
+        put_player_f(pl, first, dir, 0);
+    }
+    support_tries++;
+    support_check = GetTickCount() + 1500;
+    support_who = pl;
+    ts_log("split: player %d put 1 m beside the partner at its height (no floor under the spots beside it): %.2f %.2f %.2f,"
+           " partner at %.2f %.2f %.2f; checked in 1.5 s", pl == p2 ? 2 : 1, first[0], n ? ((float *)(n + 0x68))[1] : first[1],
+           first[2], pp[0], pp[1], pp[2]);
+    return 1;
 }
 
 static void place_player(BYTE *pl, BYTE *partner)
@@ -1361,6 +1526,10 @@ static void place_player(BYTE *pl, BYTE *partner)
                 how = cname[c];
             }
         int again = place_retry != 0;   /* (a retry: logged once) */
+        if (!ok && put_on_support(pl, pp, ax, az, dir)) {
+            place_retry = 0;
+            return;
+        }
         if (!ok) {
             how = "on the ground below the partner (no floor beside it; tried again every 2 s)";
             place_retry = GetTickCount() + 2000;
@@ -1919,6 +2088,20 @@ static void split_tick(float dt)
     if (stage < 3)
         return;
     item_test(PLAYER_B != p2 ? PLAYER_B : NULL);
+    if (support_check && (int)(GetTickCount() - support_check) >= 0 && p2 && PLAYER_B && PLAYER_B != p2) {
+        support_check = 0;
+        BYTE *who = support_who, *other = who == p2 ? PLAYER_B : p2;
+        BYTE *n1 = *(BYTE **)(who + 0x230), *n2 = *(BYTE **)(other + 0x230);
+        if (n1 && n2) {
+            float dy = ((float *)(n1 + 0x68))[1] - ((float *)(n2 + 0x68))[1];
+            if (dy * dy < 1.0f)
+                ts_log("split: player %d stayed beside the partner (height difference %.2f m): on its support", who == p2 ? 2 : 1, dy);
+            else {
+                ts_log("split: player %d did not stay beside the partner (height difference %.2f m)", who == p2 ? 2 : 1, dy);
+                place_player(who, other);
+            }
+        }
+    }
     if (place_retry && (int)(GetTickCount() - place_retry) >= 0 && p2 && PLAYER_B && PLAYER_B != p2) {
         if (place_retry_who == p2)
             place_player(p2, PLAYER_B);
@@ -1942,13 +2125,29 @@ static void split_tick(float dt)
     DWORD now = GetTickCount();
     static int placed;
     int gap = now - last_tick > 500;   /* (a level load: the tick stopped) */
+    static int apart;   /* (the players pulled apart at a level start) */
     if (gap)
-        placed = 0;
+        placed = 0, support_tries = 0, support_check = 0, place_retry = 0, apart = 0;
     if (!in_play() || cinematic() || gap)
         p1_since = now;
     last_tick = now;
     if (gap || !p1)
         trail_clear();   /* (a level load: the old level's spots are gone) */
+    /* A level start puts both players on the level's player start (both are players): two bodies in one spot
+     * threw both 105 m up in ts2_city_part03 (they hung there, player 1's half red). Player 2 is moved beside
+     * player 1 at the first tick of the level, before the bodies push each other apart. */
+    if (!apart && p1 && p2 && !gap && (int)(now - p2_born) > 2000) {
+        apart = 1;
+        BYTE *a = *(BYTE **)(p1 + 0x230), *b = *(BYTE **)(p2 + 0x230);
+        if (a && b) {
+            float *pa = (float *)(a + 0x68), *pb = (float *)(b + 0x68), dx = pa[0] - pb[0], dy = pa[1] - pb[1], dz = pa[2] - pb[2];
+            if (dx * dx + dz * dz < 0.25f && dy * dy < 4.0f) {
+                ts_log("split: both players on one spot at the level start (%.2f m apart, %.2f m in height): player 2 moved"
+                       " beside player 1", sqrtf(dx * dx + dz * dz), dy);
+                place_player(p2, p1);
+            }
+        }
+    }
     else if (in_play() && !cinematic()) {
         trail_add(0, p1);
         if (p2)
@@ -2059,6 +2258,18 @@ void split_install(void)
         }
     fx_off = ts_env("TS_SPLIT_FXSHARED", v, sizeof v) && v[0] == '1';
     hudlog = splitlog > 0;
+    fp_noscale = ts_env("TS_SPLIT_FPNOSCALE", v, sizeof v) && v[0] == '1';
+    if (stage >= 3 || !forced) {   /* (the weapon pass's projection rebuild, see split_fp_proj) */
+        static const unsigned char want[5] = {0xe8, 0x74, 0x3d, 0xfa, 0xff};
+        unsigned char rep[5] = {0xe8};
+        *(DWORD *)(rep + 1) = (DWORD)fp_proj_stub - (0x680917 + 5);
+        if (!ts_patch_bytes(0x680917, want, rep, 5))
+            ts_log("split: weapon pass not found (first-person weapons may be cut in a half)");
+    }
+    if ((stage >= 3 || !forced) && install_item_hooks() != 4)
+        ts_log("split: item hooks not all set (pick-ups may not reach player 2)");
+    if (splitlog)
+        ts_log("split: %d item give methods logged (tests)", install_give_hooks());
     if (stage >= 3 || !forced) {
         int nh = install_hud_hooks();
         if (nh != N_HUD)
