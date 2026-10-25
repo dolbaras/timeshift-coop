@@ -30,7 +30,18 @@ import re
 KEPT_KEYS = ["ServerMinPlayers", "ServerMaxPlayers", "ServerTimeLimit", "ServerFragLimit",
              "ServerMaxSpectators", "ServerName", "NetworkMode"]
 
-RESTORE_FUNCS = '''   // co-op mod: a co-op server set the player's own multiplayer settings aside; put them back
+RESTORE_FUNCS = '''   // co-op mod: joining with split screen (the Co-op frame's option, kept in the profile)
+   func CoopSplitJoinInit()
+      var v : string
+      v := $ui.GetUserVar("CoopSplitJoin")
+      if v == "1"
+         $ui.SetStr("CoopSplitJoin", "1")
+      else
+         $ui.SetStr("CoopSplitJoin", "0")
+      end
+   end
+
+   // co-op mod: a co-op server set the player's own multiplayer settings aside; put them back
    func CoopRestoreProfile()
       var keep : string
       keep := $ui.GetUserVar("CoopKeep")
@@ -210,11 +221,7 @@ def build(ctx):
       $ui.SetStr("CoopSession", "")
       $ui.SetStr("CoopStage", "")
       $ui.SetStr("CoopSplit", "")
-      if $ui.GetUserVar("CoopSplitJoin") == "1"
-         $ui.SetStr("CoopSplitJoin", "1")
-      else
-         $ui.SetStr("CoopSplitJoin", "0")
-      end
+      CoopSplitJoinInit()
       if $ui.GetStr("CoopError") != ""
          CoopShowError($ui.ShowFrame("ErrorMsg"))
       end

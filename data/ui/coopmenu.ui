@@ -149,7 +149,14 @@ ssl = <<<
       // string CoopSplitJoin; the choice is kept in the profile and set again by the main menu)
       Element("CoopSplitJoin").AddItem("UI_SOFF", "0")
       Element("CoopSplitJoin").AddItem("UI_SON", "1")
-      if $ui.GetUserVar("CoopSplitJoin") == "1"
+      SplitJoinInit()
+   end
+
+   // (the profile key read into a string first: a missing key is null, which a comparison refuses)
+   func SplitJoinInit()
+      var v : string
+      v := $ui.GetUserVar("CoopSplitJoin")
+      if v == "1"
          Element("CoopSplitJoin").SetVal("1")
       else
          Element("CoopSplitJoin").SetVal("0")
