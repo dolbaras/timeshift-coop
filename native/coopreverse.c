@@ -460,6 +460,45 @@ __asm__(".text\n"
         "  popl %eax\n"
         "  ret\n");
 
+/* Live (N100 pair, levels 5 and 7): with the host recording, a client that loaded the level crashed while it created
+ * its player's weapons from the host's join data (0x4478e0 -> 0x655460 gave NULL, AV at 0x447a5c); without the
+ * recording it did not. The host therefore stops recording while any client has not started running the level, and
+ * starts it again 3 s after the last one runs it (recording = [0xfcace8] 0x200000; 0x584940 stops it the same way;
+ * 0x5846b0, ecx = the recorder, starts it). */
+#define SLOT_INGAME 1
+static int rec_paused;
+static DWORD rec_resume_at;
+static void rec_pause_step(void)
+{
+    char *r = REC;
+    if (!stock || game_mode() != MODE_SERVER || !ts_coop_active() || !r || playing())
+        return;
+    int loading = 0;
+    for (int i = 0; slot_at(i); i++) {
+        char *s = slot_at(i);
+        if (*(int *)s != 0 && !(*(int *)(s + 8) & SLOT_INGAME))
+            loading = 1;
+    }
+    DWORD now = GetTickCount();
+    if (loading) {
+        rec_resume_at = now + 3000;
+        if (!rec_paused) {
+            rec_paused = 1;
+            GAME_FLAGS &= ~0x200000u;
+            *(int *)(r + REC_FLAGS) |= 0x10;
+            RLOG("coopreverse: recording paused (a client loads the level)");
+        }
+    } else if (rec_paused && (int)(now - rec_resume_at) >= 0) {
+        rec_paused = 0;
+        *(int *)(r + REC_FLAGS) &= ~0x10;
+        __asm__ volatile("call *%[fn]"
+                         : "+c"(r)
+                         : [fn] "r"(0x5846b0)
+                         : "eax", "edx", "memory", "cc", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7");
+        RLOG("coopreverse: recording on again (%s)", (GAME_FLAGS & 0x200000u) ? "recording" : "not started");
+    }
+}
+
 /* ---- server ---- */
 static void send_state(int i)
 {
@@ -646,6 +685,7 @@ static void frame(float dt)
         RLOG("coopreverse: trapped in a container after the host's rewind: killed -> %s", res);
     }
     if (stock && game_mode() == MODE_SERVER) {
+        rec_pause_step();
         if (!on && playing() && !timesync_busy()) {   /* the host's own key started the engine's reverse */
             stock_run = 1;
             stock_ours = 0;
