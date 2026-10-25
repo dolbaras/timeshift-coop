@@ -145,8 +145,45 @@ static HANDLE WINAPI hook_WSAAsyncGetHostByName(HWND w, u_int msg, const char *n
     return real_WSAAsyncGetHostByName(w, msg, map_name(name), out, len);
 }
 
+/* ---- saves on a server ----
+ * Campaign levels on the game's own server (co-op): the level loader's save step (0x6e3510) refuses unless the
+ * game runs single-player (mode 1), so the level-start autosave failed, the engine opened its "continue
+ * without saves?" frame (shown empty) and checkpoints never saved. The check now refuses only on a client
+ * (mode 3): the host saves its world. Checked 2026-10-25 by changing the jump in memory: the start-of-level
+ * autosave and a later checkpoint both wrote a save on the server. */
+#define SAVE_CHECK 0x006e3510
+#define SAVE_GO 0x006e3520
+
+__attribute__((naked)) static void save_check(void)
+{
+    __asm__ volatile(
+        ".intel_syntax noprefix\n"
+        "push ecx\n"
+        "mov eax, dword ptr ds:[0xfcab34]\n"
+        "cmp dword ptr [eax + 0x3c], 3\n"     /* client: no save, as before */
+        "je 1f\n"
+        "mov eax, 0x006e3520\n"
+        "jmp eax\n"
+        "1:\n"
+        "xor eax, eax\n"
+        "pop ecx\n"
+        "ret\n"
+        ".att_syntax prefix\n");
+}
+
+static void saves_install(void)
+{
+    /* push ecx; mov eax,[0xfcab34]; cmp dword [eax+0x3c],1; je +2 */
+    static const unsigned char orig[12] = {0x51, 0xa1, 0x34, 0xab, 0xfc, 0x00, 0x83, 0x78, 0x3c, 0x01, 0x74, 0x04};
+    unsigned char jmp5[5] = {0xe9};
+    *(DWORD *)(jmp5 + 1) = (DWORD)save_check - (SAVE_CHECK + 5);
+    if (memcmp((void *)SAVE_CHECK, orig, sizeof orig) != 0 || !ts_patch_bytes(SAVE_CHECK, orig, jmp5, 5))
+        ts_log("net: save check not found (other exe), saves stay single-player only");
+}
+
 void netfix_install(void)
 {
+    saves_install();
     real_sendto = (sendto_t)ts_patch_ws2("sendto", (void *)hook_sendto);
     char v[64];
     if (ts_env("TS_PORT_SHIFT", v, sizeof v) && (port_shift = atoi(v)) != 0)

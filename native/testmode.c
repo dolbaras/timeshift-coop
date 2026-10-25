@@ -210,6 +210,19 @@ static HWND WINAPI hook_CreateDialogParamA(HINSTANCE inst, LPCSTR tmpl, HWND par
     return real_CreateDialogParamA(inst, tmpl, parent, proc, lp);
 }
 
+/* ---- TS_MULTI=1: a second copy on the same PC (tests) ----
+ * The game refuses to start ("TimeShift is already running", 0x4ce220) when FindWindowA finds a window of its
+ * class; with the variable that lookup finds nothing. */
+typedef HWND (WINAPI *FindWindowA_t)(LPCSTR, LPCSTR);
+static FindWindowA_t real_FindWindowA;
+
+static HWND WINAPI hook_FindWindowA(LPCSTR cls, LPCSTR name)
+{
+    if (cls && !IS_INTRESOURCE(cls) && strcmp(cls, "TIMESHIFT_WIN_CLASS") == 0)
+        return NULL;
+    return real_FindWindowA(cls, name);
+}
+
 /* ---- TS_FILELOG=1: every file the game opens or fails to open (tests) ---- */
 typedef HANDLE (WINAPI *CreateFileA_t)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
 typedef HFILE (WINAPI *OpenFile_t)(LPCSTR, LPOFSTRUCT, UINT);
@@ -706,6 +719,10 @@ static HRESULT WINAPI hook_D3DCreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEV
     if (background && pp && !pp->Windowed) {   /* a test instance never goes full screen */
         pp->Windowed = TRUE;
         pp->FullScreen_RefreshRateInHz = 0;
+        /* (its full-screen mode pick gave nonsense sizes for a 640x480 profile on the N100, 56x897, and the
+         * device was refused: the back buffer takes the window's size instead) */
+        if (have_size)
+            pp->BackBufferWidth = (UINT)win_w, pp->BackBufferHeight = (UINT)win_h;
     }
     D3DADAPTER_IDENTIFIER9 id;
     memset(&id, 0, sizeof id);
@@ -819,6 +836,8 @@ void testmode_install(void)
     real_GetAsyncKeyState = (GetAsyncKeyState_t)ts_patch_iat("USER32.dll", "GetAsyncKeyState", (void *)hook_GetAsyncKeyState);
     real_GetKeyboardState = (GetKeyboardState_t)ts_patch_iat("USER32.dll", "GetKeyboardState", (void *)hook_GetKeyboardState);
     real_Direct3DCreate9 = (Direct3DCreate9_t)ts_patch_iat("d3d9.dll", "Direct3DCreate9", (void *)hook_Direct3DCreate9);
+    if (ts_env("TS_MULTI", v, sizeof v) && v[0] == '1')
+        real_FindWindowA = (FindWindowA_t)ts_patch_iat("USER32.dll", "FindWindowA", (void *)hook_FindWindowA);
     if (ts_env("TS_FILELOG", v, sizeof v) && v[0] == '1') {
         real_CreateFileA = (CreateFileA_t)ts_patch_iat("KERNEL32.dll", "CreateFileA", (void *)hook_CreateFileA);
         real_OpenFile = (OpenFile_t)ts_patch_iat("KERNEL32.dll", "OpenFile", (void *)hook_OpenFile);

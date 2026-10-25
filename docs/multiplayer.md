@@ -209,7 +209,8 @@ yet.
 
 Test build (lab tool `coopexp_mod.py`, packed over `patch.s3darc` like the automation patch): the six
 automation frames of section 4, the 24 campaign levels as entries "Co-op: <level>" in the multiplayer list,
-and the co-op rule defaults below. Profile keys for a host that starts by itself:
+the co-op rule defaults below and the `ContWOSaves` change (see "Saves and checkpoints"); `--sync-ai` also
+sets `isSyncMP = Yes` in `ai_brain.cls`. Profile keys for a host that starts by itself:
 
 ```
 AutoTest    = "host"
@@ -235,7 +236,7 @@ later (35-38 s after the start).
 | AI | present and active: soldiers attack, the idle host was shot dead twice within four minutes |
 | Mission scripts | run on the server: SAM messages, tutorial hints ("press F to use the chronoshift"), objectives; the level's own behaviour scripts log the same errors at the same moment as in a single-player load of the level (`$rebel_city2_play_start_rebel2_v2_CR.OnBhvEnd`, `Time_to_Fall_v2` missing: a level bug, not a server effect) |
 | Death | multiplayer rules: red screen, "respawn in N s", click to respawn now; no checkpoint menu |
-| Saving | `$saves_mng.CanSave()` returns true on the server, but neither the level's autosave (single player shows "Saving game..." at the start) nor `$saves_mng.AutoSave(1)` from the console wrote a save file |
+| Saving | the level's autosaves fail on the server (see "Saves and checkpoints"); with one byte of the executable changed they work |
 
 ### Multiplayer rules and how to switch them off
 
@@ -257,15 +258,65 @@ match ("Game started") without reloading the level. With the patched defaults an
 the match runs from the moment the level is loaded. `$ui.GetVariable(...)` does not read these values (it
 returned 0 or `multiplayer1`); `$ui.GetUserVar(key)` reads profile keys.
 
-### Open on the host
+### The empty menu after the level start: a failed autosave
 
-- About 18 s after the level start (when the start camera hands over to the player) an empty menu opens on
-  the host: the "Ver 1.02" menu background with a single highlighted bar and the mouse cursor, no text.
-  `$ui.CloseMenu()` closes it and the game goes on; `$ui.BackFrame()` shows another empty menu. It does not
-  open on multiplayer maps. Not identified yet (not the in-game menus `InGameMenu`/`InGameMulti`, which show
-  their texts when opened from the console, and not the script autosave).
-- Rebel soldiers of the level (friendly in the campaign) and players on a server: which faction a
-  multiplayer player belongs to was not checked.
+About 18 s after the level start (when the start camera hands over to the player) an empty menu opened on the
+host: the "Ver 1.02" menu background, one highlighted bar, the mouse cursor, no text. It does not open on
+multiplayer maps. A trace build (every menu frame of the `ps` block records its `OnInit`/`OnUpdate` in UI
+strings; lab tool `frametrace_mod.py`) named the frames: `Startup_Background` and **`ContWOSaves`** ("continue
+without saves?"). The engine opens `ContWOSaves` when a save fails: single player saves the game at that
+moment ("Saving game..."), and on the server that save fails (`$ui.GetStr("saveSuccess")` = `No`,
+`saveReason` = `NoReason`). The frame's own error text never showed, so the menu looked empty.
+
+Fix in the test build: `ContWOSaves` checks `$ui.GetGameInfo("IsMultiplayer")` first and, in a multiplayer
+session, takes the "continue without saves" answer at once (`$saves_mng.ResetDevice()`,
+`$ui.SetVariable("CONFIG", "WorkWOSaves", "bool", "Yes")`, `$ui.CloseMenu()`). Checked: no menu, the game
+goes on **(observed)**. This also covers clients, which run the same level scripts. Without that answer the
+save system stays waiting: later `AutoSave`/`SaveGame` calls did nothing.
+
+### Saves and checkpoints on the server
+
+How a save runs (static, addresses of patch 1.2):
+
+1. `$saves_mng.AutoSave(id)` (native `0x6ce030`; level scripts call it in checkpoint domains, ids 2-8 in
+   `ts2_city_part02`) marks a save as pending when `CanSave` holds (`0x6d09d0`: no global time stop/slow, no
+   save or load in progress, and the player's own check).
+2. The save manager's update (`0x6cfab0`) runs it (`0x6ced90`: "Saving game..." message) and queues a save
+   job; the job is sent as engine message `0x3ee` to the level loader (`0x734bf0`).
+3. The level loader's handler (`0x6e3960`, case `0x3ee`) calls `0x6e3510`, which **returns failure unless
+   the game mode is 1 (single player)**:
+   `0x6e3516 cmp dword [eax+0x3c], 1 / 0x6e351a je 0x6e3520` (otherwise `xor eax, eax`).
+4. The result handler (`0x6cf330`) sets `saveSuccess`/`saveReason` and, on failure, the update opens
+   `ContWOSaves`.
+
+Console test on the host with that one byte changed in memory (`je` -> `jmp`, `74` -> `eb` at `0x6e351a`)
+before the level start **(observed)**: the level-start autosave succeeded (`saveSuccess` = `Yes`, a 1.1 MB
+`save_DDHHMMSS.tss` in the profile folder, no menu), and a checkpoint domain reached later saved again
+("Game saved"). So a host can save at the campaign checkpoints with that patch (a job for the mod's DLL).
+
+Loading is the open part: `$saves_mng.LoadGame(<save>)` on the server reloaded the level in **single-player
+mode** (game mode 1, single-player death screen), i.e. it ends the server session like `$ui.LoadLevel`. A
+checkpoint restart in co-op needs its own path: load the save on the host while keeping the server mode (or
+restart the server on the level and restore the checkpoint state), then bring the clients back in. What a save
+written in server mode contains (remote players, MP state) was not examined.
+
+### Factions
+
+Teams are class data (`idTeam`, read by `0x667b30` into the class descriptor `+0xac`): `plr_comm.cls` sets
+`idTeam = PLAYERS`, and every player class inherits it (`player`, `plr_model`, `player_ghost`, `player_mp`);
+`rebel_new_base.cls` and `main_char.cls` set `ALLY`, `soldier_new_base.cls` sets `OPP`; `NEUTRAL` exists too.
+So the server's own `player` and, by the same data, remote `player_mp` are on the players' side, like in
+the campaign. **Observed** on the host: near rebels created with `$farm.Create("ai_trench_rebel_1")` and
+`$player.Transport("ai_trench_rebel_1")`, the radar showed the rebels as friendly (green) and the soldiers as
+enemies (red); soldiers shot the player as in single player. Not checked: whether the multiplayer rules
+change anything for remote players (no code that rewrites a player's team was looked for), and how AI picks
+targets among several players.
+
+### AI replication data switch on the host
+
+With `--sync-ai` (`isSyncMP = Yes` in `ai_brain.cls`) the host behaved the same **(observed)**: soldiers
+present and attacking, the same script errors at the same moments as without it, no new errors. What clients
+receive is the next test.
 
 ## 9. Mod messages (the mod's own data between the machines)
 
