@@ -29,10 +29,11 @@ $w -= $w % 8; $h -= $h % 8
 # The profile the game reads (steamwars.ini: Profile Default in ..\UserConfigs): windowed, muted.
 $ini = Join-Path $Game "UserConfigs\Default\user.ini"
 $text = [IO.File]::ReadAllText($ini)
+$text = $text -replace "(?<!\r)\n", "`r`n"   # (the game skips lines ending in a bare LF)
 $set = [ordered]@{ "VIDEO_SizeX" = "$w"; "VIDEO_SizeY" = "$h"; "VIDEO_FullScr" = "no"; "Volume" = "0.000000";
     "Sfx_Volume" = "0.000000"; "Music_Volume" = "0.000000"; "Voice_Volume" = "0.000000" }
 foreach ($k in $set.Keys) {
-    if ($text -match "(?m)^$k\s*=") { $text = $text -replace "(?m)^$k\s*=.*$", "$k = $($set[$k])" }
+    if ($text -match "(?m)^$k\s*=") { $text = $text -replace "(?m)^$k[ \t]*=[^\r\n]*", "$k = $($set[$k])" }
     else { $text = $text.TrimEnd() + "`r`n$k = $($set[$k])`r`n" }
 }
 [IO.File]::WriteAllText($ini, $text)
@@ -46,9 +47,15 @@ $env:TS_WINPOS = "$($wa.X + $bw / 2),$($wa.Y + $cap + $bw / 2)"
 $env:TS_WINSIZE = "$w,$h"
 $env:TS_BACKGROUND = "1"
 $env:TS_ADAPTER = $Adapter
+if (-not $NoMod -and $Shots) {   # the proxy saves the rendered frames (PrintWindow often gets a blank or stale D3D window)
+    $env:TS_SHOTS = ($Shots | Sort-Object) -join ","
+    $env:TS_SHOTDIR = $run
+}
 "window ${w}x${h} at $env:TS_WINPOS, mod: $(-not $NoMod)" | Tee-Object (Join-Path $run "run.txt")
 
-$p = Start-Process -FilePath (Join-Path $bin "TimeShift.Exe") -WorkingDirectory $bin -PassThru -ArgumentList $Args
+$start = @{ FilePath = (Join-Path $bin "TimeShift.Exe"); WorkingDirectory = $bin; PassThru = $true }
+if ("$Args".Trim()) { $start.ArgumentList = "$Args" }   # (an empty -ArgumentList is refused when started with -Command)
+$p = Start-Process @start
 try { $p.PriorityClass = "BelowNormal" } catch {}
 
 Add-Type @"
@@ -60,7 +67,7 @@ public static class TsWin {
 }
 "@
 $t0 = Get-Date
-foreach ($s in ($Shots | Sort-Object)) {
+foreach ($s in ($Shots | Sort-Object | Where-Object { $NoMod })) {
     while (((Get-Date) - $t0).TotalSeconds -lt $s -and -not $p.HasExited) { Start-Sleep -Milliseconds 250 }
     if ($p.HasExited) { break }
     $p.Refresh()
@@ -78,6 +85,11 @@ $exited = $p.HasExited
 if (-not $exited) { Stop-Process -Id $p.Id -Force }
 "game ran $([int]((Get-Date) - $t0).TotalSeconds) s, ended by itself: $exited$(if ($exited) { " (code $($p.ExitCode))" })" |
     Tee-Object -Append (Join-Path $run "run.txt")
+foreach ($f in Get-ChildItem $run -Filter "shot*.bmp") {   # (the proxy's frames: png like the other shots)
+    $img = [System.Drawing.Image]::FromFile($f.FullName)
+    $img.Save([IO.Path]::ChangeExtension($f.FullName, ".png"), [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose()
+    Remove-Item -LiteralPath $f.FullName
+}
 $dmp = Join-Path $bin "timeshift_minidump.dmp"
 if (Test-Path $dmp) { Move-Item $dmp $run -Force; "CRASH: minidump moved to the run folder" | Tee-Object -Append (Join-Path $run "run.txt") }
 "run=$run"

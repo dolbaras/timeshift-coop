@@ -10,9 +10,15 @@
  *   TS_BACKGROUND=1      the game never takes focus and keeps running when it is not in front;
  *                        keyboard, mouse and GetAsyncKeyState reach it only while it really is
  *                        in front (it never reads the user's input meant for another window).
+ *   TS_NETLOG=1          the game's socket calls in the log: sockets, bind/connect/listen/accept,
+ *                        name lookups, options, and the first datagrams per socket and peer.
+ *   TS_SHOTDIR=<dir>     rendered frames saved as <dir>\shotNNN.bmp (NNN: seconds since the start), at
+ *   TS_SHOTS=s1,s2,...   these seconds and whenever a file <dir>\shot.req appears (it is deleted);
+ *                        needs TS_BACKGROUND or TS_ADAPTER (the device hook).
  *
  * Hooks go through the exe's import table and COM vtables; the game code is not patched.
  */
+#include <winsock2.h>
 #include <windows.h>
 #include <d3d9.h>
 #include <stdio.h>
@@ -243,6 +249,285 @@ static HFILE WINAPI hook_OpenFile(LPCSTR name, LPOFSTRUCT of, UINT style)
     return h;
 }
 
+/* ---- TS_NETLOG=1: the game's socket calls (tests; finding what the network code does) ---- */
+typedef SOCKET (WINAPI *socket_t)(int, int, int);
+typedef int (WINAPI *bind_t)(SOCKET, const struct sockaddr *, int);
+typedef int (WINAPI *listen_t)(SOCKET, int);
+typedef SOCKET (WINAPI *accept_t)(SOCKET, struct sockaddr *, int *);
+typedef int (WINAPI *sendto_t)(SOCKET, const char *, int, int, const struct sockaddr *, int);
+typedef int (WINAPI *recvfrom_t)(SOCKET, char *, int, int, struct sockaddr *, int *);
+typedef int (WINAPI *send_t)(SOCKET, const char *, int, int);
+typedef int (WINAPI *recv_t)(SOCKET, char *, int, int);
+typedef int (WINAPI *setsockopt_t)(SOCKET, int, int, const char *, int);
+typedef int (WINAPI *closesocket_t)(SOCKET);
+typedef struct hostent *(WINAPI *gethostbyname_t)(const char *);
+typedef HANDLE (WINAPI *WSAAsyncGetHostByName_t)(HWND, u_int, const char *, char *, int);
+static socket_t real_socket;
+static bind_t real_bind, real_connect;
+static listen_t real_listen;
+static accept_t real_accept;
+static sendto_t real_sendto;
+static recvfrom_t real_recvfrom;
+static send_t real_send;
+static recv_t real_recv;
+static setsockopt_t real_setsockopt;
+static closesocket_t real_closesocket;
+static gethostbyname_t real_gethostbyname;
+static WSAAsyncGetHostByName_t real_WSAAsyncGetHostByName;
+
+static const char *addr_str(const struct sockaddr *a, char *out, int size)
+{
+    const struct sockaddr_in *in = (const struct sockaddr_in *)a;
+    if (!a || in->sin_family != AF_INET)
+        return snprintf(out, size, "(family %d)", a ? a->sa_family : -1), out;
+    const unsigned char *ip = (const unsigned char *)&in->sin_addr;
+    snprintf(out, size, "%u.%u.%u.%u:%u", ip[0], ip[1], ip[2], ip[3], ntohs(in->sin_port));
+    return out;
+}
+
+/* Datagrams: the first 4 per (socket, direction, peer) and then the 10th, 100th, 1000th... */
+#define NET_PEERS 128
+static struct { SOCKET s; int dir; ULONG ip; USHORT port; LONG n; } net_peers[NET_PEERS];
+static CRITICAL_SECTION net_lock;
+
+static LONG net_count(SOCKET s, int dir, const struct sockaddr *a)
+{
+    const struct sockaddr_in *in = (const struct sockaddr_in *)a;
+    ULONG ip = a && in->sin_family == AF_INET ? in->sin_addr.s_addr : 0;
+    USHORT port = a && in->sin_family == AF_INET ? in->sin_port : 0;
+    LONG n = 0;
+    EnterCriticalSection(&net_lock);
+    for (int i = 0; i < NET_PEERS; i++) {
+        if (net_peers[i].n && (net_peers[i].s != s || net_peers[i].dir != dir || net_peers[i].ip != ip
+                               || net_peers[i].port != port))
+            continue;
+        if (!net_peers[i].n)
+            net_peers[i].s = s, net_peers[i].dir = dir, net_peers[i].ip = ip, net_peers[i].port = port;
+        n = ++net_peers[i].n;
+        break;
+    }
+    LeaveCriticalSection(&net_lock);
+    return n;   /* (0: table full, not logged) */
+}
+
+static int net_worth_logging(LONG n)
+{
+    if (n >= 1 && n <= 4)
+        return 1;
+    for (LONG m = 10; m > 0 && m <= n; m *= 10)
+        if (n == m)
+            return 1;
+    return 0;
+}
+
+static void net_log_data(const char *what, SOCKET s, const struct sockaddr *peer, const char *buf, int len, LONG n)
+{
+    char a[32], hex[3 * 24 + 1], txt[25];
+    int k = len < 24 ? len : 24;
+    for (int i = 0; i < k; i++) {
+        unsigned char c = (unsigned char)buf[i];
+        snprintf(hex + 3 * i, 4, "%02x ", c);
+        txt[i] = c >= 32 && c < 127 ? (char)c : '.';
+    }
+    hex[3 * k] = 0, txt[k] = 0;
+    ts_log("net %s #%ld sock=%u %s len=%d: %s|%s|", what, n, (unsigned)s, addr_str(peer, a, sizeof a), len, hex, txt);
+}
+
+static SOCKET WINAPI hook_socket(int af, int type, int proto)
+{
+    SOCKET s = real_socket(af, type, proto);
+    ts_log("net socket af=%d type=%s proto=%d -> %u", af, type == SOCK_DGRAM ? "udp" : type == SOCK_STREAM ? "tcp" : "?",
+           proto, (unsigned)s);
+    return s;
+}
+
+static int WINAPI hook_bind(SOCKET s, const struct sockaddr *a, int len)
+{
+    int r = real_bind(s, a, len);
+    int err = r ? WSAGetLastError() : 0;
+    char t[32];
+    ts_log("net bind sock=%u %s -> %d (err %d)", (unsigned)s, addr_str(a, t, sizeof t), r, err);
+    if (r)
+        WSASetLastError(err);
+    return r;
+}
+
+static int WINAPI hook_connect(SOCKET s, const struct sockaddr *a, int len)
+{
+    int r = real_connect(s, a, len);
+    int err = r ? WSAGetLastError() : 0;
+    char t[32];
+    ts_log("net connect sock=%u %s -> %d (err %d)", (unsigned)s, addr_str(a, t, sizeof t), r, err);
+    if (r)
+        WSASetLastError(err);
+    return r;
+}
+
+static int WINAPI hook_listen(SOCKET s, int backlog)
+{
+    int r = real_listen(s, backlog);
+    ts_log("net listen sock=%u -> %d", (unsigned)s, r);
+    return r;
+}
+
+static SOCKET WINAPI hook_accept(SOCKET s, struct sockaddr *a, int *len)
+{
+    SOCKET c = real_accept(s, a, len);
+    if (c != INVALID_SOCKET) {
+        char t[32];
+        ts_log("net accept sock=%u from %s -> %u", (unsigned)s, addr_str(a, t, sizeof t), (unsigned)c);
+    }
+    return c;
+}
+
+static int WINAPI hook_sendto(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
+{
+    int r = real_sendto(s, buf, len, flags, to, tolen);
+    int err = r < 0 ? WSAGetLastError() : 0;
+    LONG n = net_count(s, 0, to);
+    if (net_worth_logging(n))
+        net_log_data(r < 0 ? "sendto FAILED" : "sendto", s, to, buf, len, n);
+    if (r < 0)
+        WSASetLastError(err);
+    return r;
+}
+
+static int WINAPI hook_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
+{
+    int r = real_recvfrom(s, buf, len, flags, from, fromlen);
+    if (r > 0) {
+        LONG n = net_count(s, 1, from);
+        if (net_worth_logging(n))
+            net_log_data("recvfrom", s, from, buf, r, n);
+    }
+    return r;
+}
+
+static int WINAPI hook_send(SOCKET s, const char *buf, int len, int flags)
+{
+    int r = real_send(s, buf, len, flags);
+    LONG n = net_count(s, 2, NULL);
+    if (net_worth_logging(n))
+        net_log_data("send", s, NULL, buf, len, n);
+    return r;
+}
+
+static int WINAPI hook_recv(SOCKET s, char *buf, int len, int flags)
+{
+    int r = real_recv(s, buf, len, flags);
+    if (r > 0) {
+        LONG n = net_count(s, 3, NULL);
+        if (net_worth_logging(n))
+            net_log_data("recv", s, NULL, buf, r, n);
+    }
+    return r;
+}
+
+static int WINAPI hook_setsockopt(SOCKET s, int level, int opt, const char *val, int len)
+{
+    int r = real_setsockopt(s, level, opt, val, len);
+    ts_log("net setsockopt sock=%u level=0x%x opt=0x%x val=%d -> %d", (unsigned)s, level, opt,
+           val && len >= 4 ? *(const int *)val : val && len ? *val : -1, r);
+    return r;
+}
+
+static int WINAPI hook_closesocket(SOCKET s)
+{
+    ts_log("net close sock=%u", (unsigned)s);
+    return real_closesocket(s);
+}
+
+static struct hostent *WINAPI hook_gethostbyname(const char *name)
+{
+    struct hostent *h = real_gethostbyname(name);
+    char t[32] = "failed";
+    if (h && h->h_addr_list && h->h_addr_list[0]) {
+        const unsigned char *ip = (const unsigned char *)h->h_addr_list[0];
+        snprintf(t, sizeof t, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+    }
+    ts_log("net gethostbyname %s -> %s", name ? name : "(null)", t);
+    return h;
+}
+
+static HANDLE WINAPI hook_WSAAsyncGetHostByName(HWND w, u_int msg, const char *name, char *buf, int len)
+{
+    ts_log("net WSAAsyncGetHostByName %s", name ? name : "(null)");
+    return real_WSAAsyncGetHostByName(w, msg, name, buf, len);
+}
+
+/* The exe imports ws2_32 by ordinal: its import slots are found by the address they hold. */
+static void *patch_ws2(const char *func, void *hook)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    HMODULE ws2 = GetModuleHandleA("ws2_32.dll");
+    void *real = ws2 ? (void *)GetProcAddress(ws2, func) : NULL;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress); real && d->Name; d++) {
+        if (_stricmp((const char *)(base + d->Name), "WS2_32.dll") != 0)
+            continue;
+        for (void **slot = (void **)(base + d->FirstThunk); *slot; slot++) {
+            DWORD old;
+            if (*slot != real || !VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &old))
+                continue;
+            *slot = hook;
+            VirtualProtect(slot, sizeof *slot, old, &old);
+            return real;
+        }
+    }
+    ts_log("net: import ws2_32!%s not found", func);
+    return NULL;
+}
+
+static void netlog_install(void)
+{
+    InitializeCriticalSection(&net_lock);
+#define NET_HOOK(fn) real_##fn = (fn##_t)patch_ws2(#fn, (void *)hook_##fn)
+    NET_HOOK(socket);
+    NET_HOOK(bind);
+    real_connect = (bind_t)patch_ws2("connect", (void *)hook_connect);
+    NET_HOOK(listen);
+    NET_HOOK(accept);
+    NET_HOOK(sendto);
+    NET_HOOK(recvfrom);
+    NET_HOOK(send);
+    NET_HOOK(recv);
+    NET_HOOK(setsockopt);
+    NET_HOOK(closesocket);
+    NET_HOOK(gethostbyname);
+    NET_HOOK(WSAAsyncGetHostByName);
+#undef NET_HOOK
+    ts_log("net log on");
+}
+
+/* ---- DirectDraw (the game queries video memory through it): logged in test mode ---- */
+typedef HRESULT (WINAPI *DirectDrawCreateEx_t)(GUID *, void **, REFIID, IUnknown *);
+typedef HRESULT (WINAPI *DDSetCoop_t)(void *, HWND, DWORD);
+static DirectDrawCreateEx_t real_DirectDrawCreateEx;
+static DDSetCoop_t real_DDSetCoop;
+static LONG n_ddraw;
+
+static HRESULT WINAPI hook_DDSetCoop(void *dd, HWND w, DWORD flags)
+{
+    HRESULT hr = real_DDSetCoop(dd, w, flags);
+    if (InterlockedIncrement(&n_ddraw) <= 20)
+        ts_log("ddraw SetCooperativeLevel flags=0x%lx -> 0x%08lx", flags, (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI hook_DirectDrawCreateEx(GUID *guid, void **out, REFIID iid, IUnknown *outer)
+{
+    HRESULT hr = real_DirectDrawCreateEx(guid, out, iid, outer);
+    if (InterlockedIncrement(&n_ddraw) <= 20)
+        ts_log("DirectDrawCreateEx device=%s -> 0x%08lx", guid == NULL ? "primary" : "other", (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) {   /* (IDirectDraw7::SetCooperativeLevel is slot 20) */
+        void *p = ts_patch_vtable(*out, 20, (void *)hook_DDSetCoop);
+        if (p)
+            real_DDSetCoop = (DDSetCoop_t)p;
+    }
+    return hr;
+}
+
 /* ---- DirectInput: no keyboard/mouse data while another window is in front ---- */
 typedef HRESULT (WINAPI *CreateDevice_DI_t)(void *, REFGUID, void **, void *);
 typedef HRESULT (WINAPI *GetDeviceState_t)(void *, DWORD, void *);
@@ -332,6 +617,112 @@ static UINT pick_adapter(IDirect3D9 *d3d, HWND focus, UINT asked)
     return asked;
 }
 
+/* ---- TS_SHOTS=s1,s2,... with TS_SHOTDIR=<dir>: the rendered frame at those seconds after the start as
+ * <dir>\shotNNN.bmp (window captures of the D3D window come back blank or stale) ---- */
+typedef HRESULT (WINAPI *Present_t)(IDirect3DDevice9 *, const RECT *, const RECT *, HWND, const RGNDATA *);
+static Present_t real_Present;
+static char shot_dir[MAX_PATH];
+static int shot_secs[32], shot_count, shot_next;
+static DWORD shot_t0;
+
+static void save_frame(IDirect3DDevice9 *dev, int secs)
+{
+    IDirect3DSurface9 *bb = NULL, *sys = NULL;
+    D3DSURFACE_DESC d;
+    D3DLOCKED_RECT lr;
+    char path[MAX_PATH + 32];
+    if (FAILED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)))
+        return;
+    IDirect3DSurface9_GetDesc(bb, &d);
+    if (d.Format != D3DFMT_X8R8G8B8 && d.Format != D3DFMT_A8R8G8B8) {
+        ts_log("shot: back buffer format %d not supported", d.Format);
+        goto done;
+    }
+    HRESULT hr = IDirect3DDevice9_CreateOffscreenPlainSurface(dev, d.Width, d.Height, d.Format, D3DPOOL_SYSTEMMEM, &sys, NULL);
+    if (SUCCEEDED(hr) && FAILED(IDirect3DDevice9_GetRenderTargetData(dev, bb, sys))) {
+        /* (a multisampled or otherwise unreadable back buffer: through a plain render target) */
+        IDirect3DSurface9 *rt = NULL;
+        hr = IDirect3DDevice9_CreateRenderTarget(dev, d.Width, d.Height, d.Format, D3DMULTISAMPLE_NONE, 0, FALSE, &rt, NULL);
+        if (SUCCEEDED(hr))
+            hr = IDirect3DDevice9_StretchRect(dev, bb, NULL, rt, NULL, D3DTEXF_NONE);
+        if (SUCCEEDED(hr))
+            hr = IDirect3DDevice9_GetRenderTargetData(dev, rt, sys);
+        if (rt)
+            IDirect3DSurface9_Release(rt);
+    }
+    if (SUCCEEDED(hr))
+        hr = IDirect3DSurface9_LockRect(sys, &lr, NULL, D3DLOCK_READONLY);
+    if (FAILED(hr)) {
+        ts_log("shot: copy of the back buffer failed (hr=0x%08lx, %ux%u format %d multisample %d)", (unsigned long)hr,
+               d.Width, d.Height, d.Format, d.MultiSampleType);
+        goto done;
+    }
+    snprintf(path, sizeof path, "%s\\shot%03d.bmp", shot_dir, secs);
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        DWORD row = d.Width * 4, size = row * d.Height;
+        BITMAPFILEHEADER fh = {0x4d42, sizeof fh + sizeof(BITMAPINFOHEADER) + size, 0, 0, sizeof fh + sizeof(BITMAPINFOHEADER)};
+        BITMAPINFOHEADER ih = {sizeof ih, (LONG)d.Width, -(LONG)d.Height, 1, 32, BI_RGB, size, 0, 0, 0, 0};
+        fwrite(&fh, sizeof fh, 1, f);
+        fwrite(&ih, sizeof ih, 1, f);
+        for (UINT y = 0; y < d.Height; y++)
+            fwrite((BYTE *)lr.pBits + y * lr.Pitch, row, 1, f);
+        fclose(f);
+        ts_log("shot: %s (%ux%u)", path, d.Width, d.Height);
+    }
+    IDirect3DSurface9_UnlockRect(sys);
+done:
+    if (sys)
+        IDirect3DSurface9_Release(sys);
+    IDirect3DSurface9_Release(bb);
+}
+
+static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const RECT *dst, HWND w, const RGNDATA *dirty)
+{
+    static LONG fails;
+    static unsigned frame;
+    if (shot_next < shot_count && GetTickCount() - shot_t0 >= (DWORD)shot_secs[shot_next] * 1000)
+        save_frame(dev, shot_secs[shot_next++]);
+    if (shot_dir[0] && ++frame % 30 == 0) {   /* on request: a file shot.req in the folder (deleted when taken) */
+        char req[MAX_PATH + 16];
+        snprintf(req, sizeof req, "%s\\shot.req", shot_dir);
+        if (GetFileAttributesA(req) != INVALID_FILE_ATTRIBUTES && DeleteFileA(req))
+            save_frame(dev, (int)((GetTickCount() - shot_t0) / 1000));
+    }
+    HRESULT hr = real_Present(dev, src, dst, w, dirty);
+    if (FAILED(hr) && InterlockedIncrement(&fails) <= 5)
+        ts_log("Present failed hr=0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
+typedef HRESULT (WINAPI *TestCoop_t)(IDirect3DDevice9 *);
+static TestCoop_t real_TestCoop;
+
+static HRESULT WINAPI hook_TestCoop(IDirect3DDevice9 *dev)
+{
+    static LONG n;
+    HRESULT hr = real_TestCoop(dev);
+    if (FAILED(hr) && InterlockedIncrement(&n) <= 5)
+        ts_log("device TestCooperativeLevel -> 0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
+/* A device reset (mode changes, lost devices): logged; a test instance stays windowed here too. */
+typedef HRESULT (WINAPI *Reset_t)(IDirect3DDevice9 *, D3DPRESENT_PARAMETERS *);
+static Reset_t real_Reset;
+
+static HRESULT WINAPI hook_Reset(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *pp)
+{
+    if (background && pp && !pp->Windowed) {
+        pp->Windowed = TRUE;
+        pp->FullScreen_RefreshRateInHz = 0;
+    }
+    HRESULT hr = real_Reset(dev, pp);
+    ts_log("device Reset %ux%u windowed=%d -> hr=0x%08lx", pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0,
+           pp ? pp->Windowed : -1, (unsigned long)hr);
+    return hr;
+}
+
 static HRESULT WINAPI hook_D3DCreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND focus, DWORD flags,
                                            D3DPRESENT_PARAMETERS *pp, IDirect3DDevice9 **out)
 {
@@ -348,6 +739,15 @@ static HRESULT WINAPI hook_D3DCreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEV
            pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0, pp ? pp->Windowed : -1, (unsigned long)hr);
     if (FAILED(hr) && use != adapter)
         hr = real_D3DCreateDevice(d3d, adapter, type, focus, flags, pp, out);
+    if (SUCCEEDED(hr) && out && *out) {   /* (IDirect3DDevice9: TestCooperativeLevel is slot 3, Reset 16, Present 17) */
+        void *p = ts_patch_vtable(*out, 16, (void *)hook_Reset);
+        if (p)
+            real_Reset = (Reset_t)p;
+        if ((p = ts_patch_vtable(*out, 3, (void *)hook_TestCoop)))
+            real_TestCoop = (TestCoop_t)p;
+        if (shot_dir[0] && (p = ts_patch_vtable(*out, 17, (void *)hook_Present)))
+            real_Present = (Present_t)p;
+    }
     return hr;
 }
 
@@ -448,6 +848,16 @@ void testmode_install(void)
         real_OpenFile = (OpenFile_t)ts_patch_iat("KERNEL32.dll", "OpenFile", (void *)hook_OpenFile);
         real_CreateFileW = (CreateFileW_t)ts_patch_iat("KERNEL32.dll", "CreateFileW", (void *)hook_CreateFileW);
     }
+    if (ts_env("TS_NETLOG", v, sizeof v) && v[0] == '1')
+        netlog_install();
+    if (background || adapter_mode[0])
+        real_DirectDrawCreateEx = (DirectDrawCreateEx_t)ts_patch_iat("DDRAW.dll", "DirectDrawCreateEx",
+                                                                     (void *)hook_DirectDrawCreateEx);
+    char shots[256];
+    shot_t0 = GetTickCount();
+    if (ts_env("TS_SHOTDIR", shot_dir, sizeof shot_dir) && ts_env("TS_SHOTS", shots, sizeof shots))
+        for (char *t = strtok(shots, ","); t && shot_count < 32; t = strtok(NULL, ","))
+            shot_secs[shot_count++] = atoi(t);   /* (ascending, as given) */
     real_MessageBoxA = (MessageBoxA_t)ts_patch_iat("USER32.dll", "MessageBoxA", (void *)hook_MessageBoxA);
     real_MessageBoxW = (MessageBoxW_t)ts_patch_iat("USER32.dll", "MessageBoxW", (void *)hook_MessageBoxW);
     real_DialogBoxParamA = (DialogBoxParamA_t)ts_patch_iat("USER32.dll", "DialogBoxParamA", (void *)hook_DialogBoxParamA);
