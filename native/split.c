@@ -160,6 +160,11 @@ static int spawning_p2;
 #define MAX_OWN 64
 static BYTE *own2[MAX_OWN], *own1[MAX_OWN];
 static char own_cls[2][MAX_OWN][24];   /* (their classes, for the logs) */
+/* Every object made for player 2 at the player's own spawn sites (weapons first-person and third-person, holster,
+ * hands, body), with its vtable: the weapons are not removed with the player and went on updating with their
+ * owner gone (0x5460d0 -> crash 0x81f09e, run 20261025-223352); they are removed with player 2 (p2_remove). */
+static struct { BYTE *o; DWORD vt; } p2_objs[2 * MAX_OWN], p2_gone[2 * MAX_OWN];
+static int n_p2_objs, n_p2_gone;   /* (p2_gone: of a removed player 2, until the level ends) */
 static int n_own2, n_own1;
 
 __attribute__((used)) void *__cdecl split_weapon_spawn(void *xform, const char *name, const char *cls, int id)
@@ -177,6 +182,8 @@ __attribute__((used)) void *__cdecl split_weapon_spawn(void *xform, const char *
         r = spawn_entity(xform, NULL, cls, id);   /* (the body without its placed template) */
         ts_log("split: player 2 body from template \"%s\" failed, without a template: %p", name, r);
     }
+    if (r && spawning_p2 && n_p2_objs < 2 * MAX_OWN)
+        p2_objs[n_p2_objs].o = r, p2_objs[n_p2_objs++].vt = *(DWORD *)r;
     if (r && spawning_p2 && used && strncmp(used, "wpn_plr_", 8) == 0 && n_own2 < MAX_OWN)
         snprintf(own_cls[1][n_own2], 24, "%s", used), own2[n_own2++] = r;
     else if (r && !spawning_p2 && used && strncmp(used, "wpn_plr_", 8) == 0 && n_own1 < MAX_OWN)
@@ -253,6 +260,17 @@ static int net_hide(BYTE *o, const char *what)
 #define MAX_CRS 32
 static struct { BYTE *node, *geo; } crs[2][MAX_CRS];
 static int n_crs[2];
+/* Some crosshairs are objects of their own (the sniper's: vtable 0xd9b9f8, update 0x5703a0; others with update
+ * 0x56f040), made with the player's weapons and not removed with the player: after player 2's removal they went
+ * on updating with player 2's weapons gone and stopped the game in __purecall (runs 20261025-215305 on a server,
+ * -220418 and -221623 in single player). For a few seconds after player 2's weapons are made, the updated objects
+ * whose node is one of player 2's crosshair nodes are recorded; they are removed with player 2, and one left over
+ * is not updated any more. */
+static struct { BYTE *o; DWORD vt; } crs_obj[MAX_CRS];
+static int n_crs_obj;
+static BYTE *crs_gone[MAX_CRS];
+static int n_crs_gone;
+static DWORD crs_scan;   /* (recording until this tick) */
 
 static void record_crosshair(BYTE *tpl, BYTE *node)
 {
@@ -282,6 +300,37 @@ static void record_item(BYTE *tpl, BYTE *node)
     items_seen[n_items_seen].node = node;
     items_seen[n_items_seen].geo = *(BYTE **)(node + 0x1c0);
     snprintf(items_seen[n_items_seen++].name, 28, "%s", (char *)(tpl + 0x30));
+}
+
+/* A server announces a new entity to the connected clients from its init (0x6548f0: MP_CREATE_ENT 0x42a, sent at
+ * 0x654bee, with the class, name and template strings of its scene node at message +0x14, +0x54, +0x94). For
+ * player 2 those said "player", so a client connected when player 2 came in made a campaign `player` of it, whose
+ * first-person weapons it could not make (crash 0x447a5c, runs 20261025-213310 to -222711). A client that joins
+ * later gets it from the join list, through the player's create descriptor (vtable +0x38: the multiplayer class),
+ * as a `player_mp`. While player 2 is made on a server, its announcement's class and template (+0x54, +0x94; +0x14
+ * is the name) say "player_mp", as the server's own announcement of a client's player does (0x697620). */
+__attribute__((used)) void __cdecl split_create_msg(char *m)
+{
+    static int n;
+    if (splitlog > 1 && m && (spawning_p2 || n++ < 10))   /* (tests: the announcements) */
+        ts_log("split: announcement \"%.40s\" \"%.40s\" \"%.40s\"%s", m + 0x14, m + 0x54, m + 0x94, spawning_p2 ? " (player 2's spawn)" : "");
+    if (!spawning_p2 || !m || strcmp(m + 0x54, "player") != 0)
+        return;
+    ts_log("split: player 2 announced to the clients as \"player_mp\" (name \"%.40s\", was \"%.40s\" \"%.40s\")", m + 0x14, m + 0x54,
+           m + 0x94);
+    strcpy(m + 0x54, "player_mp");
+    strcpy(m + 0x94, "player_mp");
+}
+
+__attribute__((naked)) static void create_msg_stub(void)
+{
+    __asm__("pushal\n\t"
+            "pushl 44(%esp)\n\t"   /* (the message: third stack argument of 0x698020, past the return address) */
+            "call _split_create_msg\n\t"
+            "addl $4, %esp\n\t"
+            "popal\n\t"
+            "push $0x698020\n\t"
+            "ret");
 }
 
 static void *TSCALL hook_mknode(void *world, BYTE *tpl, void *xform)
@@ -412,6 +461,7 @@ static void fx_restore(void);
 static int p2_depth(void);
 static void place_p2(BYTE *p1);
 static void place_player(BYTE *pl, BYTE *partner);
+static void p2_remove(const char *why);
 static BYTE *rc;                /* the render camera: a copy of the view's camera with the half-screen fov */
 static BYTE *cam2;              /* player 2's camera (stage 2: an offset copy of player 1's) */
 
@@ -1231,6 +1281,33 @@ static int is_p1_object(BYTE *o)
 
 static int __stdcall hook_dispatch(BYTE *task, int msg, int a, int b)
 {
+    if (msg == 1000 && n_p2_gone)
+        for (int i = 0; i < n_p2_gone; i++)
+            if (task == p2_gone[i].o && *(DWORD *)task == p2_gone[i].vt) {
+                static int n;
+                if (n++ < 5)
+                    ts_log("split: update of removed player 2's object %p (vtable %08lx) skipped", (void *)task, p2_gone[i].vt);
+                return 0;
+            }
+    if (msg == 1000 && (n_crs_gone || crs_scan)) {
+        for (int i = 0; i < n_crs_gone; i++)
+            if (task == crs_gone[i])
+                return 0;   /* (a crosshair object of a removed player 2 that was not removed: not updated) */
+        if (crs_scan && p2 && (int)(GetTickCount() - crs_scan) < 0 && !IsBadReadPtr(task, 0x234)) {
+            BYTE *nd = *(BYTE **)(task + 0x230);
+            for (int i = 0; nd && i < n_crs[1]; i++)
+                if (crs[1][i].node == nd) {
+                    int k = 0;
+                    while (k < n_crs_obj && crs_obj[k].o != task)
+                        k++;
+                    if (k == n_crs_obj && n_crs_obj < MAX_CRS) {
+                        crs_obj[n_crs_obj].o = task, crs_obj[n_crs_obj++].vt = *(DWORD *)task;
+                        ts_log("split: player 2's crosshair object %p (vtable %08lx)", (void *)task, *(DWORD *)task);
+                    }
+                    break;
+                }
+        }
+    }
     if (msglog && p2 && msg != 0x3e8 && msg != 0x3e9 && (task == p2 || task == PLAYER_B || is_p2_object(task))) {
         static int n;
         if (msg != 3 && msg != 0x415 && n++ < 400)
@@ -1781,6 +1858,69 @@ static void TSCALL hook_mp_update(BYTE *o)
 }
 
 /* The destructor clears both player pointers: player 2's must leave them on player 1. */
+/* Removing player 2 in a network game (a client's player 2 ended on the host, run 20261025-213310) crashed the
+ * next frame in a light's pass over the scene instances it lights (0x98b820): an instance of a removed node, still
+ * in the list for that frame, has no node any more (+0xbc = 0) and was read at 0x98b840. Such an instance is
+ * skipped (as one with +4 bit 0x4000 is). */
+__attribute__((naked)) static void light_inst_guard(void)
+{
+    __asm__("mov 0xbc(%ecx), %esi\n\t"
+            "test %esi, %esi\n\t"
+            "jz 1f\n\t"
+            "testl $0x4000, 4(%esi)\n\t"
+            "jne 1f\n\t"
+            "push $0x98b84d\n\t"
+            "ret\n"
+            "1:\n\t"
+            "push $0x98b8e6\n\t"
+            "ret");
+}
+
+static int install_light_guard(void)
+{
+    static const unsigned char want[13] = {0x8b, 0xb1, 0xbc, 0, 0, 0, 0xf7, 0x46, 0x04, 0, 0x40, 0, 0};
+    unsigned char rep[13] = {0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+    *(DWORD *)(rep + 1) = (DWORD)light_inst_guard - (0x98b83a + 5);
+    return ts_patch_bytes(0x98b83a, want, rep, 13);
+}
+
+/* Player 2 removed (split screen off, a client's player 2 ended, a client's copy no longer needed). */
+static void p2_remove(const char *why)
+{
+    char out[64];
+    if (!p2)
+        return;
+    /* Its body (the third-person `player_ghost`, player +0x47c handle) and its crosshair objects (see
+     * crs_obj) are removed first (message 2); the player then finds its handle empty. */
+    BYTE *body = body_of(p2);
+    if (body && !IsBadReadPtr(body, 0x234)) {
+        ts_log("split: player 2's body %p (vtable %08lx) removed first", (void *)body, *(DWORD *)body);
+        dispatch_tramp(body, 2, 0, 0);
+    }
+    for (int i = 0; i < n_crs_obj; i++)
+        if (!IsBadReadPtr(crs_obj[i].o, 4) && *(DWORD *)crs_obj[i].o == crs_obj[i].vt) {
+            ts_log("split: player 2's crosshair object %p (vtable %08lx) removed first", (void *)crs_obj[i].o, crs_obj[i].vt);
+            dispatch_tramp(crs_obj[i].o, 2, 0, 0);
+            if (n_crs_gone < MAX_CRS)
+                crs_gone[n_crs_gone++] = crs_obj[i].o;
+        }
+    n_crs_obj = 0;
+    /* (its weapons, holster and hands: not updated any more, see hook_dispatch; their nodes hidden) */
+    n_p2_gone = 0;
+    for (int i = 0; i < n_p2_objs; i++)
+        if (p2_objs[i].o != body && !IsBadReadPtr(p2_objs[i].o, 0x234) && *(DWORD *)p2_objs[i].o == p2_objs[i].vt) {
+            p2_gone[n_p2_gone++] = p2_objs[i];
+            BYTE *nd = *(BYTE **)(p2_objs[i].o + 0x230);
+            if (nd && !IsBadReadPtr(nd, 8))
+                *(DWORD *)(nd + 4) |= 1;
+        }
+    ts_log("split: %d objects of player 2 (weapons, holster, hands) stopped", n_p2_gone);
+    n_p2_objs = 0;
+    p2_removing = 1;
+    ts_script_run("$player2.Terminate()", out, sizeof out);
+    ts_log("split: player 2 removed: %s (%s)", why, out);
+}
+
 static void *TSCALL hook_dtor(void *pl, int flags)
 {
     if (!p2 || pl != p2) {
@@ -2096,6 +2236,7 @@ static void spawn_p2(BYTE *p1)
     n_own2 = 0;
     n_crs[1] = 0;
     n_geo2 = 0;
+    n_p2_objs = 0;
     BYTE *e = spawn_entity(NULL, "player", "player", 0);
     spawning_p2 = 0;
     /* its constructor took both player pointers, its init may have used the camera */
@@ -2203,11 +2344,8 @@ static void split_choice(void)
         set_single_thread(1);
         ts_log("split: on (chosen in the Co-op menu; player 2 on XInput pad %d)", gamepad_slot(1) + 1);
     } else if (!want && stage) {
-        if (p2) {   /* (player 2 belongs to the game, not the level: removed when split screen ends) */
-            p2_removing = 1;
-            ts_script_run("$player2.Terminate()", out, sizeof out);
-            ts_log("split: player 2 removed (%s)", out);
-        }
+        if (p2)   /* (player 2 belongs to the game, not the level: removed when split screen ends) */
+            p2_remove("split screen off");
         stage = 0;
         set_single_thread(0);
         restore_globals();
@@ -2328,14 +2466,38 @@ static BYTE *ammo_rec(BYTE *pl, int which, BYTE **set_out)
 
 /* Player 2's weapons and hands made again (after a load took them), as at its spawn: the player's weapon set-up
  * (vtable +0x25c, thiscall, no arguments) run as player 2 with the spawn hooks in their player 2 mode. */
+/* The player's weapon set-up (vtable +0x25c, 0x442840: weapons and hands). A single-player or server spawn runs it
+ * inside the spawn; on a client the player's network start runs it later (0x41ec5f, the first update), outside
+ * spawn_p2: player 2's first-person nodes were then refused (the template's geometry is player 1's) and the
+ * engine wrote through the missing weapon (0x447a5c, run 20261025-213310). For player 2 the set-up always runs
+ * as player 2's spawn. */
+static int (TSCALL *real_wsetup)(void *);
+
+static int TSCALL hook_wsetup(BYTE *pl)
+{
+    if (!spawning_p2 && (!p2 || pl != p2))
+        return real_wsetup(pl);
+    int was = spawning_p2;
+    spawning_p2 = 1;
+    int r = real_wsetup(pl);
+    spawning_p2 = was;
+    n_crs_obj = 0;
+    crs_scan = GetTickCount() + 5000;
+    if (!was)
+        ts_log("split: player 2's weapon set-up outside its spawn: %s, %d first-person objects", r ? "ok" : "failed", n_own2);
+    return r;
+}
+
 static void p2_rearm(void)
 {
-    if (!p2 || (DWORD)(*(void ***)p2)[0x25c / 4] != 0x442840) {
+    DWORD ws = p2 ? (DWORD)(*(void ***)p2)[0x25c / 4] : 0;
+    if (!p2 || (ws != 0x442840 && ws != (DWORD)hook_wsetup)) {
         ts_log("split: player 2's weapons not made again (other exe?)");
         return;
     }
     n_own2 = 0;
     n_crs[1] = 0;
+    n_p2_objs = 0;   /* (the load removed the old ones; their addresses may be player 1's new objects) */
     spawning_p2 = 1;
     p2_enter();
     int ok = ((int (TSCALL *)(void *))(*(void ***)p2)[0x25c / 4])(p2);
@@ -2616,11 +2778,8 @@ static BYTE *player_of_client(int id)
 
 static void remote_end(const char *why)
 {
-    char out[64];
-    if (p2) {
-        p2_removing = 1;
-        ts_script_run("$player2.Terminate()", out, sizeof out);
-    }
+    if (p2)
+        p2_remove("its client's player 2 ended");
     gamepad_set_player2_pad(NULL);
     ts_log("split: the player 2 of client %d ended (%s)", remote_peer, why);
     remote_host = 0;
@@ -2875,10 +3034,7 @@ static void shadow_remove(const char *why)
     gamepad_mask_player2(0);
     if (!p2 || !client_split)
         return;
-    char out[64];
-    p2_removing = 1;
-    ts_script_run("$player2.Terminate()", out, sizeof out);
-    ts_log("split: our player 2's copy removed: %s (%s)", why, out);
+    p2_remove(why);
 }
 
 static void net_split_tick(void)
@@ -3029,6 +3185,13 @@ static void split_tick(float dt)
             }
         }
     }
+    {   /* (a level change: the objects of a removed player 2 are gone; their addresses may be reused) */
+        static DWORD lt;
+        DWORD t = GetTickCount();
+        if (t - lt > 500)
+            n_p2_gone = 0, n_crs_gone = 0;
+        lt = t;
+    }
     net_split_tick();
     if (stage < 3)
         return;
@@ -3052,6 +3215,16 @@ static void split_tick(float dt)
         }
     }
     item_test(PLAYER_B != p2 ? PLAYER_B : NULL);
+    {   /* (tests, TS_SPLIT_DROPAT=<s>: player 2 removed <s> seconds after it came in) */
+        static int dropat = -1;
+        char dv[16];
+        if (dropat < 0)
+            dropat = ts_env("TS_SPLIT_DROPAT", dv, sizeof dv) ? atoi(dv) : 0;
+        if (dropat > 0 && p2 && (int)(GetTickCount() - p2_born) > dropat * 1000) {
+            dropat = 0;
+            p2_remove("test (TS_SPLIT_DROPAT)");
+        }
+    }
     if (support_check && (int)(GetTickCount() - support_check) >= 0 && p2 && PLAYER_B && PLAYER_B != p2) {
         support_check = 0;
         BYTE *who = support_who, *other = who == p2 ? PLAYER_B : p2;
@@ -3091,7 +3264,7 @@ static void split_tick(float dt)
     int gap = now - last_tick > 500;   /* (a level load: the tick stopped) */
     static int apart;   /* (the players pulled apart at a level start) */
     if (gap)
-        placed = 0, support_tries = 0, support_check = 0, place_retry = 0, apart = 0, hud_root = NULL;
+        placed = 0, support_tries = 0, support_check = 0, place_retry = 0, apart = 0, hud_root = NULL, n_p2_gone = 0, n_crs_gone = 0;
     if (!in_play() || cinematic() || gap)
         p1_since = now;
     last_tick = now;
@@ -3211,10 +3384,20 @@ void split_install(void)
     int n = patch_slot(R_VTBL, SLOT_FSTART, (void *)hook_fstart, (void **)&real_fstart)
             + patch_slot(R_VTBL, SLOT_FEND, (void *)hook_fend, (void **)&real_fend)
             + ts_patch_bytes(QUAD_CALL, want, rep, 5);
+    {
+        unsigned char want[5] = {0xe8}, rep2[5] = {0xe8};
+        *(DWORD *)(want + 1) = 0x698020 - (0x654bee + 5);
+        *(DWORD *)(rep2 + 1) = (DWORD)create_msg_stub - (0x654bee + 5);
+        if (!ts_patch_bytes(0x654bee, want, rep2, 5))
+            ts_log("split: entity announcement hook not installed (other exe?)");
+    }
+    if (!install_light_guard())
+        ts_log("split: light pass guard not installed (other exe?)");
     if (stage >= 3 || !forced)
         n += patch_slot(PLAYER_VTBL, SLOT_UPDATE, (void *)hook_update, (void **)&real_update)
              + patch_slot(PLAYER_VTBL, SLOT_DTOR, (void *)hook_dtor, (void **)&real_dtor)
              + patch_slot(PLAYER_VTBL, 0x2e8 / 4, (void *)hook_die, (void **)&real_die)
+             + patch_slot(PLAYER_VTBL, 0x25c / 4, (void *)hook_wsetup, (void **)&real_wsetup)
              + patch_slot(PLAYER_VTBL, 0x22c / 4, (void *)hook_event, (void **)&real_event)
              + (((DWORD *)PLAYER_VTBL)[0x17c / 4] == 0x420470
                 && patch_slot(PLAYER_VTBL, 0x17c / 4, (void *)hook_pickup, (void **)&real_pickup))

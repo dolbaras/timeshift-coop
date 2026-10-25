@@ -164,10 +164,16 @@ ssl = <<<
       $ui.SetStr("CoopSplitJoin", Element("CoopSplitJoin").GetVal())
    end
 
+   // (the profile key is written only when the player changes the choice: setting the value in OnInit
+   // also comes here, and a profile without the key keeps it off without writing it)
    override OnSelectSelection("CoopSplitJoin")
+      var v : string
+      v := $ui.GetUserVar("CoopSplitJoin")
       $ui.SetStr("CoopSplitJoin", Element("CoopSplitJoin").GetVal())
-      $ui.SetUserVar("CoopSplitJoin", Element("CoopSplitJoin").GetVal())
-      $ui.FlushCfg()
+      if Element("CoopSplitJoin").GetVal() == "1" or v == "1"
+         $ui.SetUserVar("CoopSplitJoin", Element("CoopSplitJoin").GetVal())
+         $ui.FlushCfg()
+      end
    end
 
    // CoopAuto (UI string) starts a step by itself; only test builds set it (lab recipe)
