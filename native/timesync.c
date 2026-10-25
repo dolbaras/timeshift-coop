@@ -132,15 +132,6 @@ static int slot_of(int id)
     }
 }
 
-static int campaign_level(void)
-{
-    const char *s = LEVEL_NAME;
-    for (int i = 0; i < LEVEL_NAME_MAX - 4 && s[i]; i++)
-        if ((s[i] | 0x20) == 't' && (s[i + 1] | 0x20) == 's' && s[i + 2] == '2' && s[i + 3] == '_')
-            return 1;
-    return 0;
-}
-
 /* Co-op time powers apply now: network game, campaign level. Called from the patched game-mode reads too
  * (cdecl, changes eax/ecx/edx only). */
 __attribute__((used)) int tsync_coop_now(void) __asm__("tsync_coop_now");
@@ -148,8 +139,9 @@ __attribute__((used)) int tsync_coop_now(void)
 {
     static int last = -1;
     int m = game_mode();
+    /* (a co-op session with shared time powers, coopsession.c; TS_TIMESYNC=all: every network map, for tests) */
     int on = enabled && (m == MODE_SERVER || m == MODE_CLIENT || m == MODE_DEDICATED)
-             && (any_level || campaign_level());
+             && (any_level || ts_coop_feature(COOP_F_TIMESYNC));
     if (on != last) {
         last = on;
         TLOG("timesync: co-op powers %s (game mode %d, level \"%.80s\")", on ? "on" : "off", m, LEVEL_NAME);

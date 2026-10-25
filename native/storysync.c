@@ -11,8 +11,9 @@
  *   (0x8f97c6) and the per-frame mask events of an entity (0x905462: OnEnter 0x200, OnLeave 0x400,
  *   OnUnlocked 2, ... from entity+0x84 in 0x6442f0). Named events with arguments (OnBhvEnd, OnActionFrame,
  *   OnEye, ...) are fired by name with argument values.
- * - Domains (trigger volumes) test the points of one watched object, the local player (+0xf8), each frame in
- *   0x6c2dd0, and fire OnEnter/OnLeave from the inside/outside state. A domain's IsBelong (0x6c3d60) tests the
+ * - Domains (trigger volumes) test the points of one watched object (+0xf8: an object the level's domains share
+ *   for the local player, not the $player entity) in 0x6c2dd0 when it moves, and fire OnEnter/OnLeave from
+ *   the inside/outside state. A domain's IsBelong (0x6c3d60) tests the
  *   position of any entity, remote players included (measured: the host saw a client's body inside).
  * - A reload domain (level exit) needs the authority bit (clients never have it) and sends the single-player
  *   LOAD_LEVEL (0x3ec) to the world object (call at 0x8aa0e3): the host alone would load the next level. The
@@ -111,7 +112,8 @@ static void (TSCALL *cls_release)(ObjPtr *) = (void *)0x8f7f10;
 static void (TSCALL *inst_release)(ObjPtr *) = (void *)0x8f8050;
 static int *(TSCALL *sym_ctor)(int *, const char *, char) = (void *)0x9c7530;
 static const char *(TSCALL *sym_name)(const int *) = (void *)0x9c6ec0;
-static Status *(TSCALL *fire_by_name)(ObjPtr *, Status *, int, int, Variant *) = (void *)0x8f9680;
+/* (events take their arguments as an array of POINTERS to values: the dispatcher reads [argv + i*4], 0x90e0c3) */
+static Status *(TSCALL *fire_by_name)(ObjPtr *, Status *, int, int, Variant **) = (void *)0x8f9680;
 static Variant *(TSCALL *var_ctor)(Variant *) = (void *)0x9c9260;
 static void (TSCALL *var_dtor)(Variant *) = (void *)0x9c8690;
 static void *(*type_int)(void) = (void *)0x9c8c50;
@@ -124,7 +126,7 @@ static int (TSCALL *post_delayed)(void *, void *, int, void *, float, int) = (vo
 static void (TSCALL *broadcast)(void *, int, void *, int) = (void *)0x948480;   /* in-process, every task */
 
 typedef Status *(TSCALL *parse_t)(ObjPtr *, Status *, const char *, const char *);
-typedef Status *(TSCALL *event_t)(void *, Status *, void *, int, int, Variant *);
+typedef Status *(TSCALL *event_t)(void *, Status *, void *, int, int, Variant **);
 typedef int (TSCALL *post_t)(void *, void *, int, void *, int);
 typedef void (TSCALL *native_t)(void *, int, Variant *, Variant *, void *);
 static parse_t orig_parse = (parse_t)0x8f9150;
@@ -169,15 +171,28 @@ static int game_mode(void)
     return gm ? *(int *)(gm + MODE_OFF) : 0;
 }
 
-static int campaign_name(const char *s);
-
-/* MODE_SERVER / MODE_CLIENT in a network game (as coopnet.c tells one) on a campaign level, else 0
- * (multiplayer maps keep the game's own rules; TS_STORYSYNC=all: every network map). */
+/* MODE_SERVER / MODE_CLIENT in a co-op session whose host runs the story for everyone (coopsession.c: network
+ * game on a campaign level, COOP_F_STORYSYNC), else 0. Multiplayer maps keep the game's own rules
+ * (TS_STORYSYNC=all: every network map, for tests). */
 static int net_role(void)
 {
     int m = game_mode();
-    return enabled && (m == MODE_SERVER || m == MODE_CLIENT) && PEER_NETWORK && (any_level || campaign_name(LEVEL_NAME))
-           ? m : 0;
+    if (!enabled || (m != MODE_SERVER && m != MODE_CLIENT) || !PEER_NETWORK)
+        return 0;
+    return any_level || ts_coop_feature(COOP_F_STORYSYNC) ? m : 0;
+}
+
+/* The same while a level's scripts are compiled: the session's settings reach a client (and are set on the host)
+ * only after the level is built, so a level of a co-op session (network game, campaign level) is prepared
+ * whenever this machine has TS_STORYSYNC; whether events are held back, sent and replayed is decided later by
+ * net_role(). (A client whose host does not run the story keeps the prepared scripts: its own triggers then run
+ * only their presentation; coopsession.c logs the mismatch.) */
+static int compile_role(void)
+{
+    int m = game_mode();
+    if (!enabled || (m != MODE_SERVER && m != MODE_CLIENT) || !PEER_NETWORK)
+        return 0;
+    return any_level || ts_coop_active() ? m : 0;
 }
 
 static char *slot_at(int i)
@@ -243,7 +258,7 @@ static int sym_of(const char *name)
 typedef struct {
     void *cls;
     char name[64];                           /* the entity's name */
-    unsigned char n_ev, rewritten, authority, dom_story;
+    unsigned char n_ev, rewritten, authority, dom_story, retest_logged;
     int ev_sym[MAX_EV];
     unsigned char ev_story[MAX_EV];
     char ev_name[MAX_EV][EVNAME];
@@ -491,6 +506,13 @@ static int compiles(void *cls, const char *text, const char *hint)
 }
 
 static void level_changed(void);
+static int level_ran;                        /* the level of the table has run (its scripts are compiled) */
+static int named_seen;                       /* named script objects while the level ran (a level torn down for a
+                                                rebuild drops them; a client keeps its "running" flag) */
+static int named_objects(void)
+{
+    return MGR ? *(int *)((char *)MGR + 0x18) : 0;   /* (script manager: +0x14 named objects, +0x18 count) */
+}
 
 /* The first wrapper that the engine compiles, or "" (then client scripts stay as they are). */
 static const char *pick_wrapper(void)
@@ -519,7 +541,7 @@ static const char *pick_wrapper(void)
 
 static Status *TSCALL hook_parse(ObjPtr *clsp, Status *out, const char *src, const char *hint)
 {
-    int role = net_role();
+    int role = compile_role();
     if (!role || !table || !src || !clsp || !*clsp)
         return orig_parse(clsp, out, src, hint);
     if (!sym_enter) {
@@ -527,8 +549,11 @@ static Status *TSCALL hook_parse(ObjPtr *clsp, Status *out, const char *src, con
         sym_leave = sym_of("OnLeave");
         sym_eye = sym_of("OnEye");
     }
-    if (strncmp(rec_level, LEVEL_NAME, sizeof rec_level) != 0 || n_rec > TABLE_SIZE * 3 / 4) {
+    /* (a new level, or the same level built again after it ran: a team restart) */
+    if (strncmp(rec_level, LEVEL_NAME, sizeof rec_level) != 0 || n_rec > TABLE_SIZE * 3 / 4
+        || (level_ran && (!(GAME_FLAGS & FLAG_LEVEL_RUNNING) || named_objects() < named_seen / 2))) {
         snprintf(rec_level, sizeof rec_level, "%s", LEVEL_NAME);
+        level_ran = 0;
         level_changed();
     }
     if (restore_pending)
@@ -611,6 +636,9 @@ static int ent_pos(char *ent, float *pos)
 
 /* Domain classes keep the engine's domain test as their update (vtable +0x134). */
 #define DOM_UPDATE 0x6c2dd0
+/* The object a player trigger domain watches (+0xf8): one object shared by the level's domains (class vtable
+ * 0xdad650), not the $player entity. Learnt on the host as the one most story domains watch. */
+static void *local_watch;
 static int is_domain(char *ent)
 {
     return ent && *(void ***)ent && (*(void ***)ent)[0x134 / 4] == (void *)DOM_UPDATE;
@@ -643,9 +671,77 @@ __attribute__((used)) int ss_dom_count(char *dom, int idx)
 {
     void *w = *(void **)(dom + DOM_WATCHED);
     int n = ((int (TSCALL *)(void *))(*(void ***)w)[0x11c / 4])(w);
-    if (idx < n || w != PLAYER || net_role() != MODE_SERVER)
+    if (idx < n || w != local_watch || net_role() != MODE_SERVER)
         return n;
     return remote_inside(dom) ? idx + 1 : n;
+}
+
+/* The engine tests a domain only when its watched object (the host's own player) moves, so a client inside a
+ * story domain would set it off only once the host's player moves. The host therefore re-runs the test of every
+ * story domain that a client's body or report is inside, or that still counts as entered, 4 times a second. */
+#define DOM_STATE 0xe8                       /* domain: bit 0 = entered */
+#define DOM_LOCKS 0x88                       /* lock count (> 0: locked, no enter/leave) */
+static void retest_story_domains(void)
+{
+    static DWORD last;
+    DWORD now = GetTickCount();
+    if (now - last < 250 || !table)
+        return;
+    last = now;
+    int clients = 0;
+    for (int i = 0; slot_at(i); i++)
+        if (*(int *)slot_at(i) != 0 && slot_joined(slot_at(i)))
+            clients++;
+    if (!clients)
+        return;
+    static int n_diag;
+    int n_story = 0, n_found = 0, n_dom = 0, n_watch = 0, n_in = 0, votes = 0;
+    void *watched = NULL, *cand = NULL;
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        ClassRec *r = &table[i];
+        if (!r->cls || !r->dom_story || !r->name[0])
+            continue;
+        n_story++;
+        String nm = 0;
+        ObjPtr inst = 0;
+        str_ctor(&nm, r->name, -1, 0);
+        mgr_find_obj(MGR, &inst, &nm);
+        str_release(nm);
+        if (!inst)
+            continue;
+        char *ent = *(char **)((char *)inst + INST_NATIVE);
+        int found = rec_of_inst(inst) == r, dom = found && is_domain(ent);
+        n_found += found;
+        n_dom += dom;
+        if (dom) {
+            watched = *(void **)(ent + DOM_WATCHED);
+            n_watch += watched == local_watch;
+            if (!votes)
+                cand = watched, votes = 1;
+            else
+                votes += cand == watched ? 1 : -1;
+        }
+        int in = dom && remote_inside(ent) != NULL;
+        n_in += in;
+        if (dom && local_watch && watched == local_watch && ((*(unsigned *)(ent + DOM_STATE) & 1) || in)) {
+            unsigned before = *(unsigned *)(ent + DOM_STATE);
+            ((void (TSCALL *)(void *))(*(void ***)ent)[0x134 / 4])(ent);
+            if (*(unsigned *)(ent + DOM_STATE) != before || !(r->retest_logged++))
+                VLOG("storysync: %s tested for a client: state %x -> %x, locks %d", r->name, before,
+                     *(unsigned *)(ent + DOM_STATE), *(int *)(ent + DOM_LOCKS));
+        }
+        inst_release(&inst);
+    }
+    if (cand && cand != local_watch && votes > 0) {
+        VLOG("storysync: story domains watch %p (vtable %p)", cand, *(void **)cand);
+        local_watch = cand;
+    }
+    if (n_occ && n_diag < 4) {
+        n_diag++;
+        VLOG("storysync: re-test pass: %d client(s), %d story domain records, %d found, %d domains, %d watch %p,"
+             " %d with a client inside, %d report(s)", clients, n_story, n_found, n_dom, n_watch, local_watch, n_in,
+             n_occ);
+    }
 }
 
 extern void ss_dom_stub(void) __asm__("ss_dom_stub");
@@ -684,7 +780,7 @@ static void put_str(unsigned char *b, int *n, const char *s)
     }
 }
 
-static void send_event(void *inst, int sym, int argc, Variant *argv)
+static void send_event(void *inst, int sym, int argc, Variant **argv)
 {
     const char *name = inst_name(inst), *ev = sym_name(&sym);
     if (!name[0] || !ev)
@@ -698,16 +794,17 @@ static void send_event(void *inst, int sym, int argc, Variant *argv)
     put_str(b, &n, name);
     put_str(b, &n, ev);
     for (int i = 0; i < argc; i++) {
-        void *t = argv[i].type;
+        Variant *a = argv[i];
+        void *t = a ? a->type : NULL;
         if (t == type_int() || t == type_float()) {
             put_u8(b, &n, t == type_int() ? 1 : 3);
             for (int k = 0; k < 4; k++)
-                put_u8(b, &n, argv[i].data >> (8 * k));
+                put_u8(b, &n, a->data >> (8 * k));
         } else if (t == type_bool()) {
             put_u8(b, &n, 2);
-            put_u8(b, &n, argv[i].data & 0xff ? 1 : 0);
+            put_u8(b, &n, a->data & 0xff ? 1 : 0);
         } else if (t == type_str()) {
-            String s = (String)argv[i].data;
+            String s = (String)a->data;
             put_u8(b, &n, 4);
             put_str(b, &n, s ? s->s : "");
         } else
@@ -744,7 +841,7 @@ static Status *ok_status(Status *out)
     return out;
 }
 
-static Status *TSCALL hook_event(void *cls, Status *out, void *inst, int idx, int argc, Variant *argv)
+static Status *TSCALL hook_event(void *cls, Status *out, void *inst, int idx, int argc, Variant **argv)
 {
     int role = net_role();
     ClassRec *r = role && inst ? rec_of_inst(inst) : NULL;
@@ -765,12 +862,12 @@ static Status *TSCALL hook_event(void *cls, Status *out, void *inst, int idx, in
         if ((sym == sym_enter || sym == sym_leave) && is_domain(*(char **)((char *)inst + INST_NATIVE)))
             send_occ(r->name, sym == sym_enter, SUB_OCC);
         else if (sym == sym_eye)
-            send_occ(r->name, argc > 0 && argv && (argv[0].data & 0xff), SUB_EYE);
+            send_occ(r->name, argc > 0 && argv && argv[0] && (argv[0]->data & 0xff), SUB_EYE);
         VLOG("storysync: %s.%s held back (host decides)", r->name, r->ev_name[k]);
         return ok_status(out);
     }
     /* host: a look trigger fired by two players runs once */
-    if (sym == sym_eye && argc > 0 && argv && (argv[0].data & 0xff)) {
+    if (sym == sym_eye && argc > 0 && argv && argv[0] && (argv[0]->data & 0xff)) {
         for (int i = 0; i < n_eye_done; i++)
             if (strcmp(eye_done[i], r->name) == 0)
                 return ok_status(out);
@@ -804,8 +901,9 @@ static int fire_named(const char *obj, const char *ev, int argc, const Arg *args
     else if (replay && r && r->authority && !r->rewritten)
         SLOG("storysync: %s.%s not replayed (its script could not be prepared for a client)", obj, ev);
     else {
-        Variant av[8];
+        Variant av[8], *avp[8];
         for (int i = 0; i < argc; i++) {
+            avp[i] = &av[i];
             var_ctor(&av[i]);
             switch (args[i].type) {
             case 1: av[i].type = type_int(); av[i].data = (unsigned)args[i].i; break;
@@ -821,8 +919,7 @@ static int fire_named(const char *obj, const char *ev, int argc, const Arg *args
             replay_sym = sym;
             replay_armed = 1;
         }
-        fire_by_name(&inst, &st, sym, argc, av);   /* (never NULL: a native handler would pop its arguments
-                                                       from the script stack) */
+        fire_by_name(&inst, &st, sym, argc, avp);   /* (never NULL) */
         replay_armed = 0;
         if (st.code)
             SLOG("storysync: %s.%s: %s", obj, ev, st.msg ? st.msg->s : "error");
@@ -929,8 +1026,8 @@ static void run_queue(void)
 static void on_message(int peer, unsigned short sub, const unsigned char *data, int len)
 {
     int role = net_role();
-    if (sub == SUB_EVENT) {
-        if (role == MODE_CLIENT)
+    if (sub == SUB_EVENT) {   /* (the host sends them only when it runs the story: also before its settings arrived) */
+        if (compile_role() == MODE_CLIENT)
             got_event(data, len);
         return;
     }
@@ -1058,7 +1155,7 @@ static void checkpoint(int id)
     else {
         char *who = NULL;
         if (is_domain(cur_entity)) {
-            if (*(void **)(cur_entity + DOM_WATCHED) == PLAYER && (dom_is_belong(cur_entity, PLAYER) & 0xff))
+            if (PLAYER && (dom_is_belong(cur_entity, PLAYER) & 0xff))
                 who = PLAYER;
             else
                 who = remote_inside(cur_entity);
@@ -1176,13 +1273,22 @@ static void level_changed(void)
 static void frame(float dt)
 {
     (void)dt;
+    /* (a client never sets the "level running" flag: there its player stands for it) */
+    if ((GAME_FLAGS & FLAG_LEVEL_RUNNING) || (game_mode() == MODE_CLIENT && PLAYER)) {
+        level_ran = 1;
+        named_seen = named_objects();
+    }
     int role = net_role();
-    if (!role)
+    if (!role) {
+        if (q_count && compile_role() == MODE_CLIENT)   /* (replays that came before the host's settings) */
+            run_queue();
         return;
+    }
     if (q_count)
         run_queue();
     if (role == MODE_CLIENT)
         return;
+    retest_story_domains();
     if (restart_pending && (int)(GetTickCount() - restart_at) >= 0) {
         restart_pending = 0;
         team_restart();
@@ -1248,6 +1354,10 @@ int storysync_console(const char *text, char *out, int size)
                          r->authority, r->dom_story);
             for (int i = 0; i < r->n_ev && n < size - 40; i++)
                 n += snprintf(out + n, size - n, " %s=%s", r->ev_name[i], r->ev_story[i] ? "story" : "local");
+            char *ent = *(char **)((char *)inst + INST_NATIVE);
+            if (is_domain(ent) && n < size - 60)
+                snprintf(out + n, size - n, "; domain state %x, locks %d", *(unsigned *)(ent + 0xe8),
+                         *(int *)(ent + 0x88));
         }
         if (inst)
             inst_release(&inst);

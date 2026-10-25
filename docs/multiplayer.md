@@ -493,8 +493,9 @@ The log shows the first 8 messages sent and received (`coopnet: sent sub ...`, `
 
 ## 9a. Time powers in co-op
 
-Built and checked against the executable only (`native/timesync.c`, switched on with `TS_TIMESYNC=1`); not
-yet run in a game. Addresses are those of patch 1.2.
+`native/timesync.c`, on in co-op sessions (`TS_TIMESYNC`, default `1` since `coopsession.c`; it acts only when
+`ts_coop_feature(COOP_F_TIMESYNC)`). Run live on the N100 pair 2026-10-25 (results at the end of this section).
+Addresses are those of patch 1.2.
 
 ### The rule
 
@@ -572,18 +573,36 @@ players' own bodies do not (they are owned by their machines), the reverse scree
 machine, and clients pause their local-only objects. Needs the recorder on the server and a check of what a
 rewind does to replicated objects.
 
-### Risks to check in the first run
+### Live test (N100 pair, level `ts2_city_part02`, 2026-10-25) **(observed)**
 
-- Whether the server overwrites a client's energy with its own value (players' energy is a networked
-  property in multiplayer, notify subtype 7).
-- Whether remote players' animations play slowed (their positions should not).
-- What the in-process messages `0x3fd`/`0x401` do to objects that are replicas on a client.
-- The HUD's energy bar in multiplayer mode.
+Keys were pressed with `lab\n100_key.ps1` (fixed in this session: a key press needs the engine's
+"last frame" value at `+0x6b4 + code*4` to be 0 and the key's "used" mark `+0x1154 + code` bit 8 cleared;
+writing only the current value gave "held" without a press). World state read from memory
+(`[0xfcace0]`, `[0xebfbb4]`, controller `+0x280`, energy `+0x2ac`).
+
+| Test | Expected | Observed | Run (`work\runs\`) |
+|---|---|---|---|
+| T1 keys on a server | campaign powers on the keys, full energy, HUD | V/G start slow/stop on host and client, energy drains and regenerates, HUD energy bar shown | n100pair-20261025-074231 |
+| T2 host's power | client's world slows/stops, screen effect | client `0x4041`/target 0.2 (stop `0x4042`/0.001) within ~0.1 s; client frame shows the blue effect | 074231, 075251 (client shot056) |
+| T3 client's power | host's world slows/stops, effect | host `0x41`/0.2 and `0x42`; host frame shows the effect | 074231 (host shot104) |
+| T4 one power at a time | teammate's key refused, no energy spent | "local stop refused, a teammate's power runs", energy unchanged | 074231 |
+| T5 energy per player | only the owner spends; server does not overwrite | owner drains, the other stays 1.0; client energy independent of the host's | 074231 |
+| T6 end: key, energy out, death, owner leaves | world back on every machine | all four seen (death = `FailMission` on the client; leaving = client process killed: "owner left" after ~5 s) | 074742 |
+| T7 world reset by a script on the non-owner | started again within 0.5 s | `StopTControl` on the client: "world lost ... started again" | 075251 |
+| T8 both press in the same moment | one power survives | race forced by suspending one process: host+client both started -> the server took the client's (first at the server), the host's own power ended; other order: client's start refused at the gate | 080726 |
+| Remote bodies | normal speed | the host's body on the client kept walking ~5 m/s during the client's stop; the host walks at normal speed during its own slow | 075715, 080726 |
+| Reverse | does nothing in co-op | B: no reverse (not available without the recorder) | 074231 |
+| Single player | unchanged | `TS_TIMESYNC=1`, level loaded by console: "co-op powers off", V slows as usual | sp-timesync-20261025-080119 |
+
+Not seen: one extra re-start 0.3 s after a teammate's power began on the client (something resets the
+client's world once; the re-start covers it). Not measured: the owner walking during its own stop (the probe
+was spoiled by the key tool's "used" mark; engine behaviour as in single player).
 
 ## 9b. Story in co-op
 
-Built and checked against the executable only (`native/storysync.c`, switched on with `TS_STORYSYNC=1` on every
-machine); not yet run in a game. The classifier and the client rewrite were run offline over the scripts of all
+`native/storysync.c`, switched on with `TS_STORYSYNC=1` on every machine (still opt-in); it acts only in a co-op
+session whose host runs the story (`ts_coop_feature(COOP_F_STORYSYNC)`; `TS_STORYSYNC=all` = every network map,
+for tests). Run live on the N100 pair 2026-10-25 (results at the end of this section). The classifier and the client rewrite were run offline over the scripts of all
 24 campaign levels (6 135 object texts: 2 480 get statements wrapped, 10 746 statements in all; no statement
 spans two lines). Addresses are those of patch 1.2. The rules come from `player-audit.md` (C1, C2, C4, C6-C8).
 
@@ -609,10 +628,10 @@ spans two lines). Addresses are those of patch 1.2. The rules come from `player-
 | Part | Where | Notes |
 |---|---|---|
 | Script of a level object | `0x644e50`, compile call `0x644fc4` -> `0x8f9150` | each object with script text gets its own class; the compile call's hint argument is the object's name |
-| Every script event | `0x903940` (thiscall: class, Status out, instance, member index, argc, argv; ret `0x14`) | called by index `0x8f82bf`, by name `0x8f97c6` (`0x8f9680`: instance, out, symbol, argc, argv) and for the per-frame mask events `0x905462` |
+| Every script event | `0x903940` (thiscall: class, Status out, instance, member index, argc, argv; ret `0x14`) | called by index `0x8f82bf`, by name `0x8f97c6` (`0x8f9680`: instance, out, symbol, argc, argv) and for the per-frame mask events `0x905462`. **`argv` is an array of pointers to values** (`Variant **`: the handler match at `0x90e0c3` reads `[argv + i*4]`), and it must not be NULL. Handlers can match argument values (`override OnAnimEnd("COUNT")`) |
 | Mask events | entity `+0x84`, fired by `0x6442f0` each frame | `OnLocked` 1, `OnUnlocked` 2, `OnInitLevel` 4, time events 8-`0x100`; class events `0x200`/`0x400`/`0x800` (domain `OnEnter`/`OnLeave`, door `OnOpen`/`OnClose`, button `OnPushed`/`OnPoped`, `OnComplete`) |
 | Named events | by name with argument values | `OnBhvEnd(bhv)`, `OnActionFrame(anim, frame)`, `OnAnimBegin/End`, `OnEye(on)`, `OnAlert`, `OnDestroyed`, `OnPicked(user)`, ... |
-| Domain test | `0x6c2dd0` (vtable `+0x134` of every domain class) | tests the points of one watched object, `+0xf8` = the local player; state `+0xe8` (1 inside, 2/4 fired once), lock count `+0x88`; the enter/leave virtuals `+0x124`/`+0x128` set the mask bits. **Only the local player sets off a domain**; `IsBelong` (`0x6c3d60`) tests any entity's position |
+| Domain test | `0x6c2dd0` (vtable `+0x134` of every domain class; thiscall, no arguments) | runs only when the watched object moves; tests the points of one watched object `+0xf8`, which is **not** the `$player` entity but one object shared by the level's domains (class vtable `0xdad650`); state `+0xe8` (1 inside, 2/4 fired once), lock count `+0x88`; the enter/leave virtuals `+0x124`/`+0x128` set the mask bits. **Only the local player sets off a domain**; `IsBelong` (`0x6c3d60`) tests any entity's position |
 | Level exit | reload domain: per-point callback `0x8a9ec0` -> `Reload` `0x8a9f00` | needs the authority bit (never on a client); sends the single-player `LOAD_LEVEL` (`0x3ec`, `nameScene` at `+4`) to the world object (call `0x8aa0e3`): the host alone would leave |
 | Server map change | `0x606960` (match rounds): in-process `0x3f6`, then `0x43e` to the level loader `[0x1033980]` | the loader (`0x6e3690`) tells every client (`0x43e`) and sends `0x3ec` with the level name; clients load the same level |
 | Single-player level load | `0x675370` (stdcall, String) | used by `$ui.LoadLevel`, `$ui.RestartLevel` and the menus; on a server it ends the session |
@@ -674,6 +693,36 @@ Test console (`TS_CONSOLE`): `!ss state`, `!ss class <object>` (its handlers: st
 `!ss fire <object> <event>` (run an event; on the host it is also sent), `!ss exit <level>` and `!ss restart`
 (host). The log has every decision as `storysync: ...`.
 
+Changes made in the live test (all in `storysync.c`): event arguments handled as `Variant **` on both sides
+(the client crashed at `0xCCCCCCCC` on the first replay, and every argument had gone out as null); the
+world-time events (`OnStartTStop`/`OnStopTStop`/...Slow/...Reverse) are local (each machine's world, kept in
+step by timesync); sound actors and music (`$snd...`, `$music.`) are presentation; scripts are prepared at
+compile time when the level is a co-op level (the session's settings arrive after the level is built, so the
+first level had been left unprepared), replays are accepted before the settings arrive; the host re-runs the
+domain test of story domains with a client inside, 4 times a second (a client's entry otherwise waited for the
+host's player to move); the watched object is learnt as the one the story domains share instead of `$player`;
+a level rebuilt under the same name (team restart) clears the class table on both sides (the host by its
+"level running" flag, the client, which never sets that flag, by the collapse of the named script objects).
+
+### Live test (N100 pair, 2026-10-25) **(observed)**
+
+| Test | Expected | Observed | Run (`work\runs\`) |
+|---|---|---|---|
+| Gate: no crash, plain session | both join and play | after the fixes no crash in 8 runs up to 7 min (two restarts, two level changes each); before them the client crashed on the first replay | n100pair-20261025-090615 (before: 081404) |
+| Client scripts prepared | host-only statements wrapped, compile | part02: 483 classes, 142 rewritten on the client; part03: 128/63; no "does not compile" | 083706 |
+| T1 client's domain entry | reported, host runs it, replay, no local duplicate | `!ss enter dom_farm_first_room` on the client -> host fired `OnEnter` 4 ms later, created `ai_house_first_room_2`; client "ran ... (host's)", no duplicate; leave -> state 6 (fired once) | 090325 |
+| T2 host's story events | sent before running, replayed on the client | 418 replays ran on the client in one session (cine, unlockers, domains, `OnBhvEnd`); errors only where the level itself errs in single player or names objects created at run time (they reach clients nameless) | 083706 |
+| T3 client's own story events | held back, reported | 26 held back and reported in one session (domains the client walked into at part03) | 083706 |
+| T4 checkpoint | respawn points move | `AutoSave(2)` -> respawn at `Check_Point_2` (-169.6 -10.9 -145.2) | 083706 |
+| T5 death | multiplayer respawn at the checkpoint | client `FailMission` -> respawned at `Check_Point_2` | 084558 |
+| T6 level exit | whole session changes level; client cannot | host `$ui.LoadLevel("ts2_city_part03.lg")` and `!ss exit` -> both on part03, client still joined; client `$ui.LoadLevel` refused | 083706, 083145 |
+| T7 team restart | level restarts for everybody at the checkpoint | host `FailMission` -> both reload part03 and stand at `Check_Point_2`; on part02 (no restore object) restart from the level start | 083706, 084558, 090615 |
+| Time powers with story on | unchanged | host slow -> client `0x41`; client stop -> host `0x42` | 084558, 090615 |
+
+Not run: the natural exit through a reload domain (`LOAD_LEVEL` caught at `0x8aa0e3`): `$dom_reload1.Unlock()`
+alone did not leave the level and the host's player could not be put inside the exit domain; the `OnEye` report
+(22); plain multiplayer maps with `TS_STORYSYNC=1` (storysync now acts only in co-op sessions).
+
 ### Not covered yet
 
 - **Late joiners**: story events from before a client joined are not repeated; clients should join before
@@ -710,7 +759,8 @@ Built and checked against the executable only; not yet run in a game.
 - **Session settings** (`ts_coop_feature(COOP_F_*)`): the host's. Its co-op menu leaves them in UI strings
   (`CoopSession = host`, `CoopDifficulty`, `CoopMaxPlayers`), read by the DLL when the server's level starts;
   time powers (`TS_TIMESYNC`, default `1` since this file: timesync.c acts on campaign levels only) and story
-  (`TS_STORYSYNC`, still opt-in: storysync.c acts in every network game) from the environment.
+  (`TS_STORYSYNC`, still opt-in; storysync.c acts only in co-op sessions with `COOP_F_STORYSYNC`) from the
+  environment. Both modules read these flags (`ts_coop_feature`).
 - **Messages** (mod messages of section 9):
 
   | Subtype | Direction | Body | Meaning |
