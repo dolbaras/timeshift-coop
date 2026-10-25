@@ -162,6 +162,17 @@ static void scan_pads(void)
     player_slot[1] = p1;
 }
 
+/* The pad state of a local player's pad now (split.c streams player 2's to the host); 0: none. */
+int gamepad_read(int player, void *out)
+{
+    XINPUT_STATE st;
+    int slot = player >= 0 && player < 2 ? player_slot[player] : -1;
+    if (slot < 0 || !(test_pad || game_in_front()) || x_get(slot, &st) != ERROR_SUCCESS)
+        return 0;
+    memcpy(out, &st.Gamepad, sizeof st.Gamepad);
+    return 1;
+}
+
 int gamepad_slot(int player)
 {
     return player >= 0 && player < 2 ? player_slot[player] : -1;
@@ -480,6 +491,17 @@ void gamepad_poll_player2(int on)
     poll_player2 = on;
 }
 
+/* A host running the player 2 of a client's split screen gives it that client's pad (split.c). */
+static XINPUT_GAMEPAD remote_pad2;
+static int remote_pad2_on;
+
+void gamepad_set_player2_pad(const void *g)
+{
+    if (g)
+        memcpy(&remote_pad2, g, sizeof remote_pad2);
+    remote_pad2_on = g != NULL;
+}
+
 static void pad2_poll(BYTE *raw)
 {
     static WORD last_buttons;
@@ -489,7 +511,9 @@ static void pad2_poll(BYTE *raw)
     XINPUT_STATE st;
     memset(&st, 0, sizeof st);
     int slot = player_slot[1];
-    if (!(slot >= 0 && (test_pad || game_in_front()) && x_get(slot, &st) == ERROR_SUCCESS))
+    if (remote_pad2_on)
+        st.Gamepad = remote_pad2;
+    else if (!(slot >= 0 && (test_pad || game_in_front()) && x_get(slot, &st) == ERROR_SUCCESS))
         memset(&st.Gamepad, 0, sizeof st.Gamepad);
     float l[2], r[2];
     write_codes(v, &st.Gamepad, 0, l, r);

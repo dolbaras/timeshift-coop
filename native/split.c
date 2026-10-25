@@ -37,6 +37,7 @@
  */
 #define COBJMACROS
 #include <windows.h>
+#include <xinput.h>
 #include <d3d9.h>
 #include <math.h>
 #include <malloc.h>
@@ -341,6 +342,22 @@ __attribute__((naked)) static void spawn_trampoline(void)
 /* ---- state ---- */
 typedef struct { LONG refs; int len, cap; char s[1]; } EStr;
 int split_msg_owner(void);
+/* ---- split screen over the network (see the section "network split screen" below) ---- */
+static int remote_host;        /* host: player 2 is the player 2 of a client's split screen (no split screen here) */
+static int remote_peer = -1;   /* that client's id */
+static DWORD remote_seen;      /* its last pad message */
+static BYTE *remote_mp;        /* that client's own player (player_mp here): player 2's partner */
+static int client_split;       /* client: split screen, player 2 run by the host */
+static int client_choice;      /* client: chosen in the menu (UI string CoopSplitJoin = "1") */
+static int net_split_off;      /* TS_SPLIT_CLIENT=0 */
+static int client_netid = -1;  /* client: the net id of our player 2 (its player_mp here) */
+static BYTE *cp2;              /* client: that player_mp */
+static float cl_rows[9], cl_pos[3], cl_spos[3], cl_life;
+static int cl_have, cl_alive;
+static BYTE *hud_hidden;       /* client: the HUD frame hidden for the view of player 2 */
+static DWORD hud_hidden_flags;
+static void client_cam(BYTE *dst);
+static void client_view(int v);
 static int node_visible(BYTE *n);
 static int view = -1;           /* the view this frame renders (-1: no split this frame) */
 static unsigned frame_no;
@@ -493,6 +510,8 @@ static int in_play(void)
 
 static int split_wanted(void)
 {
+    if (remote_host)
+        return 0;
     if (!stage || !PLAYER_B || *(DWORD *)PLAYER_B != PLAYER_VTBL || !CAM || cinematic() || !in_play())
         return 0;
     if (CORES != 1) {
@@ -569,6 +588,9 @@ static void restore_globals(void)
     if (own_node)
         *(DWORD *)(own_node + 4) = (*(DWORD *)(own_node + 4) & ~0x10000u) | (own_flags & 0x10000u);
     own_node = NULL;
+    if (hud_hidden)
+        *(DWORD *)(hud_hidden + 0x18) = (*(DWORD *)(hud_hidden + 0x18) & ~2u) | (hud_hidden_flags & 2u);
+    hud_hidden = NULL;
     swapped = 0;
 }
 
@@ -583,7 +605,9 @@ static void TSCALL hook_fstart(void *r)
         view = stage >= 2 ? (int)(frame_no++ & 1) : 0;
         BYTE *src = CAM;
         if (view == 1) {
-            if (stage == 2 || !p2)
+            if (client_split && cl_have)
+                client_cam(cam2);
+            else if (stage == 2 || !p2)
                 offset_camera(cam2, CAM);
             src = cam2;
         }
@@ -671,7 +695,8 @@ static void TSCALL hook_fstart(void *r)
                 fp_hidden[n_fp_hidden++].saved = *(DWORD *)(fn + 4);
                 *(DWORD *)(fn + 4) |= 1;
             }
-        }
+        } else if (client_split)
+            client_view(view);
     } else {
         pic_ok[0] = pic_ok[1] = 0;   /* (back to the whole screen: the old halves are stale) */
         if (canvas_kept) {
@@ -735,6 +760,12 @@ __attribute__((used)) void __cdecl split_fx_start(BYTE *pm, int i, float v)
     BYTE *e = fx_obj(pm, i);
     if (!e)
         return;
+    if (remote_host && p2_depth() && (fx_per_view >> i & 1)) {   /* (a client's player 2: its own condition is
+                                                                    shown on that client, not on the host) */
+        fx[1][i].seen = fx[1][i].on = 1;
+        fx[1][i].v = v;
+        return;
+    }
     ((fx_call_t)(*(void ***)e)[1])(e);
     ((fx_set_t)(*(void ***)e)[5])(e, v);
     *(DWORD *)(pm + 0x2c) |= 0x10000;
@@ -751,6 +782,11 @@ __attribute__((used)) void __cdecl split_fx_stop(BYTE *pm, int i)
     BYTE *e = fx_obj(pm, i);
     if (!e)
         return;
+    if (remote_host && p2_depth() && (fx_per_view >> i & 1)) {
+        fx[1][i].seen = 1;
+        fx[1][i].on = 0;
+        return;
+    }
     ((fx_call_t)(*(void ***)e)[2])(e);
     int who = p2_depth() ? 1 : 0;
     fx[who][i].seen = 1;
@@ -1318,7 +1354,10 @@ static void TSCALL hook_die(void *pl, int arg)
     *(DWORD *)((BYTE *)pl + 0x39c) &= ~(0x1000u | 0x400000u);
     *(float *)((BYTE *)pl + HEALTH) = 100.0f;
     *(float *)((BYTE *)pl + 0x468) = 0;
-    place_player(pl, who ? p1 : p2);
+    if (who && remote_host && remote_mp && *(BYTE **)(remote_mp + 0x230))
+        place_player(pl, remote_mp);
+    else
+        place_player(pl, who ? p1 : p2);
     ts_log("split: player %d died: respawned next to player %d", who + 1, 2 - who);
 }
 
@@ -1886,9 +1925,9 @@ static void place_player(BYTE *pl, BYTE *partner)
         pos[0] = pp[0] + fw[0] * 2.5f, pos[2] = pp[2] + fw[2] * 2.5f;
         dir[0] = -fw[0], dir[1] = -fw[1], dir[2] = -fw[2];
         how = "facing";
-    } else if (trail_pick(partner == p2 ? 1 : 0, pp, pos))
+    } else if (*(DWORD *)partner == PLAYER_VTBL && trail_pick(partner == p2 ? 1 : 0, pp, pos))
         how = "on the partner's trail";
-    else if (trail_own(pl == p2 ? 1 : 0, pp, pos))
+    else if (*(DWORD *)partner == PLAYER_VTBL && trail_own(pl == p2 ? 1 : 0, pp, pos))
         how = "on its own trail";
     else {
         /* Nobody walked yet: spots 1.6 m behind, beside or diagonally behind the partner, ahead only last. The
@@ -1943,6 +1982,10 @@ static void place_player(BYTE *pl, BYTE *partner)
 
 static void place_p2(BYTE *p1)
 {
+    if (remote_host && remote_mp && !IsBadReadPtr(remote_mp, 0x234) && *(BYTE **)(remote_mp + 0x230)) {
+        place_player(p2, remote_mp);   /* (a client's player 2: next to that client's player) */
+        return;
+    }
     place_player(p2, p1);
 }
 
@@ -2094,7 +2137,11 @@ static void split_choice(void)
         return;
     last = now;
     char out[64];
-    if (forced)
+    if (!forced) {
+        ts_script_run("return $ui.GetStr(\"CoopSplitJoin\")", out, sizeof out);
+        client_choice = strcmp(out, "1") == 0;
+    }
+    if (forced || remote_host || client_split)
         return;
     ts_script_run("return $ui.GetStr(\"CoopSplit\")", out, sizeof out);
     int want = strcmp(out, "1") == 0;
@@ -2455,6 +2502,254 @@ static void item_test(BYTE *p1)
     }
 }
 
+/* ---- network split screen ----
+ * Split screen on a client of a co-op game. The client keeps one player of its own (player 1, as every client);
+ * its player 2 is a campaign `player` that the HOST runs, exactly as the host runs its own split-screen player 2:
+ *   - the client sends its pad 2 to the host (mod message 60, {u8 version, u8 on, XINPUT_GAMEPAD}, at up to 30 Hz
+ *     and on every change); the host feeds it to player 2's command context in place of a local pad 2
+ *     (gamepad_set_player2_pad), so player 2 walks, aims, fires, uses powers and picks up items on the host, with
+ *     the host's authority over hits, damage, deaths and items;
+ *   - player 2 is replicated by the game to every machine as a `player_mp` (as the split host's player 2);
+ *   - the host sends the client player 2's camera and state (message 61, {u8 version, u8 flags (1 alive),
+ *     i32 net id, float right/up/forward[9], float position[3], float life} at 30 Hz);
+ *   - the client renders its second half from that camera (position smoothed), hides the echoed player_mp of its
+ *     player 2 in that half, shows its player 1's body there, and hides its player 1's first-person weapon,
+ *     crosshair and HUD in that half.
+ * One player 2 per host: a host with split screen of its own refuses clients' requests, and only the first client
+ * asking is served. The client turns it on with TS_SPLIT=1 or the UI string CoopSplitJoin = "1" and needs a
+ * second pad; TS_SPLIT_CLIENT=0 switches the whole feature off on either side. */
+#define SUB_NS_PAD 60
+#define SUB_NS_STATE 61
+#define NS_VERSION 1
+
+#pragma pack(push, 1)
+typedef struct { unsigned char ver, on; XINPUT_GAMEPAD pad; } NsPad;
+typedef struct { unsigned char ver, flags; int netid; float rows[9], pos[3], life; } NsState;
+#pragma pack(pop)
+
+int gamepad_read(int player, void *out);   /* gamepad.c */
+
+static int net_mode(void)
+{
+    BYTE *gm = *(BYTE **)0xfcab34;
+    return gm ? *(int *)(gm + 0x3c) : 0;
+}
+
+/* The player object of a client id in the game's player list ([0xfcab34] +0x28, 0xa4-byte records). */
+static BYTE *player_of_client(int id)
+{
+    BYTE *gm = *(BYTE **)0xfcab34;
+    if (!gm)
+        return NULL;
+    BYTE *slots = *(BYTE **)(gm + 0x28);
+    int n = *(int *)(gm + 0x2c);
+    for (int i = 0; slots && i < n && i < 32; i++)
+        if (*(int *)(slots + i * 0xa4) == id)
+            return *(BYTE **)(slots + i * 0xa4 + 4);
+    return NULL;
+}
+
+static void remote_end(const char *why)
+{
+    char out[64];
+    if (p2) {
+        p2_removing = 1;
+        ts_script_run("$player2.Terminate()", out, sizeof out);
+    }
+    gamepad_set_player2_pad(NULL);
+    ts_log("split: the player 2 of client %d ended (%s)", remote_peer, why);
+    remote_host = 0;
+    remote_peer = -1;
+    remote_mp = NULL;
+    stage = 0;
+    set_single_thread(0);
+}
+
+static void ns_message(int peer, unsigned short sub, const unsigned char *data, int len)
+{
+    int m = net_mode();
+    if (net_split_off)
+        return;
+    if (sub == SUB_NS_PAD && m == 2 && len >= (int)sizeof(NsPad) && data[0] == NS_VERSION) {
+        const NsPad *pd = (const NsPad *)data;
+        if (!pd->on) {
+            if (remote_host && peer == remote_peer)
+                remote_end("the client turned it off");
+            return;
+        }
+        if (!remote_host) {
+            if (stage) {   /* (this host has split screen of its own: one player 2 per host) */
+                static int told;
+                if (!told++)
+                    ts_log("split: client %d asks for its player 2, but this host has split screen of its own", peer);
+                return;
+            }
+            remote_host = 1;
+            remote_peer = peer;
+            stage = 3;
+            set_single_thread(1);
+            p1_since = GetTickCount() - (DWORD)p2_delay * 1000;   /* (player 2 comes in at once) */
+            ts_log("split: client %d plays split screen: this host runs its player 2", peer);
+        }
+        if (peer != remote_peer)
+            return;
+        gamepad_set_player2_pad(&pd->pad);
+        remote_seen = GetTickCount();
+    } else if (sub == SUB_NS_STATE && m == 3 && len >= (int)sizeof(NsState) && data[0] == NS_VERSION && client_split) {
+        const NsState *st = (const NsState *)data;
+        if (st->netid != client_netid) {
+            client_netid = st->netid;
+            cp2 = NULL;
+            ts_log("split: our player 2 is net id %d on the host", client_netid);
+        }
+        memcpy(cl_rows, st->rows, sizeof cl_rows);
+        memcpy(cl_pos, st->pos, sizeof cl_pos);
+        cl_life = st->life;
+        cl_alive = st->flags & 1;
+        if (!cl_have)
+            memcpy(cl_spos, cl_pos, sizeof cl_spos);
+        cl_have = 1;
+    }
+}
+
+/* Player 2's camera on a client: the host's camera of it, the position smoothed (messages come at 30 Hz, frames
+ * faster), the angles of the client's own camera kept (field of view, near/far). */
+static void client_cam(BYTE *dst)
+{
+    float d[3], dd = 0;
+    for (int i = 0; i < 3; i++)
+        d[i] = cl_pos[i] - cl_spos[i], dd += d[i] * d[i];
+    for (int i = 0; i < 3; i++)
+        cl_spos[i] = dd > 9.0f ? cl_pos[i] : cl_spos[i] + d[i] * 0.5f;
+    memcpy(dst, CAM, CAM_SIZE);
+    float *f = (float *)dst;
+    for (int r = 0; r < 3; r++)
+        for (int k = 0; k < 3; k++)
+            f[r * 4 + k] = cl_rows[r * 3 + k];
+    cam_set_pos(dst, cl_spos);
+}
+
+/* A client's view of player 2: its echoed player_mp hidden, player 1's body shown, player 1's first-person
+ * weapon, crosshair and HUD hidden. */
+static void client_view(int v)
+{
+    if (v != 1)
+        return;
+    if (client_netid >= 0 && (!cp2 || IsBadReadPtr(cp2, 0x234) || *(int *)(cp2 + 0x18) != client_netid)) {
+        BYTE *o = find_task((void *)0xecb7f8, client_netid);
+        cp2 = o && !IsBadReadPtr(o, 0x234) && *(int *)(o + 0x18) == client_netid ? o : NULL;
+    }
+    BYTE *on = cp2 ? *(BYTE **)(cp2 + 0x230) : NULL;
+    if (on && !IsBadReadPtr(on, 8)) {
+        own_node = on;
+        own_flags = *(DWORD *)(on + 4);
+        *(DWORD *)(on + 4) |= 0x10000u;
+    }
+    BYTE *b = body_of(saved_pb), *n = b ? *(BYTE **)(b + 0x230) : NULL;
+    if (n && !IsBadReadPtr(n, 8)) {
+        shown_node = n;
+        shown_flags = *(DWORD *)(n + 4);
+        *(DWORD *)(n + 4) &= ~0x10000u;
+    }
+    n_fp_hidden = 0;
+    for (int i = 0; i < n_own1 && n_fp_hidden < 2 * MAX_OWN; i++) {
+        BYTE *fn = own1[i] ? *(BYTE **)(own1[i] + 0x230) : NULL;
+        if (!fn || IsBadReadPtr(fn, 8))
+            continue;
+        fp_hidden[n_fp_hidden].node = fn;
+        fp_hidden[n_fp_hidden++].saved = *(DWORD *)(fn + 4);
+        *(DWORD *)(fn + 4) |= 1;
+    }
+    for (int i = 0; i < n_crs[0] && n_fp_hidden < 2 * MAX_OWN; i++) {
+        if (!crosshair_alive(0, i))
+            continue;
+        BYTE *fn = crs[0][i].node;
+        fp_hidden[n_fp_hidden].node = fn;
+        fp_hidden[n_fp_hidden++].saved = *(DWORD *)(fn + 4);
+        *(DWORD *)(fn + 4) |= 1;
+    }
+    if (hud_root && !IsBadReadPtr(hud_root, 0x1c)) {
+        hud_hidden = hud_root;
+        hud_hidden_flags = *(DWORD *)(hud_root + 0x18);
+        *(DWORD *)(hud_root + 0x18) |= 2;
+    }
+}
+
+static void net_split_tick(void)
+{
+    static int listening;
+    if (net_split_off)
+        return;
+    if (!listening)
+        listening = 1 + coopnet_listen(SUB_NS_PAD, SUB_NS_STATE, ns_message);
+    int m = net_mode();
+    DWORD now = GetTickCount();
+    if (m == 3) {   /* client */
+        int want = (forced > 0 || client_choice) && gamepad_slot(1) >= 0;
+        if (want && !client_split) {
+            client_split = 1;
+            stage = 3;
+            set_single_thread(1);
+            ts_log("split: split screen on this client: player 2 (pad %d) is run by the host", gamepad_slot(1) + 1);
+        } else if (!want && client_split) {
+            NsPad off = {NS_VERSION, 0, {0}};
+            coopnet_send(-1, SUB_NS_PAD, &off, sizeof off);
+            client_split = cl_have = 0;
+            cp2 = NULL;
+            client_netid = -1;
+            stage = 0;
+            set_single_thread(0);
+            restore_globals();
+            pic_ok[0] = pic_ok[1] = 0;
+            ts_log("split: split screen on this client off");
+        }
+        if (client_split) {   /* (also in menus and loading, with an idle pad: the host keeps player 2) */
+            static NsPad last;
+            static DWORD sent;
+            NsPad pd = {NS_VERSION, 1, {0}};
+            if (in_play())
+                gamepad_read(1, &pd.pad);
+            if ((memcmp(&pd, &last, sizeof pd) || now - sent >= 100) && now - sent >= 33
+                && coopnet_send(-1, SUB_NS_PAD, &pd, sizeof pd) > 0)
+                last = pd, sent = now;
+        }
+    } else if (m == 2) {   /* host */
+        if (remote_host && now - remote_seen > 3000)
+            remote_end("no pad from the client for 3 s");
+        if (remote_host) {
+            remote_mp = player_of_client(remote_peer);
+            static DWORD sent;
+            if (p2 && cam2 && now - sent >= 33) {
+                NsState st = {NS_VERSION, 0, *(int *)(p2 + 0x18), {0}, {0}, *(float *)(p2 + 0x234)};
+                const float *c = (const float *)cam2;
+                for (int r = 0; r < 3; r++)
+                    for (int k = 0; k < 3; k++)
+                        st.rows[r * 3 + k] = c[r * 4 + k];
+                memcpy(st.pos, c + 12, sizeof st.pos);
+                st.flags = st.life > 0;
+                int slot = -1;
+                BYTE *gm = *(BYTE **)0xfcab34, *slots = gm ? *(BYTE **)(gm + 0x28) : NULL;
+                for (int i = 0; slots && i < *(int *)(gm + 0x2c) && i < 32; i++)
+                    if (*(int *)(slots + i * 0xa4) == remote_peer)
+                        slot = i;
+                if (slot >= 0 && coopnet_send(slot, SUB_NS_STATE, &st, sizeof st) > 0)
+                    sent = now;
+            }
+        }
+    } else {
+        if (remote_host)
+            remote_end("the network game ended");
+        if (client_split) {
+            client_split = cl_have = 0;
+            cp2 = NULL;
+            client_netid = -1;
+            stage = forced > 0 ? 3 : 0;
+            if (!stage)
+                set_single_thread(0);
+        }
+    }
+}
+
 /* main thread, script tick */
 static void split_tick(float dt)
 {
@@ -2514,9 +2809,12 @@ static void split_tick(float dt)
             }
         }
     }
+    net_split_tick();
     if (stage < 3)
         return;
     install_msg_hook();
+    if (client_split)
+        return;   /* (a client's player 2 is run by the host) */
     {   /* In a network game the player's update shows "Waiting for server" (GAME_WAIT_FOR_SERVER, 0x40c5c6) while
          * its +0x39c bit 1 is clear: the server's "you may play" mark, which the game sets on player 1 only.
          * Player 2, updated as the local player, showed it all the time (in both halves). Player 2 gets player 1's
@@ -2602,7 +2900,9 @@ static void split_tick(float dt)
     float spot[3], *p1pos = p1 && *(BYTE **)(p1 + 0x230) ? (float *)(*(BYTE **)(p1 + 0x230) + 0x68) : NULL;
     int walked = p1pos && trail_pick_away(0, p1pos, spot, 0.8f);
     /* (or after 3 s more without that: ahead of player 1, see place_player) */
-    if (p1 && !p2 && p2_failed < 3 && now - p1_since >= (DWORD)p2_delay * 1000
+    BYTE *gmode = *(BYTE **)0xfcab34;
+    int on_client = gmode && *(int *)(gmode + 0x3c) == 3;   /* (no local player 2 on a client: see client_split) */
+    if (p1 && !p2 && !on_client && p2_failed < 3 && now - p1_since >= (DWORD)p2_delay * 1000
         && (walked || now - p1_since >= (DWORD)p2_delay * 1000 + 3000))
         spawn_p2(p1);
     /* Player 2 survives a level change like player 1 (both are objects of the game, not of the level): it is put
@@ -2635,6 +2935,11 @@ static int patch_slot(DWORD vtbl, int slot, void *hook, void **orig)
     if (o)
         *orig = o;
     return o != NULL;
+}
+
+unsigned char *split_player2(void)
+{
+    return p2;
 }
 
 void split_install(void)
@@ -2702,6 +3007,7 @@ void split_install(void)
         }
     fx_off = ts_env("TS_SPLIT_FXSHARED", v, sizeof v) && v[0] == '1';
     hudlog = splitlog > 0;
+    net_split_off = ts_env("TS_SPLIT_CLIENT", v, sizeof v) && v[0] == '0';
     if (splitlog && *(DWORD *)(0xd74c28 + 0x13c) == 0x42fa90)
         patch_slot(0xd74c28, 0x13c / 4, (void *)hook_mp_update, (void **)&real_mp_update);
     install_name_hook();   /* (also without split screen: player 1 with a pad) */

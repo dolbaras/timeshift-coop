@@ -66,6 +66,8 @@ void gamepad_poll_player2(int on);   /* split.c: the next input polls read pad 2
 
 /* split.c: local split screen, player 2 on pad 2 (TS_SPLIT=1, prototype) */
 void split_install(void);
+unsigned char *split_player2(void);   /* the second player run on this machine (split screen, a client's player 2), or NULL */
+void gamepad_set_player2_pad(const void *xinput_gamepad);   /* gamepad.c: player 2's pad state from elsewhere (NULL: pad 2) */
 
 /* d3dex.c: Direct3D 9Ex instead of 9 (default; TS_D3D9EX=0 off: no lost device in a window), resource census (TS_D3DCENSUS=1) */
 void d3dex_install(void);

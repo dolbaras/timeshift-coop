@@ -317,6 +317,29 @@ own profile identity once player 2 is in; profiles cleaned at the end).
 | Split screen on a client | **not in the first release**: the server knows one player per connection (0x429 creates one `player_mp` per client slot); a second player from one client would need a second connection from the process or a mod-message player driven by the client and made on the host | - |
 | Plain join over the LAN (host N100 on part03, client main PC) | first try: the host closed the connection 24 s after the join while the client still loaded the level (`local close`, "client 1 left before it ran the level"); second try: joined, in the level (the client was shot dead at the start and saw the respawn countdown) | `20261025-193624` (dropped), `20261025-193931` `shot100-155.png` |
 
+## Split screen on a client (round 16, code; not tested yet)
+
+Design: a client keeps one player of its own (player 1, as every client). Its **player 2 is a campaign `player`
+that the host runs**, the same way the host runs its own split-screen player 2, so the host keeps the authority
+over movement, hits, damage, deaths, items and time powers, and the game replicates player 2 to every machine as a
+`player_mp` (proven for the split host in round 15).
+
+| Step | Who | How |
+|---|---|---|
+| Pad 2 to the host | client | mod message 60 `{u8 1, u8 on, XINPUT_GAMEPAD}` at up to 30 Hz and on every change, also in menus and loading (an idle pad) so the host keeps player 2 |
+| Player 2 on the host | host | the first client asking gets a player 2 (`remote_host`): spawned as the split host's, placed next to that client's own player (its `player_mp`, from the game's player list), respawned next to it; the received pad goes into player 2's command context in place of a local pad 2 (`gamepad_set_player2_pad`). No split screen on the host (its screen stays whole); player 2's own screen effects (damage, death, low life) are kept off the host's screen. A host with split screen of its own refuses (one player 2 per host). No pad message for 3 s, an "off" message, or the end of the network game removes player 2 |
+| Player 2's camera to the client | host | mod message 61 `{u8 1, u8 flags (1 alive), i32 net id, float right/up/forward[9], float position[3], float life}` at 30 Hz, to that client only |
+| The client's second half | client | split screen as on a single PC, the second view's camera from message 61 (position smoothed, the client's own field of view); in that half the echoed `player_mp` of its player 2 is hidden, its player 1's body is shown, and its player 1's first-person weapon, crosshair and HUD are hidden |
+| Time powers | host | timesync takes player 2's power as the host's when player 1 has none (`split_player2()`), so a power of either player 2 (split host or client) runs for everybody |
+
+Switches: the client turns it on with `TS_SPLIT=1` or the UI string `CoopSplitJoin = "1"` (no menu entry yet) and
+needs a second pad; `TS_SPLIT_CLIENT=0` turns the whole feature off on either side.
+
+Known limits of the first version: player 2's half on a client has no HUD (life, ammunition, powers) and no
+first-person weapon (the host has them; only the camera and life travel); its camera follows the host's at 30 Hz
+(aim latency = the network round trip); player 2's own screen effects are not shown on the client; its pick-up
+messages show on the host.
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):

@@ -422,6 +422,13 @@ static void frame(float dt)
     }
     /* (a power of the old player object ends here: its mode differs from local_last) */
     int local = pl ? local_mode(pl) : NONE, want;
+    /* On a server with a second player on this machine (split screen's player 2, or the player 2 of a client's split
+     * screen that this host runs): its power counts as the host's when player 1 has none. */
+    char *pp = pl, *p2 = game_mode() != MODE_CLIENT ? (char *)split_player2() : NULL;
+    if (local == NONE && p2 && local_mode(p2) != NONE) {
+        local = local_mode(p2);
+        pp = p2;
+    }
     if (game_mode() != MODE_CLIENT) {
         if (owner != NONE && owner != HOST_ID) {   /* the owner left */
             int i = slot_of(owner);
@@ -430,8 +437,8 @@ static void frame(float dt)
         }
         if (local != NONE && owner != NONE && owner != HOST_ID) {   /* started in the same moment as a client */
             TLOG("timesync: local %s ended, client %d owns the world power", mode_name(local), owner);
-            power_end(pl);
-            local = local_mode(pl);
+            power_end(pp);
+            local = local_mode(pp);
         }
         if (local != local_last) {
             if (local != NONE)
@@ -460,7 +467,7 @@ static void frame(float dt)
         want = team_mode != NONE && !team_yours ? team_mode : NONE;
     }
     if (pl)
-        reconcile(pl, local, want);
+        reconcile(pp, local, want);
 }
 
 /* ---- install ---- */
