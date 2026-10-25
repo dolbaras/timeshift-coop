@@ -1783,7 +1783,9 @@ static void TSCALL hook_item_update(BYTE *item)
     p2_leave();
     static BYTE *last;   /* (logged once per item in a row) */
     if (r || item != last)
-        ts_log("split: item %p in player 2's reach: %s", (void *)item, r ? "taken by player 2" : "not taken");
+        ts_log("split: item %p (\"%.32s\", kind %d, game mode %d) in player 2's reach: %s", (void *)item,
+               node && !IsBadReadPtr(*(char **)(node + 0x28), 1) ? *(char **)(node + 0x28) : "?", kind, md,
+               r ? "taken by player 2" : "not taken");
     last = r ? NULL : item;
 }
 
@@ -2628,6 +2630,9 @@ static void item_test(BYTE *p1)
     BYTE *r1 = ammo_rec(p1, 0, NULL), *r2 = ammo_rec(p2, 0, NULL);
     if (stage_t == 0 && age >= secs * 1000) {
         stage_t = 1;
+        char av[16];
+        if (r2 && ts_env("TS_SPLIT_P2AMMO", av, sizeof av))   /* (tests: player 2's reserve set low, so ammunition is taken) */
+            *(float *)(r2 + 8) = (float)atof(av);
         ts_log("split: item test before: player 1 ammo %.1f life %.1f slots %d %d %d, player 2 ammo %.1f life %.1f slots %d %d %d",
                r1 ? *(float *)(r1 + 8) : -1.0f, *(float *)(p1 + 0x234), *(int *)(p1 + 0x3a8), *(int *)(p1 + 0x3ac),
                *(int *)(p1 + 0x3b0), r2 ? *(float *)(r2 + 8) : -1.0f, *(float *)(p2 + 0x234), *(int *)(p2 + 0x3a8),
