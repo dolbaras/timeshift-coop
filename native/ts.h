@@ -68,7 +68,7 @@ int campaign_console(const char *text, char *out, int size);   /* "!cp ..." test
 int campaign_dom_verdict(void *dom, int host_inside);           /* storysync.c (host): -1 no rule, 0 out, 1 in */
 void campaign_story_event(const char *obj, const char *ev, const char *arg0);   /* storysync.c (host): a story event ran */
 int campaign_local_setspeed(void);   /* storysync.c (client): domain SetSpeed runs locally (force fields, wind) */
-int campaign_local_call(const char *name, int len);   /* storysync.c (client): 1 = this host-only call runs locally too */
+int campaign_local_call(const char *stmt, const char *name, int len);   /* storysync.c (client): 1 = runs locally too */
 
 /* aisync.c: AI soldiers on clients of a campaign level */
 void aisync_install(void);

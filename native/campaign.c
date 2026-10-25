@@ -421,6 +421,8 @@ static struct {
     DWORD seat_at;
 } pend;
 static char ride_vehicle[64];                /* (client) the vehicle this player rides on, "" = none */
+static float ride_host[5];                   /* (client) the host's place of it (x y z, forward x z) */
+static DWORD ride_host_at;
 static int ride_place;
 
 static void on_message(int peer, unsigned short sub, const unsigned char *b, int len)
@@ -447,6 +449,9 @@ static void on_message(int peer, unsigned short sub, const unsigned char *b, int
         pend.seat_name[b[1]] = 0;
         pend.seat = 1;
         pend.seat_at = GetTickCount() + 500;   /* (after the replay of the same story event) */
+    } else if (sub == 75 && len >= 21) {
+        memcpy(ride_host, b + 1, 20);
+        ride_host_at = GetTickCount();
     } else if (sub == SUB_RIDE && len >= 4 && b[3] < sizeof ride_vehicle && 4 + b[3] <= len) {
         if (b[1]) {
             memcpy(ride_vehicle, b + 4, b[3]);
@@ -497,6 +502,11 @@ static void ride_step(void)
     }
     float pos[3], f[3] = {*(float *)(vnode + NODE_DIR), 0.f, *(float *)(vnode + NODE_DIR + 8)};
     ent_pos(veh, pos);
+    if (GetTickCount() - ride_host_at < 1000) {   /* (the host's vehicle: this machine's copy may stand still) */
+        memcpy(pos, ride_host, 12);
+        f[0] = ride_host[3];
+        f[2] = ride_host[4];
+    }
     float l = sqrtf(f[0] * f[0] + f[2] * f[2]);
     if (l < 1e-3f)
         f[0] = 1.f, f[2] = 0.f, l = 1.f;
@@ -584,6 +594,29 @@ static void seat_later_step(void)
     }
 }
 
+/* (host) the vehicle clients ride on: its place goes to them 10 times a second (their own copy of an AI-driven vehicle
+ * does not move: the route runs on the host only) */
+#define SUB_RIDEPOS 75
+static char host_ride[64];
+static void ride_broadcast(void)
+{
+    static DWORD last;
+    DWORD now = GetTickCount();
+    if (!host_ride[0] || now - last < 100)
+        return;
+    last = now;
+    char *veh = find_ent(host_ride), *node = veh ? *(char **)(veh + ENT_NODE) : NULL;
+    float m[5];
+    if (!node || !ent_pos(veh, m))
+        return;
+    m[3] = *(float *)(node + NODE_DIR);
+    m[4] = *(float *)(node + NODE_DIR + 8);
+    unsigned char b[1 + sizeof m];
+    b[0] = PROTO;
+    memcpy(b + 1, m, sizeof m);
+    coopnet_send(-1, SUB_RIDEPOS, b, sizeof b);
+}
+
 void campaign_story_event(const char *obj, const char *ev, const char *arg0)
 {
     if (!use_seats || role() != MODE_SERVER || !obj || !ev)
@@ -622,6 +655,7 @@ void campaign_story_event(const char *obj, const char *ev, const char *arg0)
                 b[3] = (unsigned char)len;
                 memcpy(b + 4, s->vehicle, len);
                 coopnet_send(i, SUB_RIDE, b, 4 + len);
+                snprintf(host_ride, sizeof host_ride, "%s", s->act == A_RIDE_ON ? s->vehicle : "");
                 CLOG("campaign: %s.%s: client in slot %d %s %s", obj, ev, i, b[1] ? "rides on" : "gets off", s->vehicle);
             }
             k++;
@@ -638,14 +672,20 @@ int campaign_local_setspeed(void)
  * vehicles' StartRoute/StopRoute (live: a route-driven vehicle - the zeppelin, helicopters, interceptors, the
  * armoured car - has a net id but no motion data to send, so it stood still on clients; run locally, each machine's
  * copy follows the same route from the same replayed start). */
-int campaign_local_call(const char *name, int len)
+int campaign_local_call(const char *stmt, const char *name, int len)
 {
+    /* (only vehicles without an AI driver: a client's StartRoute on an AI vehicle - Opp_Bronevik_1, bikes, helicopters -
+     * crashed it at the start of ts2_zep_factory_part1, AV 0x49bddd: the vehicle's AI part is NULL on a client) */
+    static const char *const routed[] = {"$Zeppelin|Zeppelin_cruiser_ACTOR.", "$DIRIGIBLE1|dirigible_ACTOR.",
+                                         "$ref_dirigible|dirigible_ACTOR.", NULL};
     if (!enabled)
         return 0;
     if (use_setspeed && len == 8 && strncmp(name, "SetSpeed", 8) == 0)
         return 1;
     if (use_routes && ((len == 10 && strncmp(name, "StartRoute", 10) == 0) || (len == 9 && strncmp(name, "StopRoute", 9) == 0)))
-        return 1;
+        for (int i = 0; routed[i]; i++)
+            if (stmt && strncmp(stmt, routed[i], strlen(routed[i])) == 0)
+                return 1;
     return 0;
 }
 
@@ -902,8 +942,10 @@ static void frame(float dt)
     }
     if (use_latejoin)
         latejoin_step(now);
-    if (use_seats)
+    if (use_seats) {
         seat_later_step();
+        ride_broadcast();
+    }
     if (now - last < 250)
         return;
     last = now;
