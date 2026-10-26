@@ -531,6 +531,15 @@ static void pad2_poll(BYTE *raw)
         st.Gamepad.bLeftTrigger = st.Gamepad.bRightTrigger = 0;
     float l[2], r[2];
     write_codes(v, &st.Gamepad, 0, l, r);
+    {   /* (tests, TS_PADLOG=1: what player 2's pad pass sees, every 3 s) */
+        static DWORD lastp;
+        DWORD now = GetTickCount();
+        if (padlog && now - lastp >= 3000) {
+            lastp = now;
+            ts_log("gamepad: player 2 pass: slot %d test %d remote %d LX %d LY %d RX %d RY %d buttons %04x", slot, test_pad, remote_pad2_on,
+                   st.Gamepad.sThumbLX, st.Gamepad.sThumbLY, st.Gamepad.sThumbRX, st.Gamepad.sThumbRY, st.Gamepad.wButtons);
+        }
+    }
     if (padlog && st.Gamepad.wButtons != last_buttons)
         ts_log("gamepad: player 2 pad %d buttons=0x%04x L=%.2f,%.2f R=%.2f,%.2f", slot + 1, st.Gamepad.wButtons, l[0], l[1],
                r[0], r[1]);

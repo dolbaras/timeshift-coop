@@ -1165,8 +1165,22 @@ static void TSCALL hook_eval(void *imv)
     real_eval(imv);
     BYTE *im = imv;
     BYTE *ctx1 = *(BYTE **)(im + 0x40);
-    if (!p2 || !ctx2 || !raw2 || !ctx1 || *(DWORD *)ctx1 != VT_GAME)
+    static int ran, skipped;
+    static DWORD lastlog;
+    if (!p2 || !ctx2 || !raw2 || !ctx1 || *(DWORD *)ctx1 != VT_GAME) {
+        skipped++;
+        if (splitlog && client_split && GetTickCount() - lastlog >= 3000) {   /* (tests: the second pass on a client) */
+            lastlog = GetTickCount();
+            ts_log("split: command pass for the copy skipped %d, run %d (p2 %p ctx2 %p raw2 %p ctx1 %p vt %08lx)", skipped, ran, (void *)p2,
+                   (void *)ctx2, (void *)raw2, (void *)ctx1, ctx1 ? *(DWORD *)ctx1 : 0);
+        }
         return;
+    }
+    ran++;
+    if (splitlog && client_split && GetTickCount() - lastlog >= 3000) {
+        lastlog = GetTickCount();
+        ts_log("split: command pass for the copy skipped %d, run %d (context vt %08lx)", skipped, ran, *(DWORD *)ctx1);
+    }
     BYTE *raw = *(BYTE **)(im + 0x3c);
     static BYTE raw1[RAW_TO];
     DWORD a1[5], b1[4];
@@ -1199,10 +1213,22 @@ static struct { int depth; BYTE *pa, *pb, *cam, *ctx1; int with_ctx; DWORD a1[5]
 
 static void geo_owner_p2(int on);
 
+/* A client's copy of player 2 runs its update as a single-player game's player (game mode 1: [0xfcab34] +0x3c):
+ * in a network game's client mode the player's update takes the network's side of many checks (a move comes from
+ * the server, the player waits for its mark, the motion is interpolated), and the copy, which the server does not
+ * know, did not move with pad 2 (run 20261027-010554). The mode is put back at the end of the swap. TS_SPLIT_COPYMODE=1
+ * turns it on: it made no clear difference in run 20261027-012413 (the copy moved about 1.3 m instead of walking), so it is off. */
+static int copy_mode1, saved_mode = -1;
+
 static void p2_enter(void)
 {
     if (as2.depth++)
         return;
+    if (client_split && copy_mode1) {
+        BYTE *gm = *(BYTE **)0xfcab34;
+        if (gm && *(int *)(gm + 0x3c) == 3)
+            saved_mode = 3, *(int *)(gm + 0x3c) = 1;
+    }
     geo_owner_p2(1);
     BYTE *im = IM;
     as2.pa = PLAYER_A, as2.pb = PLAYER_B, as2.cam = CAM;
@@ -1228,6 +1254,12 @@ static void p2_leave(void)
 {
     if (--as2.depth)
         return;
+    if (saved_mode >= 0) {
+        BYTE *gm = *(BYTE **)0xfcab34;
+        if (gm)
+            *(int *)(gm + 0x3c) = saved_mode;
+        saved_mode = -1;
+    }
     geo_owner_p2(0);
     BYTE *im = IM;
     if (as2.with_ctx && im) {
@@ -1459,6 +1491,11 @@ static void TSCALL hook_die(void *pl, int arg)
     /* In a network game (co-op server) player 1 dies by the multiplayer rules (death screen, respawn timer, the
      * session's respawn points), as the clients do; player 2, which those rules do not know, is always respawned
      * next to player 1 (the game's death would leave it a dead object without HUD). */
+    if (client_split && who == 1) {   /* (the client's copy: the host's player 2 dies and respawns, the copy follows) */
+        *(float *)((BYTE *)pl + HEALTH) = 100.0f;
+        ts_log("split: our player 2's copy would die: kept alive (the host's player 2 decides)");
+        return;
+    }
     BYTE *gm = *(BYTE **)0xfcab34;
     int net = gm && (*(int *)(gm + 0x3c) == 2 || *(int *)(gm + 0x3c) == 3);
     DWORD now = GetTickCount();
@@ -3579,6 +3616,7 @@ void split_install(void)
     hudlog = splitlog > 0;
     net_split_off = ts_env("TS_SPLIT_CLIENT", v, sizeof v) && v[0] == '0';
     net_noshadow = ts_env("TS_SPLIT_SHADOW", v, sizeof v) && v[0] == '0';
+    copy_mode1 = ts_env("TS_SPLIT_COPYMODE", v, sizeof v) && v[0] == '1';
     host_items_off = ts_env("TS_SPLIT_HOSTITEMS", v, sizeof v) && v[0] == '0';
     if (splitlog && *(DWORD *)(0xd74c28 + 0x13c) == 0x42fa90)
         patch_slot(0xd74c28, 0x13c / 4, (void *)hook_mp_update, (void **)&real_mp_update);
