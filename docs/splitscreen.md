@@ -402,6 +402,15 @@ host: time power, AI kill, item), `split_run.ps1 -Dll`.
 | Checkpoint, team restart, level change on a split host | `$saves_mng.AutoSave(2)`, `$player.FailMission()` (team restart: the session reloads part02), `!ss exit ts2_city_part03`: player 2 is kept, placed beside player 1 after each load, both halves with HUD and weapons | `20261025-233250` `shot150.png` (after the restart), `shot260.png` (part03) |
 | Test-window strip | in these test windows (1912x1000, larger than the game's 1768x992 picture) the split picture covers 1768x992 and the rest is black (cleared on purpose, see the composite); not seen at a real resolution | all main-PC frames |
 
+### Round 19 (2026-10-27, split screen on a client: the copy of player 2)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Crash of the copy's shot | the copy fired with pad 2's triggers; its hit found no shooter (`0x576180`, esi 0). The copy no longer fires (triggers and right stick click masked; the host's player 2 fires) | `20261026-221127` (crash), `20261027-005811` (fixed) |
+| Weapon and ammunition in player 2's half | the host's slots are given to the copy once (`SetupWeapon` + `SelectHolster(0, 1)`), its ammunition only once its weapon exists: pistol and "112 / 1" show | `20261027-010554` `shot098.png`, `shot111.png` |
+| The copy does not walk with pad 2 | the command pass for the copy runs about 70 times a second and pad 2's stick values reach it; the copy still moved about 1.3 m. Running its update in game mode 1 (`TS_SPLIT_COPYMODE=1`, off) did not change that | `20261027-012413` (`command pass`, `player 2 pass` log lines) |
+| The copy as a slave (code, **not run yet**) | `client_slave` moves the copy to the host's player 2's position (message 61) every frame, half way each time, a jump over 6 m at once; its look direction stays its own (pad 2's right stick is applied locally); its own walking still runs and is overwritten. `TS_SPLIT_COPYFREE=1` switches it off | - |
+
 Still to run (needs the N100): split on a client end to end (copy, halves, HUD, weapon, hits, items, messages,
 death, jitter), and the split host + client checks (player 2's time power, its AI kill, its pick-up) with
 `split_pair_t2.ps1`.

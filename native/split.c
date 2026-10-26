@@ -431,6 +431,9 @@ static void client_view(int v);
 static BYTE *find_cp2(void);
 static void client_extra(int v);
 static int copy_updates;       /* (tests: updates of a client's copy of player 2) */
+static float cl_body[3];       /* client: the host's player 2's body position (message 61) */
+static int cl_body_ok, copy_free;   /* copy_free: TS_SPLIT_COPYFREE=1, the copy walks on its own (tests) */
+static void client_slave(void);
 static BYTE *extra_node;       /* client: one more body hidden for a view (the shadow's, or our player 2's player_mp) */
 static DWORD extra_flags;
 static int node_visible(BYTE *n);
@@ -2993,21 +2996,31 @@ static void shadow_sync(const NsState *st)
         fx[1][i].on = st->fx_on >> k & 1;
         fx[1][i].v = st->fx_v[k];
     }
-    /* (the copy and the player_mp of the host's player 2 are two bodies: they push each other apart, so the copy
-     * goes its own way up to 2.5 m from the host's player 2 before it is put back beside it) */
+    /* (its position: see client_slave) */
+    memcpy(cl_body, st->body, sizeof cl_body);
+    cl_body_ok = 1;
+}
+
+/* The copy is a slave of the host's player 2 (the copy did not walk with pad 2 in a client's game, run
+ * 20261027-012413): every frame its position is moved to the host's player 2's (message 61), smoothed, with its
+ * own look direction kept (pad 2's right stick is applied locally, so aim answers at once). Its own movement
+ * still runs and is overwritten. A far jump (a respawn, a level change) is taken at once. */
+static void client_slave(void)
+{
+    if (!client_split || !p2 || !cl_body_ok || copy_free || *(DWORD *)p2 != PLAYER_VTBL)
+        return;
     BYTE *n = *(BYTE **)(p2 + 0x230);
-    DWORD now = GetTickCount();
-    static DWORD put_at;
-    if (n && now - put_at > 1000) {
-        float *q = (float *)(n + 0x68), dx = q[0] - st->body[0], dy = q[1] - st->body[1], dz = q[2] - st->body[2];
-        if (dx * dx + dy * dy + dz * dz > 2.5f * 2.5f) {
-            put_at = now;
-            static int nlog;
-            if (splitlog && nlog++ < 20)
-                ts_log("split: our player 2's copy put back beside the host's (%.2f m off)", sqrtf(dx * dx + dy * dy + dz * dz));
-            place_p2(NULL);
-        }
-    }
+    if (!n || IsBadReadPtr(n, 0x74))
+        return;
+    float *q = (float *)(n + 0x68), d[3] = {cl_body[0] - q[0], cl_body[1] - q[1], cl_body[2] - q[2]};
+    float d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2], k = d2 > 36.0f ? 1.0f : 0.5f;
+    if (d2 < 0.0004f)
+        return;
+    float pos[3] = {q[0] + d[0] * k, q[1] + d[1] * k, q[2] + d[2] * k}, dir[3] = {((float *)cam2)[8], 0, ((float *)cam2)[10]};
+    static int nlog;
+    if (splitlog && (d2 > 36.0f || nlog++ < 6))
+        ts_log("split: our player 2's copy moved to the host's player 2 (%.2f m off, step %.2f)", sqrtf(d2), k);
+    put_player_f(p2, pos, dir, 0);
 }
 
 /* A message of player 2 from the host, shown in its half (the message line, see hook_msg_add). The text goes in
@@ -3247,7 +3260,7 @@ static void net_split_tick(void)
             shadow_remove("split screen off");
             NsPad off = {NS_VERSION, 0, {0}};
             coopnet_send(-1, SUB_NS_PAD, &off, sizeof off);
-            client_split = cl_have = 0;
+            client_split = cl_have = cl_body_ok = 0;
             cp2 = NULL;
             client_netid = -1;
             stage = 0;
@@ -3306,7 +3319,7 @@ static void net_split_tick(void)
             remote_end("the network game ended");
         if (client_split) {
             shadow_remove("the network game ended");
-            client_split = cl_have = 0;
+            client_split = cl_have = cl_body_ok = 0;
             cp2 = NULL;
             client_netid = -1;
             stage = forced > 0 ? 3 : 0;
@@ -3394,6 +3407,7 @@ static void split_tick(float dt)
                          client_split);
     if (client_split && (net_noshadow || !cl_have))
         return;   /* (a client's player 2 is run by the host; its local copy only once the host runs it) */
+    client_slave();
     {   /* In a network game the player's update shows "Waiting for server" (GAME_WAIT_FOR_SERVER, 0x40c5c6) while
          * its +0x39c bit 1 is clear: the server's "you may play" mark, which the game sets on player 1 only.
          * Player 2, updated as the local player, showed it all the time (in both halves). Player 2 gets player 1's
@@ -3617,6 +3631,7 @@ void split_install(void)
     net_split_off = ts_env("TS_SPLIT_CLIENT", v, sizeof v) && v[0] == '0';
     net_noshadow = ts_env("TS_SPLIT_SHADOW", v, sizeof v) && v[0] == '0';
     copy_mode1 = ts_env("TS_SPLIT_COPYMODE", v, sizeof v) && v[0] == '1';
+    copy_free = ts_env("TS_SPLIT_COPYFREE", v, sizeof v) && v[0] == '1';
     host_items_off = ts_env("TS_SPLIT_HOSTITEMS", v, sizeof v) && v[0] == '0';
     if (splitlog && *(DWORD *)(0xd74c28 + 0x13c) == 0x42fa90)
         patch_slot(0xd74c28, 0x13c / 4, (void *)hook_mp_update, (void **)&real_mp_update);
