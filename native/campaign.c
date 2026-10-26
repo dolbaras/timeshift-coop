@@ -1131,6 +1131,26 @@ int campaign_console(const char *text, char *out, int size)
         return snprintf(out, size, "%s: net %d, +2c %x, +98 %x, motion %p, at %.2f %.2f %.2f", a1, *(int *)(e + 0x18),
                         *(unsigned *)(e + 0x2c), *(unsigned *)(e + 0x98), *(void **)(e + 0x34), pos[0], pos[1], pos[2]), 1;
     }
+    if (!strcmp(cmd, "node")) {   /* "!cp node <object>": its scene node's floats +0x08..+0x7c, vtable, animation (lab) */
+        char *e = find_ent(a1), *node = e ? *(char **)(e + ENT_NODE) : NULL;
+        if (!node)
+            return snprintf(out, size, "%s: no node", a1), 1;
+        int n = snprintf(out, size, "%s vt %p [+204 %p] node %p anim %d t %.3f:", a1, *(void **)e,
+                         (*(void ***)e)[0x204 / 4], node, ((int (TSCALL *)(void *))0x951660)(node),
+                         (double)((float (TSCALL *)(void *))0x951500)(node));
+        for (int o = 0x08; o < 0x80 && n < size - 16; o += 4)
+            n += snprintf(out + n, size - n, " %x:%.2f", o, (double)*(float *)(node + o));
+        return 1;
+    }
+    if (!strcmp(cmd, "nodeset")) {   /* "!cp nodeset <object> <hex offset> x y z" (lab) */
+        char *e = find_ent(a1), *node = e ? *(char **)(e + ENT_NODE) : NULL;
+        unsigned o = 0;
+        float v[3];
+        if (!node || sscanf(text + 3, "%*s %*s %x %f %f %f", &o, &v[0], &v[1], &v[2]) != 4 || o > 0x200)
+            return snprintf(out, size, "usage: !cp nodeset <object> <hex offset> x y z"), 1;
+        memcpy(node + o, v, 12);
+        return snprintf(out, size, "%s node +%x set", a1, o), 1;
+    }
     if (!strcmp(cmd, "where")) {   /* "!cp where": this machine's player position (lab) */
         float pos[3] = {0, 0, 0};
         int ok = ent_pos(PLAYER, pos);
