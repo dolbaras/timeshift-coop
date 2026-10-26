@@ -464,6 +464,8 @@ static int classify(const char *src, ClassRec *r, char *out, size_t cap, int *n_
                 for (int i = 0; local_calls[i]; i++)
                     if (strstr(code, local_calls[i]))
                         local = 1;
+                if (cur >= 0 && campaign_frame_local(r->name, r->ev_name[cur], code))   /* campaign.c: cyclic machinery */
+                    local = 1;
                 if (cur >= 0 && !local)
                     r->ev_story[cur] = 1;
                 const char *c;
@@ -1034,8 +1036,10 @@ static void run_queue(void)
         return;
     for (int i = 0; i < n && q_count; i++) {
         Replay *q = &queue[q_head];
-        int rc = fire_named(q->obj, q->ev, q->argc, q->args, q->replay);
-        if (rc < 0 && (int)(GetTickCount() - q->until) < 0)
+        int hold = q->replay && campaign_replay_wait(q->obj, q->ev);   /* campaign.c: objects the host just created */
+        int rc = hold && (int)(GetTickCount() - q->until) < 0 ? -1 : fire_named(q->obj, q->ev, q->argc, q->args, q->replay);
+        if (rc < 0 && (int)(GetTickCount() - q->until) < 0 && strcmp(q->ev, "OnDestroyed") != 0)   /* campaign.c: (an
+                                                     * object's OnDestroyed when it is gone here: gone here too) */
             break;   /* (keep the order: wait for this one) */
         if (rc < 0)
             SLOG("storysync: replay %s.%s dropped: no such object here", q->obj, q->ev);

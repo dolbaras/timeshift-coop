@@ -116,6 +116,7 @@ static void (TSCALL *node_pos)(void *, float *) = (void *)0x94c8e0;
 #define SUB_STATE 72                         /* late joiner: the host's player locks and loadout */
 #define SUB_SEAT 73                          /* take this seat */
 #define SUB_RIDE 74                          /* ride on this vehicle (on/off) */
+#define SUB_VEH 76                           /* vehicle transforms (either way, see veh_step) */
 #define SUB_LAST 79
 #define PROTO 1
 
@@ -430,9 +431,14 @@ static int ride_place;
 static int ride_rel;                         /* (client) 1 = keep the place relative to the vehicle taken at the start */
 static float ride_off[3];                    /* (client) that place in the vehicle's frame (right, up, forward) */
 
+static void veh_receive(const unsigned char *b, int len);
 static void on_message(int peer, unsigned short sub, const unsigned char *b, int len)
 {
     (void)peer;
+    if (sub == SUB_VEH && enabled && len >= 2 && b[0] == PROTO && (role() == MODE_CLIENT || role() == MODE_SERVER)) {
+        veh_receive(b, len);
+        return;
+    }
     if (role() != MODE_CLIENT || len < 1 || b[0] != PROTO)
         return;
     if (sub == SUB_GATHER && len >= 15) {
@@ -992,6 +998,264 @@ static void latejoin_step(DWORD now)
     }
 }
 
+/* ---- story events each machine runs itself (storysync.c asks; NOT YET RUN) ---- */
+/* Level 16's cyclic machinery (flame jets FL*, presses PRESS*, the fire_kill_actor flames, sparks, conveyor sounds)
+ * fires animation-frame events all the time on every machine: their handlers only show/hide effects, play sounds and
+ * lock/unlock the kill domains in step with the animation, so each machine runs its own (live: ~760 replays in 2
+ * minutes before). Only on that level, and only handlers made of such statements. */
+int campaign_frame_local(const char *obj, const char *ev, const char *stmt)
+{
+    static const char *const ok[] = {".Show(", ".Hide(", ".Lock(", ".Unlock(", "PlaySound(", "MuteSound(", ".Start(",
+                                     ".Stop(", NULL};
+    char base[0x110];
+    if (!enabled || !obj || !ev || !stmt || strcmp(ev, "OnActionFrame") != 0)
+        return 0;
+    level_base(LEVEL_NAME, base, sizeof base);
+    if (_stricmp(base, "ts2_guardfactory_part03") != 0)
+        return 0;
+    for (int i = 0; ok[i]; i++)
+        if (strstr(stmt, ok[i]))
+            return !strstr(stmt, "$player") && !strstr(stmt, "$farm");
+    return 0;
+}
+
+/* A client holds the host's replay of an event whose handler talks to objects the host creates just before it
+ * (their names arrive a moment later): level 8's intro dialogue (Intro_Cooke, Intro_rebel_1 are created in
+ * OnAnimEnd("CLIP_1"), the lines are posted by the next OnAnimBegin("MOVE"); live, the client got "unknown object"
+ * for every line). Up to storysync's 5 s. */
+static int named_quiet(const char *name)   /* (the script manager's named objects, without its error message) */
+{
+    char *mgr = MGR;
+    void **data = mgr ? *(void ***)(mgr + 0x14) : NULL;
+    int n = mgr ? *(int *)(mgr + 0x18) : 0;
+    for (int i = 0; data && i < n; i++) {
+        String nm = data[i] ? *(String *)((char *)data[i] + INST_NAME) : NULL;
+        if (nm && !strcmp(nm->s, name))
+            return 1;
+    }
+    return 0;
+}
+
+int campaign_replay_wait(const char *obj, const char *ev)
+{
+    static const struct { const char *level, *obj, *ev, *need[3]; } waits[] = {
+        {"ts2_zepride1_part01", "Zeppelin_cruiser_Intro_plc", "OnAnimBegin", {"Intro_Cooke", "Intro_rebel_1", NULL}},
+    };
+    char base[0x110];
+    if (!enabled || role() != MODE_CLIENT)
+        return 0;
+    level_base(LEVEL_NAME, base, sizeof base);
+    for (int i = 0; i < (int)(sizeof waits / sizeof waits[0]); i++) {
+        if (_stricmp(base, waits[i].level) || strcmp(obj, waits[i].obj) || strcmp(ev, waits[i].ev))
+            continue;
+        for (int k = 0; waits[i].need[k]; k++)
+            if (!named_quiet(waits[i].need[k])) {
+                static DWORD logged;
+                if (GetTickCount() - logged > 1000)
+                    VLOG("campaign: replay %s.%s waits for %s", obj, ev, waits[i].need[k]);
+                logged = GetTickCount();
+                return 1;
+            }
+    }
+    return 0;
+}
+
+/* ---- vehicles: a transform stream (TS_CAMPAIGN_VEHSYNC, default on; NOT YET RUN) ----
+ * Vehicles (one engine class, vtable 0xd7ebb0: zeppelins, armoured cars, trucks, bikes/quads, helicopters, jets,
+ * interceptors) have net ids but no motion component (+0x34), so nothing carries their transform: on a client the
+ * route-driven ones stood still (their StartRoute there crashed the AI ones, AV 0x49bddd), and a client's quad moved
+ * only on the client. Now every machine sends the vehicles it moves itself: the host every vehicle that moves on the
+ * host (route, AI, physics, its own player's quad), unless a client sent that vehicle within the last second; a client
+ * the vehicles that have a physics body on the client (+0x27c: only the one its player drives). Receivers place them
+ * through the scene node's matrix setter (0x94dbf0(node, 4x4, 0): the same call the network readers end in,
+ * 0x68e1b0), 100 ms behind, interpolated. Vehicles a client runs on its own route (campaign_local_call) are left
+ * out. 10 Hz while moving, plus one send 0.5 s after a vehicle stops.
+ * Message 76 (either way): {u8 1, u8 n, n x {u32 name hash, f32 rows[3][3], f32 pos[3]}} (n <= 4: coopnet's 250). */
+#define VEH_VT 0xd7ebb0
+#define VEH_BODY 0x27c
+#define MAX_VEH 96
+#define NODE_MAT 0x38                        /* scene node: 4x4 world matrix (rows x, y, z, position) */
+#define ENT_BUCKETS (*(char **)0xecb7fc)
+#define ENT_NBUCKETS (*(int *)0xecb800)
+typedef struct {
+    unsigned hash;
+    char *ent;
+    float sent[12];                          /* what this machine sent last */
+    DWORD sent_at, still_since;
+    int final_due;
+    float a[12], b[12];                      /* received: the two latest samples */
+    DWORD a_at, b_at;
+    int have;
+} Veh;
+static Veh vehs[MAX_VEH];
+static int n_veh, use_vehsync = 1, veh_sent, veh_got;
+static DWORD veh_send_at;
+static char veh_level[0x110];
+
+static unsigned name_hash(const char *s)
+{
+    unsigned h = 2166136261u;
+    for (; *s; s++)
+        h = (h ^ (unsigned char)*s) * 16777619u;
+    return h;
+}
+
+static int veh_local_route(const char *name)
+{
+    static const char *const local[] = {"Zeppelin|Zeppelin_cruiser_ACTOR", "DIRIGIBLE1|dirigible_ACTOR",
+                                        "ref_dirigible|dirigible_ACTOR", NULL};
+    for (int i = 0; local[i]; i++)
+        if (!strcmp(name, local[i]))
+            return use_routes;
+    return 0;
+}
+
+static void veh_read(char *ent, float *m)
+{
+    char *node = *(char **)(ent + ENT_NODE);
+    for (int r = 0; r < 4; r++)
+        memcpy(m + r * 3, node + NODE_MAT + r * 16, 12);
+}
+
+static void veh_scan(void)
+{
+    if (strcmp(veh_level, LEVEL_NAME) != 0) {
+        n_veh = 0;
+        snprintf(veh_level, sizeof veh_level, "%s", LEVEL_NAME);
+    }
+    for (int k = 0; k < n_veh; k++)
+        vehs[k].ent = NULL;
+    char *b = ENT_BUCKETS;
+    int nb = ENT_NBUCKETS;
+    for (int i = 0; b && i < nb; i++)
+        for (char *o = *(char **)(b + i * 12); o; ) {
+            if (*(DWORD *)o == VEH_VT && *(void **)(o + ENT_NODE) && !IsBadReadPtr(*(void **)(o + ENT_NODE), 0x78)) {
+                const char *nm = ent_name(o);
+                if (nm[0] && !veh_local_route(nm)) {
+                    unsigned h = name_hash(nm);
+                    int k;
+                    for (k = 0; k < n_veh && vehs[k].hash != h; k++)
+                        ;
+                    if (k == n_veh && n_veh < MAX_VEH) {
+                        memset(&vehs[k], 0, sizeof vehs[k]);
+                        vehs[k].hash = h;
+                        veh_read(o, vehs[k].sent);
+                        vehs[k].still_since = GetTickCount();
+                        n_veh++;
+                    }
+                    if (k < n_veh)
+                        vehs[k].ent = o;
+                }
+            }
+            char *next = *(char **)(o + 8);
+            o = next ? next - 4 : NULL;
+        }
+}
+
+static int veh_mine(Veh *v, DWORD now)
+{
+    if (!v->ent)
+        return 0;
+    if (role() == MODE_CLIENT)
+        return *(void **)(v->ent + VEH_BODY) != NULL;
+    return !v->have || now - v->b_at > 1000;   /* (host: unless a client drives it) */
+}
+
+static void veh_send(DWORD now)
+{
+    unsigned char msg[2 + 4 * 52];
+    int n = 0;
+    for (int k = 0; k < n_veh; k++) {
+        Veh *v = &vehs[k];
+        if (!veh_mine(v, now))
+            continue;
+        float m[12];
+        veh_read(v->ent, m);
+        float d = 0.f;
+        for (int i = 0; i < 12; i++)
+            d = fmaxf(d, fabsf(m[i] - v->sent[i]));
+        int moved = d > 0.004f, final = !moved && v->final_due && now - v->sent_at >= 500;
+        if (!moved && !final)
+            continue;
+        v->final_due = moved;
+        memcpy(v->sent, m, sizeof m);
+        v->sent_at = now;
+        memcpy(msg + 2 + n * 52, &v->hash, 4);
+        memcpy(msg + 2 + n * 52 + 4, m, 48);
+        if (++n == 4) {
+            msg[0] = PROTO, msg[1] = (unsigned char)n;
+            coopnet_send(-1, SUB_VEH, msg, 2 + n * 52);
+            veh_sent += n;
+            n = 0;
+        }
+    }
+    if (n) {
+        msg[0] = PROTO, msg[1] = (unsigned char)n;
+        coopnet_send(-1, SUB_VEH, msg, 2 + n * 52);
+        veh_sent += n;
+    }
+}
+
+static void veh_receive(const unsigned char *b, int len)
+{
+    DWORD now = GetTickCount();
+    for (int j = 0; j < b[1] && 2 + (j + 1) * 52 <= len; j++) {
+        unsigned h;
+        memcpy(&h, b + 2 + j * 52, 4);
+        for (int k = 0; k < n_veh; k++)
+            if (vehs[k].hash == h) {
+                Veh *v = &vehs[k];
+                if (v->have && now - v->b_at < 1000) {
+                    memcpy(v->a, v->b, 48);
+                    v->a_at = v->b_at;
+                } else {
+                    memcpy(v->a, b + 2 + j * 52 + 4, 48);
+                    v->a_at = now - 100;
+                }
+                memcpy(v->b, b + 2 + j * 52 + 4, 48);
+                v->b_at = now;
+                v->have = 1;
+                veh_got++;
+                break;
+            }
+    }
+}
+
+static void veh_apply(DWORD now)
+{
+    for (int k = 0; k < n_veh; k++) {
+        Veh *v = &vehs[k];
+        if (!v->have || !v->ent || veh_mine(v, now) || now - v->b_at > 3000)
+            continue;
+        if (role() == MODE_CLIENT && *(void **)(v->ent + VEH_BODY))
+            continue;
+        float span = (float)(v->b_at - v->a_at), t = span > 1.f ? (float)(now - v->b_at) / span : 1.f, m[12];
+        t = t < 0.f ? 0.f : t > 1.f ? 1.f : t;   /* (100 ms behind: from a to b over the gap between them) */
+        for (int i = 0; i < 12; i++)
+            m[i] = v->a[i] + (v->b[i] - v->a[i]) * t;
+        char *node = *(char **)(v->ent + ENT_NODE);
+        float mat[16];
+        memcpy(mat, node + NODE_MAT, 64);
+        for (int r = 0; r < 4; r++)
+            memcpy(mat + r * 4, m + r * 3, 12);
+        if (!memcmp(mat, node + NODE_MAT, 64))
+            continue;
+        ((void (TSCALL *)(void *, float *, int))0x94dbf0)(node, mat, 0);
+    }
+}
+
+static void veh_step(DWORD now)
+{
+    if (!use_vehsync || !(GAME_FLAGS & 0x2000) || !LEVEL_NAME[0])
+        return;
+    veh_scan();   /* (every frame, as aisync.c walks its AI: no pointer to a vehicle outlives a frame) */
+    if (now - veh_send_at >= 100) {
+        veh_send_at = now;
+        veh_send(now);
+    }
+    veh_apply(now);
+}
+
 /* ---- per frame (host) ---- */
 static void frame(float dt)
 {
@@ -1001,12 +1265,14 @@ static void frame(float dt)
     int r = role();
     if (r == MODE_CLIENT) {
         client_frame();
+        veh_step(now);
         return;
     }
     if (r != MODE_SERVER) {
         ride_vehicle[0] = 0;
         return;
     }
+    veh_step(now);
     if (use_latejoin)
         latejoin_step(now);
     if (use_seats) {
@@ -1151,6 +1417,44 @@ int campaign_console(const char *text, char *out, int size)
         memcpy(node + o, v, 12);
         return snprintf(out, size, "%s node +%x set", a1, o), 1;
     }
+    if (!strcmp(cmd, "find") || !strcmp(cmd, "near")) {   /* "!cp find <text>", "!cp near <object> <m>": named objects (lab) */
+        char *mgr = MGR, *c = NULL;
+        void **data = mgr ? *(void ***)(mgr + 0x14) : NULL;
+        int cnt = mgr ? *(int *)(mgr + 0x18) : 0, n = 0;
+        float rad = 10.f, cp[3] = {0, 0, 0};
+        sscanf(text + 3, "%*s %*s %f", &rad);
+        if (!strcmp(cmd, "near") && (!(c = find_ent(a1)) || !ent_pos(c, cp)))
+            return snprintf(out, size, "%s: none", a1), 1;
+        for (int i = 0; data && i < cnt && n < size - 70; i++) {
+            String nm = data[i] ? *(String *)((char *)data[i] + INST_NAME) : NULL;
+            char *e = data[i] ? *(char **)((char *)data[i] + INST_NATIVE) : NULL;
+            float p[3];
+            if (!nm || !nm->s[0])
+                continue;
+            if (c) {
+                if (!ent_pos(e, p) || (p[0] - cp[0]) * (p[0] - cp[0]) + (p[1] - cp[1]) * (p[1] - cp[1])
+                    + (p[2] - cp[2]) * (p[2] - cp[2]) > rad * rad)
+                    continue;
+            } else if (!strstr(nm->s, a1))
+                continue;
+            n += snprintf(out + n, size - n, " %s;", nm->s);
+        }
+        return 1;
+    }
+    if (!strcmp(cmd, "vehs")) {   /* "!cp vehs": the vehicles of the stream (lab) */
+        DWORD now = GetTickCount();
+        int n = snprintf(out, size, "%d vehicle(s), sent %d, got %d:", n_veh, veh_sent, veh_got);
+        for (int k = 0; k < n_veh && n < size - 80; k++) {
+            Veh *v = &vehs[k];
+            float pos[3] = {0, 0, 0};
+            if (v->ent)
+                ent_pos(v->ent, pos);
+            n += snprintf(out + n, size - n, " %s%s%s%s (%.1f %.1f %.1f);", v->ent ? ent_name(v->ent) : "?",
+                          v->ent && *(void **)(v->ent + VEH_BODY) ? " body" : "", veh_mine(v, now) ? " mine" : "",
+                          v->have && now - v->b_at < 1000 ? " recv" : "", pos[0], pos[1], pos[2]);
+        }
+        return 1;
+    }
     if (!strcmp(cmd, "where")) {   /* "!cp where": this machine's player position (lab) */
         float pos[3] = {0, 0, 0};
         int ok = ent_pos(PLAYER, pos);
@@ -1200,6 +1504,7 @@ void campaign_install(void)
     use_latejoin = !(ts_env("TS_CAMPAIGN_LATEJOIN", v, sizeof v) && v[0] == '0');
     use_ai = !(ts_env("TS_CAMPAIGN_AI", v, sizeof v) && v[0] == '0');
     use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
+    use_vehsync = !(ts_env("TS_CAMPAIGN_VEHSYNC", v, sizeof v) && v[0] == '0');
     if (ts_env("TS_CAMPAIGN_RIDE_HEIGHT", v, sizeof v))
         ride_height = (float)atof(v);
     if (!ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_GATHER, SUB_LAST, on_message)) {
@@ -1230,7 +1535,9 @@ void campaign_install(void)
     }
     enabled = 1;
     ts_log("campaign: on (domain rules %s, gather after %d s, death domains %s, seats/rides %s, force"
-           " fields on clients %s, late joiners %s, AI nearest player %s, %d native hook(s))", use_rules ? "on" : "off",
+           " fields on clients %s, late joiners %s, AI nearest player %s, vehicle stream %s, %d native hook(s))",
+           use_rules ? "on" : "off",
            gather_after, use_kill ? "kill per player" : "as storysync", use_seats ? "on" : "off",
-           use_setspeed ? "on" : "off", use_latejoin ? "on" : "off", use_ai ? "on" : "off", n_hooked);
+           use_setspeed ? "on" : "off", use_latejoin ? "on" : "off", use_ai ? "on" : "off", use_vehsync ? "on" : "off",
+           n_hooked);
 }
