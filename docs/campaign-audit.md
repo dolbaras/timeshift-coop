@@ -549,6 +549,21 @@ Not proven live (open):
   `work\tmp_agent\build.sh` copies `ts.h` from the tree but the clean worktree still had the old `gamepad.c`, so that
   build failed (`gamepad_mask_player2` mismatch from the split agent's work) and the run used the 22:11 DLL, which has
   the vehicle code as committed; sync the worktree to HEAD before building.
+- **Live result 2026-10-27 after the 2 s resend (runs n100pair-20261027-013050, -015106, -015304).** Messages now reach
+  the client (level 9: 147 msgs in, 0 unknown). Proven by positions: level 19 armoured cars (Bronevik, Opp_Bronevik,
+  Opp_Bronevik_1) sit at the host's coordinates on the client (host and client both -101.6 -9.9 -25.2 etc. at 108 s,
+  they had driven from -252.9 -10.6 123.7); level 9 `vhc_truck` -126.7 -40.1 -267.4 on both (client stood at its start
+  before); level 7 `helicopter_actor` is one static vehicle (2.5 15.3 0.3 on both; the interceptors are not in the
+  vehicle class). Frames (runs ...-015304, host shot109 / client shot089) show the level 19 courtyard, not the cars, so
+  the numbers are the proof. **Not working: the level 9 AI quads** (`opp_bike1/2`, `bike11` with a rider): the client's
+  node local position (+0x14) takes the host's value, but the world matrix (+0x68) and the entity copy (+0x23c, +0x100,
+  +0x340) snap back to the start place -301 -31.7 -409 within a frame; writing the node, the entity and
+  `[ent+0x274]+0x338`, clearing the rider link (+0x9c0) and the entity's own `place()` did not hold it. The truck's node
+  has an animation (`anim 1`), the bike's none (`anim -1`, flags `+8 = 80600000`, `+0xc = 00002641` against the truck's
+  `30600000`, `00000600`): next RE step is the bike's per-frame update (vtable `0xd91610`, slot +0x204 = `0x6a9fb0`
+  is shared; look for who writes node +0x38..0x74 from `ent+0x23c`). Lab commands added for this: `!cp scan <obj> x y
+  z`, `entset`, `ptrset`, `placeobj` (placeobj crashes the argument list: do not use), `!cp node` prints the raw
+  flags and the user pointer.
 - Earlier plan for (2) AI vehicles on clients. `!cp nodeset <obj> 68 x y z` writes on a client persist (the crane probe), so try
   a host position stream (node +0x38/+0x48/+0x58 rows and +0x68, maybe +0x14) for route-driven vehicles. Then (3)-(6) as
   listed in the coordinator's order (16 chatter, Cooke's dialogue on 8, the replay flood on 23, the unverified items),

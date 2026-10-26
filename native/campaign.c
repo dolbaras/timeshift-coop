@@ -1430,6 +1430,8 @@ int campaign_console(const char *text, char *out, int size)
         int n = snprintf(out, size, "%s vt %p [+204 %p] node %p anim %d t %.3f:", a1, *(void **)e,
                          (*(void ***)e)[0x204 / 4], node, ((int (TSCALL *)(void *))0x951660)(node),
                          (double)((float (TSCALL *)(void *))0x951500)(node));
+        n += snprintf(out + n, size - n, " raw[4,8,c]=%08x %08x %08x user %p:", *(unsigned *)(node + 4), *(unsigned *)(node + 8),
+                      *(unsigned *)(node + 0xc), *(void **)(e + VEH_USER));
         for (int o = 0x08; o < 0x80 && n < size - 16; o += 4)
             n += snprintf(out + n, size - n, " %x:%.2f", o, (double)*(float *)(node + o));
         return 1;
@@ -1519,6 +1521,59 @@ int campaign_console(const char *text, char *out, int size)
         ent_pos(pl, pos);
         return snprintf(out, size, "player placed (flag %d) at %.2f %.2f %.2f, now %.2f %.2f %.2f, inside %d", flag, at[0],
                         at[1], at[2], pos[0], pos[1], pos[2], inside(dom, pl)), 1;
+    }
+    if (!strcmp(cmd, "scan")) {   /* "!cp scan <object> x y z": where the entity and the memory it points to hold that position (lab) */
+        char *e = find_ent(a1);
+        float v[3];
+        if (!e || sscanf(text + 3, "%*s %*s %f %f %f", &v[0], &v[1], &v[2]) != 3)
+            return snprintf(out, size, "usage: !cp scan <object> x y z"), 1;
+        int n = 0;
+        for (int pass = 0; pass < 2 + 1; pass++) {   /* (the entity, its node, then every pointer field of the entity) */
+            for (int pf = 0; pf < (pass == 2 ? 0x400 : 1); pf += 4) {
+                char *base = pass == 0 ? e : pass == 1 ? *(char **)(e + ENT_NODE) : *(char **)(e + pf);
+                if (!base || (pass == 2 && ((unsigned)base < 0x10000 || IsBadReadPtr(base, 0x400))) || IsBadReadPtr(base, 0x400))
+                    continue;
+                for (int o = 0; o < 0x400 && n < size - 60; o += 4) {
+                    float *f = (float *)(base + o);
+                    if (fabsf(f[0] - v[0]) < 0.06f && fabsf(f[1] - v[1]) < 0.06f && fabsf(f[2] - v[2]) < 0.06f)
+                        n += snprintf(out + n, size - n, pass == 2 ? " [ent+%x]+%x;" : pass == 1 ? " node+%x;" : " ent+%x;",
+                                      pass == 2 ? pf : o, o);
+                }
+            }
+        }
+        return 1;
+    }
+    if (!strcmp(cmd, "entset")) {   /* "!cp entset <object> <hex offset> x y z": write 3 floats into the entity itself (lab) */
+        char *e = find_ent(a1);
+        unsigned o = 0;
+        float v[3];
+        if (!e || sscanf(text + 3, "%*s %*s %x %f %f %f", &o, &v[0], &v[1], &v[2]) != 4 || o > 0xa00)
+            return snprintf(out, size, "usage: !cp entset <object> <hex offset> x y z"), 1;
+        memcpy(e + o, v, 12);
+        return snprintf(out, size, "%s ent +%x set", a1, o), 1;
+    }
+    if (!strcmp(cmd, "ptrset")) {   /* "!cp ptrset <object> <hex ptr offset> <hex offset> x y z": 3 floats into an object the entity points to (lab) */
+        char *e = find_ent(a1), *q;
+        unsigned po = 0, o = 0;
+        float v[3];
+        if (!e || sscanf(text + 3, "%*s %*s %x %x %f %f %f", &po, &o, &v[0], &v[1], &v[2]) != 5 || po > 0x700 || o > 0x700)
+            return snprintf(out, size, "usage: !cp ptrset <object> <hex ptr offset> <hex offset> x y z"), 1;
+        q = *(char **)(e + po);
+        if (!q || (unsigned)q < 0x10000 || IsBadReadPtr(q, o + 12))
+            return snprintf(out, size, "%s: no object at +%x", a1, po), 1;
+        memcpy(q + o, v, 12);
+        return snprintf(out, size, "%s [+%x]+%x set", a1, po, o), 1;
+    }
+    if (!strcmp(cmd, "placeobj")) {   /* "!cp placeobj <object> x y z [flag]": the entity's own place() (vtable +0x210) (lab) */
+        char *e = find_ent(a1), *node = e ? *(char **)(e + ENT_NODE) : NULL;
+        float at[3], pos[3] = {0, 0, 0};
+        int flag = 0;
+        if (!node || sscanf(text + 3, "%*s %*s %f %f %f %d", &at[0], &at[1], &at[2], &flag) < 3)
+            return snprintf(out, size, "usage: !cp placeobj <object> x y z [flag]"), 1;
+        float dir[3] = {*(float *)(node + NODE_DIR), *(float *)(node + NODE_DIR + 4), *(float *)(node + NODE_DIR + 8)};
+        ((void (TSCALL *)(void *, float *, float *, int))(*(void ***)e)[PLAYER_PLACE / 4])(e, at, dir, flag);
+        ent_pos(e, pos);
+        return snprintf(out, size, "%s placed (flag %d), now %.2f %.2f %.2f", a1, flag, pos[0], pos[1], pos[2]), 1;
     }
     if (!strcmp(cmd, "at")) {   /* "!cp at x y z [object]": this machine's player to a point, facing the object (lab) */
         char *pl = PLAYER, *node = pl ? *(char **)(pl + ENT_NODE) : NULL, look[64] = "";
