@@ -30,6 +30,8 @@
  * Messages (coopnet.c, reliable, subtypes 80-89):
  *   80 client -> server  {u8 1, u8 what (1 = start, 0 = stop), u8 tenths of a second}
  *   81 server -> client  {u8 1, u8 on, u8 yours, u8 tenths left, i32 owner}   (repeated every second while on)
+ *   82 server -> client  {u8 1}   (trapped in a closed container after a rewind)
+ *   83 server -> client  {u8 1, u8 actor, u8 clip, u8 flags, f32 time}   (rewind actors' clips, see send_anims)
  *
  * Real rewind on the host (TS_COOP_REWIND=1, with TS_COOP_REVERSE=1): the engine's own time recorder.
  * It takes a snapshot of every isSyncTR object every 0.1 s through the save serializer [0x1095f94] (0x5849c0, flags
@@ -413,6 +415,133 @@ static void push_rewind_actors(void)
     }
 }
 
+/* Rewound animations on clients. The rewind actors are animated actors: their clip and time are not in the network
+ * update (a client's copy runs the clips the replayed story starts), so a client's crane stayed where it was after
+ * the host's rewind (live, level 5). The host sends each rewind actor's clip and time every 0.1 s of a playback
+ * (hold: the client shows that frame and stops the clip) and three times after it (the clip runs on from there when
+ * it runs on the host). The client sets them through the actor's own script method Start(clip, time[, cycle]) and
+ * Stop() (live: Start("FORTH", 1.0) on a client set the clip time, Stop() held it).
+ * Engine facts: Start (0x6a9fb0, Kran_actor vtable +0x204) = clip index 0x952a60(node, name) -> 0x6aaea0 (entity
+ * +0x280: bit 0 channel 0 runs, bit 4 its cycle flag); the clip running on channel 0 = 0x951660(node), its time =
+ * 0x951500(node), node = entity +0x230. The clip names are the ones the level scripts start. */
+#define SUB_ANIM 83                          /* server -> client {u8 1, u8 actor, u8 clip, u8 flags (1 runs, 2 cycle, 4 hold), f32 time} */
+static const char *const actor_clips[] = {
+    "Kran_actor", "FORTH", "BACK", NULL,
+    "Conveyer_actor", "LEFT", "RIGHT", NULL,
+    "bridge_puzle_actor", "DOWN", "UP", "IDLE", NULL,
+    "Lift_actor", "DOWN", "UP", NULL,
+    "Actor_train", "MOVE", NULL,
+    "Actor_ghost_train", "MOVE", NULL,
+    "cage1_actor", "FALL", NULL,
+    "cage2_actor", "FALL", NULL,
+    NULL};
+#define MAX_ANIM_ACTORS 4
+static int (TSCALL *node_clip_index)(void *, const char *) = (void *)0x952a60;
+static int (TSCALL *node_clip)(void *) = (void *)0x951660;
+static float (TSCALL *node_clip_time)(void *) = (void *)0x951500;
+static DWORD anim_last, anim_final_at;
+static int anim_finals;
+static struct { int set, clip, flags; float t; } anim_in[MAX_ANIM_ACTORS];   /* (client) the latest per actor */
+
+static const char *const *clips_of(const char *actor)
+{
+    for (const char *const *p = actor_clips; *p; p++) {
+        if (!_stricmp(*p, actor))
+            return p + 1;
+        while (*p)
+            p++;
+    }
+    return NULL;
+}
+
+/* The running level's rewind actors (NULL-terminated), or NULL. */
+static const char *const *level_actors(void)
+{
+    char base[0x110];
+    level_base(LEVEL_NAME, base, sizeof base);
+    const char *const *p = rewind_actors;
+    while (*p && _stricmp(*p, base) != 0) {
+        while (*p)
+            p++;
+        p++;
+    }
+    return *p ? p + 1 : NULL;
+}
+
+static char *named_ent(const char *name)
+{
+    String nm = 0;
+    ObjPtr inst = 0;
+    str_ctor(&nm, name, -1, 0);
+    mgr_find_obj(MGR, &inst, &nm);
+    if (nm && --nm->refs == 0)
+        eng_free(nm);
+    if (!inst)
+        return NULL;
+    char *e = *(char **)((char *)inst + 0xc);
+    inst_release(&inst);
+    return e && !IsBadReadPtr(e, 0x284) ? e : NULL;
+}
+
+static void send_anims(int hold)
+{
+    const char *const *a = level_actors();
+    for (int k = 0; a && a[k] && k < MAX_ANIM_ACTORS; k++) {
+        char *e = named_ent(a[k]), *node = e ? *(char **)(e + 0x230) : NULL;
+        const char *const *c = clips_of(a[k]);
+        if (!node || IsBadReadPtr(node, 0x88) || !c)
+            continue;
+        int id = node_clip(node), ci = -1;
+        for (int j = 0; id >= 0 && c[j]; j++)
+            if (node_clip_index(node, c[j]) == id) {
+                ci = j;
+                break;
+            }
+        if (ci < 0)
+            continue;
+        unsigned fl = *(unsigned *)(e + 0x280);
+        float t = node_clip_time(node);
+        unsigned char b[8] = {PROTO, (unsigned char)k, (unsigned char)ci,
+                              (unsigned char)((fl & 1 ? 1 : 0) | (fl & 0x10 ? 2 : 0) | (hold ? 4 : 0))};
+        memcpy(b + 4, &t, 4);
+        coopnet_send(-1, SUB_ANIM, b, sizeof b);
+        if (!hold)
+            VLOG("coopreverse: %s clip %s at %.2f s (%s) sent", a[k], c[ci], (double)t, fl & 1 ? "runs" : "stopped");
+    }
+}
+
+/* (client, script tick) */
+static void apply_anims(void)
+{
+    const char *const *a = level_actors();
+    for (int k = 0; a && k < MAX_ANIM_ACTORS; k++) {
+        if (!anim_in[k].set)
+            continue;
+        anim_in[k].set = 0;
+        int n = 0;
+        while (a[n])
+            n++;
+        const char *const *c = k < n ? clips_of(a[k]) : NULL;
+        int nc = 0;
+        while (c && c[nc])
+            nc++;
+        if (!c || anim_in[k].clip >= nc)
+            continue;
+        char stmt[160], res[120];
+        int fl = anim_in[k].flags;
+        snprintf(stmt, sizeof stmt, "$%s.Start(\"%s\",%.3f%s)", a[k], c[anim_in[k].clip], (double)anim_in[k].t,
+                 fl & 2 ? ",1" : "");
+        ts_script_run(stmt, res, sizeof res);
+        if ((fl & 4) || !(fl & 1)) {
+            snprintf(stmt, sizeof stmt, "$%s.Stop()", a[k]);
+            ts_script_run(stmt, res, sizeof res);
+        }
+        if (!(fl & 4))
+            VLOG("coopreverse: %s set to clip %s at %.2f s (%s) -> %s", a[k], c[anim_in[k].clip], (double)anim_in[k].t,
+                 fl & 1 ? "runs" : "stopped", res);
+    }
+}
+
 /* The recorder task's per-frame update (0x584960, its vtable +0x138) keeps running during a playback, when the
  * script tick (this file's frame) does not: the network updates of the rewind actors and the end of a client's reverse
  * happen here. */
@@ -422,8 +551,13 @@ __attribute__((used)) void crw_tick(void)
 {
     if (!stock || !on || !stock_run || game_mode() != MODE_SERVER)
         return;
-    if (playing())
+    if (playing()) {
         push_rewind_actors();
+        if (GetTickCount() - anim_last >= 100) {
+            anim_last = GetTickCount();
+            send_anims(1);
+        }
+    }
     if (stock_ours && (int)(GetTickCount() - until) >= 0)
         host_stop("time up");
 }
@@ -564,6 +698,8 @@ static void host_stop(const char *why)
     apply(0, 0);   /* (with stock_run still set: the engine fires the host's OnStopTReverse itself) */
     if (was_stock) {
         trap_until = GetTickCount() + 1500;
+        anim_final_at = GetTickCount() + 200;
+        anim_finals = 3;
         stock_run = stock_ours = 0;
     }
     owner = NONE;
@@ -608,6 +744,14 @@ static void on_message(int peer, unsigned short sub, const unsigned char *b, int
         apply(b[1] != 0, b[2] != 0);
     else if (sub == SUB_TRAP && game_mode() == MODE_CLIENT)
         trap_kill = 1;   /* (run in the script tick) */
+    else if (sub == SUB_ANIM && game_mode() == MODE_CLIENT && len >= 8 && b[1] < MAX_ANIM_ACTORS) {
+        float t;
+        memcpy(&t, b + 4, 4);
+        anim_in[b[1]].clip = b[2];
+        anim_in[b[1]].flags = b[3];
+        anim_in[b[1]].t = t;
+        anim_in[b[1]].set = 1;   /* (run in the script tick) */
+    }
 }
 
 /* ---- the reverse key (called from the thunk at 0x40d491, ebx = the player): 1 = consumed ---- */
@@ -689,6 +833,13 @@ static void frame(float dt)
         ts_script_run(game_mode() == MODE_CLIENT ? "$player.FailMission(\"\")" : "$player.Kill()", res, sizeof res);
         RLOG("coopreverse: trapped in a container after the host's rewind: killed -> %s", res);
     }
+    if (game_mode() == MODE_CLIENT)
+        apply_anims();
+    if (game_mode() == MODE_SERVER && anim_finals > 0 && (int)(now - anim_final_at) >= 0) {
+        send_anims(0);   /* (after a rewind: 0.2, 0.6 and 1.5 s after its end) */
+        anim_final_at = now + (anim_finals == 3 ? 400 : 900);
+        anim_finals--;
+    }
     if (stock && game_mode() == MODE_SERVER) {
         rec_pause_step();
         if (!on && playing() && !timesync_busy()) {   /* the host's own key started the engine's reverse */
@@ -745,6 +896,10 @@ int coopreverse_console(const char *text, char *out, int size)
     if (!strcmp(cmd, "trapcheck")) {   /* (lab) the container trap check of the end of a rewind, now */
         trap_check();
         return snprintf(out, size, "trap check run"), 1;
+    }
+    if (!strcmp(cmd, "anims") && game_mode() == MODE_SERVER) {   /* (lab) send the rewind actors' clips now */
+        send_anims(0);
+        return snprintf(out, size, "rewind actors' clips sent"), 1;
     }
     if (!strcmp(cmd, "stop") && active()) {
         request(0, 0.f);

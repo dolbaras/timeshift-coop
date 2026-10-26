@@ -518,6 +518,19 @@ Not proven live (open):
 
 ## 3c. Whole-campaign bot pass (N100 pair, 2026-10-26)
 
+**Resume here (2026-10-26, stopped for the owner's shutdown).** Working through the gap list below in order.
+- (1) Rewound objects on clients: done in coopreverse.c (message 83). During the host's playback it sends each rewind
+  actor's clip and time every 0.1 s; the client sets them with the actor's own `Start(clip, time[, cycle])` and `Stop()`;
+  three more sends after the end. Live on level 5 (run `n100pair-20261026-044632`): the client's crane clip time went
+  5.5 -> 4.71 -> 2.10 during the host's rewind and ran on to 5.5 with the host's afterwards. Proven by the clip times
+  on both sides; the frames came from a client standing on the crane, so they do not show the movement clearly.
+  Next: a frame pair with the client watching the crane from the floor; then levels 9, 10, 19, 23 (bridge, lift, train,
+  cages).
+- Next step: (2) AI vehicles on clients. `!cp nodeset <obj> 68 x y z` writes on a client persist (the crane probe), so try
+  a host position stream (node +0x38/+0x48/+0x58 rows and +0x68, maybe +0x14) for route-driven vehicles. Then (3)-(6) as
+  listed in the coordinator's order (16 chatter, Cooke's dialogue on 8, the replay flood on 23, the unverified items),
+  then re-run the bot on the touched levels.
+
 `lab\campaign_bot.ps1` (private lab, Windows PowerShell 5.1): for each level it starts the pair on that level as a
 co-op session (story, time powers, campaign rules and rewind on by default), waits until the client runs it, checks
 both (session role, same level, story replays), takes frames, idles 25 s, then takes the level's exit on the host
