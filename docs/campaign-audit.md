@@ -526,7 +526,19 @@ Not proven live (open):
   on both sides; the frames came from a client standing on the crane, so they do not show the movement clearly.
   Next: a frame pair with the client watching the crane from the floor; then levels 9, 10, 19, 23 (bridge, lift, train,
   cages).
-- Next step: (2) AI vehicles on clients. `!cp nodeset <obj> 68 x y z` writes on a client persist (the crane probe), so try
+- **Update 2026-10-27 (vehicle stream, commits 4563c63, 0a192c9; built, level 9 probed, stream not yet seen working).**
+  `campaign.c` message 76 streams vehicle transforms (host: every vehicle it moves; client: the vehicle its own player
+  uses, `+0x9c0 == $player`); `TS_CAMPAIGN_VEHSYNC=0` switches it off. First probe (n100pair-20261026-215624, level 9):
+  `!cp vehs` listed only the 7 `truck_barrel_*` and never a bike: the stream matched one vtable (0xd7ebb0). Lab probe
+  `!cp vts <text>` (run -220609) showed the classes: bikes/quads `0xd91610`, trucks/armoured cars `0xd91970`, the
+  vehicle family is nine vtables; a vtable scan of the exe found the base method `0x51c160` in slot `+0x78` of exactly
+  those nine, so vehicles are now recognised by that slot (`is_vehicle`). Also `!cp at x y z [object]` (lab: put this
+  machine's player at a point, facing an object, for the "watch from the floor" frame pairs). To do on the N100 (it was
+  lent to the split agent): level 9 `!cp vehs` on both sides (bike/bronik/truck `recv` on the client), a client
+  `StartUse("bike1")` + drive (host sees it), level 7 helicopters/interceptors, level 19 armoured car; then the frame
+  pairs of goal 2 (use `!cp at` next to `Kran_actor` etc. on the client). Level 16 chatter filter
+  (`campaign_frame_local`) and level 8 Cooke wait (`campaign_replay_wait`) are built but not run either.
+- Earlier plan for (2) AI vehicles on clients. `!cp nodeset <obj> 68 x y z` writes on a client persist (the crane probe), so try
   a host position stream (node +0x38/+0x48/+0x58 rows and +0x68, maybe +0x14) for route-driven vehicles. Then (3)-(6) as
   listed in the coordinator's order (16 chatter, Cooke's dialogue on 8, the replay flood on 23, the unverified items),
   then re-run the bot on the touched levels.
