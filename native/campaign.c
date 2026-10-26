@@ -648,17 +648,31 @@ static void ride_broadcast(void)
     coopnet_send(-1, SUB_RIDEPOS, b, sizeof b);
 }
 
+static DWORD level_start;   /* (host: set by latejoin_step when a level run starts) */
 void campaign_story_event(const char *obj, const char *ev, const char *arg0)
 {
     if (!use_seats || role() != MODE_SERVER || !obj || !ev)
         return;
     char base[0x110];
     level_base(LEVEL_NAME, base, sizeof base);
+    /* (a seat rule acts once per level run: live, ts2_zepride2_part01's intro actor ends its animation every minute,
+     * which pulled a client back into its turret each time; a team restart is a new level run) */
+    static unsigned seat_done;
+    static DWORD seat_level_start;
+    if (seat_level_start != level_start) {
+        seat_level_start = level_start;
+        seat_done = 0;
+    }
     for (int r = 0; r < N_SEAT; r++) {
         const SeatRule *s = &seat_rules[r];
         if (_stricmp(s->level, base) || strcmp(s->ev, ev) || !name_match(s->obj, obj)
             || (s->arg[0] && _stricmp(s->arg, arg0 ? arg0 : "")))
             continue;
+        if (s->act == A_SEAT && strcmp(s->obj, "Check_Point_*") != 0) {   /* (restores may seat again) */
+            if (seat_done & (1u << r))
+                continue;
+            seat_done |= 1u << r;
+        }
         int k = 0;
         for (int i = 0; slot_at(i); i++) {
             char *sl = slot_at(i);
