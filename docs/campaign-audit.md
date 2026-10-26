@@ -538,6 +538,17 @@ Not proven live (open):
   `StartUse("bike1")` + drive (host sees it), level 7 helicopters/interceptors, level 19 armoured car; then the frame
   pairs of goal 2 (use `!cp at` next to `Kran_actor` etc. on the client). Level 16 chatter filter
   (`campaign_frame_local`) and level 8 Cooke wait (`campaign_replay_wait`) are built but not run either.
+- **Live result, level 9 (run n100pair-20261027-011310, frames host shot087/108/119, client shot067/088/099).** Vehicle
+  recognition works: `!cp vehs` lists 10 vehicles on both sides (bronik1-3, vhc_truck, bike11, opp_bike1/2, Jet1-3). The
+  host's `sent` counter grew to 398 but the client's `got` stayed **0**: the AI bikes and the truck moved on the host
+  only (opp_bike2 host -144.6 -42.7 -247.9, client -301.0 -31.7 -409.1; vhc_truck host -126.7, client -173.6), so goal 1
+  is NOT proven. Open: whether message 76 reaches the client (the log shows only the first few "sent sub" lines; check
+  `coopnet` dispatch for sub 76 and add a receive counter/log in `on_message`), or arrives with a length that
+  `veh_receive` rejects. The client's `StartUse("bike1")` answered Ok but `bike1` is not among the vehicles yet (the
+  quads are created later by the level; list them with `!cp vts bike` after they appear). Build trap: the helper
+  `work\tmp_agent\build.sh` copies `ts.h` from the tree but the clean worktree still had the old `gamepad.c`, so that
+  build failed (`gamepad_mask_player2` mismatch from the split agent's work) and the run used the 22:11 DLL, which has
+  the vehicle code as committed; sync the worktree to HEAD before building.
 - Earlier plan for (2) AI vehicles on clients. `!cp nodeset <obj> 68 x y z` writes on a client persist (the crane probe), so try
   a host position stream (node +0x38/+0x48/+0x58 rows and +0x68, maybe +0x14) for route-driven vehicles. Then (3)-(6) as
   listed in the coordinator's order (16 chatter, Cooke's dialogue on 8, the replay flood on 23, the unverified items),
