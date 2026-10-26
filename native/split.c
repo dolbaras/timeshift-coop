@@ -309,6 +309,8 @@ static void record_item(BYTE *tpl, BYTE *node)
  * later gets it from the join list, through the player's create descriptor (vtable +0x38: the multiplayer class),
  * as a `player_mp`. While player 2 is made on a server, its announcement's class and template (+0x54, +0x94; +0x14
  * is the name) say "player_mp", as the server's own announcement of a client's player does (0x697620). */
+static BYTE *spawn_partner;   /* (player 1 while player 2 is spawned) */
+
 __attribute__((used)) void __cdecl split_create_msg(char *m)
 {
     static int n;
@@ -316,10 +318,28 @@ __attribute__((used)) void __cdecl split_create_msg(char *m)
         ts_log("split: announcement \"%.40s\" \"%.40s\" \"%.40s\"%s", m + 0x14, m + 0x54, m + 0x94, spawning_p2 ? " (player 2's spawn)" : "");
     if (!spawning_p2 || !m || strcmp(m + 0x54, "player") != 0)
         return;
-    ts_log("split: player 2 announced to the clients as \"player_mp\" (name \"%.40s\", was \"%.40s\" \"%.40s\")", m + 0x14, m + 0x54,
-           m + 0x94);
+    /* (the template: the multiplayer player model, as the player's create descriptor names it, vtable +0x334 =
+     * 0x407070 with 0: the profile's PlayerModel; "player_mp" is no template, the client made nothing of it and
+     * crashed at 0x6fbd1f, run 20261026-182411) */
+    char model[64] = "";
+    BYTE *p1 = spawn_partner;
+    if (p1 && *(DWORD *)p1 == PLAYER_VTBL) {
+        struct { LONG refs; int len, cap; char s[64]; } *e = NULL;   /* (a counted string, as EStr) */
+        ((void *(TSCALL *)(void *, void **, int))(*(void ***)p1)[0x334 / 4])(p1, (void **)&e, 0);
+        if (e && !IsBadReadPtr(e, 0x10) && e->len > 0 && e->len < (int)sizeof model)
+            snprintf(model, sizeof model, "%s", e->s);
+    }
+    ts_log("split: player 2 announced to the clients as \"player_mp\" (name \"%.40s\", was \"%.40s\" \"%.40s\"; template \"%s\")",
+           m + 0x14, m + 0x54, m + 0x94, model);
+    if (!model[0])
+        return;   /* (no model: the announcement as it was) */
     strcpy(m + 0x54, "player_mp");
-    strcpy(m + 0x94, "player_mp");
+    snprintf(m + 0x94, 0x40, "%s", model);
+    /* (its name tag on the clients: player 1's name with " 2", not the same name twice) */
+    char name[0x40];
+    snprintf(name, sizeof name, "%.40s", m + 0x14);
+    if (name[0])
+        snprintf(m + 0x14, 0x40, "%s 2", name);
 }
 
 __attribute__((naked)) static void create_msg_stub(void)
@@ -462,6 +482,7 @@ static int p2_depth(void);
 static void place_p2(BYTE *p1);
 static void place_player(BYTE *pl, BYTE *partner);
 static void p2_remove(const char *why);
+static int net_mode(void);
 static BYTE *rc;                /* the render camera: a copy of the view's camera with the half-screen fov */
 static BYTE *cam2;              /* player 2's camera (stage 2: an offset copy of player 1's) */
 
@@ -1281,6 +1302,23 @@ static int is_p1_object(BYTE *o)
 
 static int __stdcall hook_dispatch(BYTE *task, int msg, int a, int b)
 {
+    /* A level change: the host keeps its player 2 (a game object, as player 1), the clients load the new level
+     * and get it again from the join list. Their player_mp of it (no owning client, +0x30 = -2) outlived the old
+     * level, and the new level's player table pass (message 0x434, 0x5f78e0) looked up its model, missed and
+     * crashed (0x5f7985, runs 20261026-201715, -204537). A client removes it itself at the end of the level.
+     * (Removing player 2 on the host at the level end instead left it half removed: the host crashed, run
+     * 20261026-205550.) */
+    if (msg == 0x3f8 && task && *(DWORD *)task == 0xd74c28 && *(int *)(task + 0x30) == -2 && net_mode() == 3) {
+        int r = dispatch_tramp(task, msg, a, b);
+        DWORD fl = *(DWORD *)0xfcace8;
+        *(DWORD *)0xfcace8 = fl | 4;
+        dispatch_tramp(task, 2, 0, 0);
+        *(DWORD *)0xfcace8 = (*(DWORD *)0xfcace8 & ~4u) | (fl & 4u);
+        if (task == cp2)
+            cp2 = NULL;
+        ts_log("split: the host's player 2 (player_mp %p, net id %d) removed here at the level end", (void *)task, *(int *)(task + 0x18));
+        return r;
+    }
     if (msg == 1000 && n_p2_gone)
         for (int i = 0; i < n_p2_gone; i++)
             if (task == p2_gone[i].o && *(DWORD *)task == p2_gone[i].vt) {
@@ -1958,6 +1996,20 @@ static void p2_remove(const char *why)
     ts_log("split: player 2 removed: %s (%s)", why, out);
 }
 
+/* The player-table message 0x434 (0x5f52f0: the record of a player looked up with 0x5fb6f0, then 0x5f78e0 with
+ * that index) has no record for a host's player 2 on a client (the table holds the network players): the index
+ * -1 read the record before the table and crashed (0x5f7985 / 0x5f7906, esi = -0x84; runs 20261026-201715 to
+ * -210653, after a level change). A missing record is skipped (call at 0x5f53dd). */
+__attribute__((naked)) static void stat434_stub(void)
+{
+    __asm__("test %eax, %eax\n\t"
+            "js 1f\n\t"
+            "push $0x5f78e0\n\t"
+            "ret\n"
+            "1:\n\t"
+            "ret $4");
+}
+
 static void *TSCALL hook_dtor(void *pl, int flags)
 {
     if (!p2 || pl != p2) {
@@ -2270,6 +2322,7 @@ static void spawn_p2(BYTE *p1)
     /* (the object name names a placed object the new one is made from, found through [0xfcace4] vtable
      * +0x34: player 1's own "player" serves as the template; a name of nothing placed gives no object) */
     spawning_p2 = 1;
+    spawn_partner = p1;
     n_own2 = 0;
     n_crs[1] = 0;
     n_geo2 = 0;
@@ -3460,6 +3513,13 @@ void split_install(void)
         *(DWORD *)(rep2 + 1) = (DWORD)create_msg_stub - (0x654bee + 5);
         if (!ts_patch_bytes(0x654bee, want, rep2, 5))
             ts_log("split: entity announcement hook not installed (other exe?)");
+    }
+    {
+        unsigned char want[5] = {0xe8}, rep3[5] = {0xe8};
+        *(DWORD *)(want + 1) = 0x5f78e0 - (0x5f53dd + 5);
+        *(DWORD *)(rep3 + 1) = (DWORD)stat434_stub - (0x5f53dd + 5);
+        if (!ts_patch_bytes(0x5f53dd, want, rep3, 5))
+            ts_log("split: player table guard not installed (other exe?)");
     }
     if (!install_light_guard())
         ts_log("split: light pass guard not installed (other exe?)");
