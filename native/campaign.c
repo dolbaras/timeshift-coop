@@ -427,6 +427,8 @@ static char ride_vehicle[64];                /* (client) the vehicle this player
 static float ride_host[5];                   /* (client) the host's place of it (x y z, forward x z) */
 static DWORD ride_host_at;
 static int ride_place;
+static int ride_rel;                         /* (client) 1 = keep the place relative to the vehicle taken at the start */
+static float ride_off[3];                    /* (client) that place in the vehicle's frame (right, up, forward) */
 
 static void on_message(int peer, unsigned short sub, const unsigned char *b, int len)
 {
@@ -460,6 +462,7 @@ static void on_message(int peer, unsigned short sub, const unsigned char *b, int
             memcpy(ride_vehicle, b + 4, b[3]);
             ride_vehicle[b[3]] = 0;
             ride_place = b[2];
+            ride_rel = -1;   /* (decided at the first step: near the vehicle -> keep that place, else on top) */
             CLOG("campaign: riding on %s (place %d)", ride_vehicle, ride_place);
         } else {
             CLOG("campaign: ride on %s ended", ride_vehicle);
@@ -513,8 +516,29 @@ static void ride_step(void)
     float l = sqrtf(f[0] * f[0] + f[2] * f[2]);
     if (l < 1e-3f)
         f[0] = 1.f, f[2] = 0.f, l = 1.f;
-    float side = (ride_place % 2 ? 1.f : -1.f) * (0.8f + 0.8f * (float)(ride_place / 2));
-    float at[3] = {pos[0] + side * f[2] / l, pos[1] + ride_height, pos[2] - side * f[0] / l};
+    float fx = f[0] / l, fz = f[2] / l;   /* (forward; right = (fz, 0, -fx)) */
+    if (ride_rel < 0) {   /* the first step: a player standing on or next to the vehicle keeps that place (the truck's
+                           * bed of ts2_zepcrashsite_part01); one far away goes on top (the armoured car) */
+        float p0[3];
+        ent_pos(pl, p0);
+        float d[3] = {p0[0] - pos[0], p0[1] - pos[1], p0[2] - pos[2]};
+        ride_rel = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 64.f;
+        ride_off[0] = d[0] * fz - d[2] * fx;
+        ride_off[1] = d[1];
+        ride_off[2] = d[0] * fx + d[2] * fz;
+        CLOG("campaign: ride place %s (%.1f %.1f %.1f)", ride_rel ? "kept" : "on top", ride_off[0], ride_off[1], ride_off[2]);
+    }
+    float at[3];
+    if (ride_rel) {
+        at[0] = pos[0] + ride_off[0] * fz + ride_off[2] * fx;
+        at[1] = pos[1] + ride_off[1];
+        at[2] = pos[2] - ride_off[0] * fx + ride_off[2] * fz;
+    } else {
+        float side = (ride_place % 2 ? 1.f : -1.f) * (0.8f + 0.8f * (float)(ride_place / 2));
+        at[0] = pos[0] + side * fz;
+        at[1] = pos[1] + ride_height;
+        at[2] = pos[2] - side * fx;
+    }
     float dir[3] = {*(float *)(pnode + NODE_DIR), *(float *)(pnode + NODE_DIR + 4), *(float *)(pnode + NODE_DIR + 8)};
     ((void (TSCALL *)(void *, float *, float *, int))(*(void ***)pl)[PLAYER_PLACE / 4])(pl, at, dir, 1);
 }
@@ -565,6 +589,10 @@ static const SeatRule seat_rules[] = {
      {ZEP "tur04", ZEP "tur03", ZEP "tur02"}, {"rebel_hmg1", "rebel_tur1", "rebel_hmg2"}, NULL},
     {"ts2_zepride2_part01", "Zeppelin_cruiser_plc_iga", "OnAnimEnd", "MOVE", A_SEAT,
      {ZEP "tur04", ZEP "tur03", ZEP "tur02"}, {"rebel_hmg1", "rebel_tur1", "rebel_hmg2"}, NULL},
+    /* ts2_zepcrashsite_part01: the truck ride at the level start (players on its bed, start_place); the truck has an AI
+     * driver, so the clients follow the host's truck */
+    {"ts2_zepcrashsite_part01", "truck_place", "OnAnimBegin", "MOVE", A_RIDE_ON, {NULL}, {NULL}, "vhc_truck"},
+    {"ts2_zepcrashsite_part01", "truck_place", "OnAnimEnd", "MOVE", A_RIDE_OFF, {NULL}, {NULL}, "vhc_truck"},
     /* ts2_zep_factory_part1: the armoured car; the host mans its gun, the clients ride on it until the end */
     {"ts2_zep_factory_part1", "actor_start_chase", "OnUnlocked", "", A_RIDE_ON, {NULL}, {NULL}, "Bronevik"},
     {"ts2_zep_factory_part1", "BR_pl_3", "OnAnimEnd", "MOVE", A_RIDE_OFF, {NULL}, {NULL}, "Bronevik"},
@@ -579,7 +607,7 @@ static int name_match(const char *pat, const char *s)
 
 /* (host) a seat for a client that was still loading the level when its seat event ran (live: lost otherwise) */
 static unsigned char seat_later[16][120];
-static int seat_later_len[16];
+static int seat_later_len[16], seat_later_sub[16];
 static void seat_later_step(void)
 {
     for (int i = 0; i < 16; i++) {
@@ -590,7 +618,7 @@ static void seat_later_step(void)
             seat_later_len[i] = 0;
             continue;
         }
-        if (coopnet_send(i, SUB_SEAT, seat_later[i], seat_later_len[i]) > 0) {
+        if (coopnet_send(i, (unsigned short)seat_later_sub[i], seat_later[i], seat_later_len[i]) > 0) {
             CLOG("campaign: seat sent to the client in slot %d now that it runs the level", i);
             seat_later_len[i] = 0;
         }
@@ -648,6 +676,7 @@ void campaign_story_event(const char *obj, const char *ev, const char *arg0)
                 if (coopnet_send(i, SUB_SEAT, b, 2 + len) <= 0 && i < 16) {   /* (still loading: when it runs the level) */
                     memcpy(seat_later[i], b, 2 + len);
                     seat_later_len[i] = 2 + len;
+                    seat_later_sub[i] = SUB_SEAT;
                 }
                 CLOG("campaign: %s.%s: client in slot %d takes %s (%s -> %s)", obj, ev, i, s->seat[k], ssl, res);
             } else if (s->act == A_RIDE_ON || s->act == A_RIDE_OFF) {
@@ -657,7 +686,11 @@ void campaign_story_event(const char *obj, const char *ev, const char *arg0)
                 b[2] = (unsigned char)k;
                 b[3] = (unsigned char)len;
                 memcpy(b + 4, s->vehicle, len);
-                coopnet_send(i, SUB_RIDE, b, 4 + len);
+                if (coopnet_send(i, SUB_RIDE, b, 4 + len) <= 0 && i < 16) {   /* (still loading: later) */
+                    memcpy(seat_later[i], b, 4 + len);
+                    seat_later_len[i] = 4 + len;
+                    seat_later_sub[i] = SUB_RIDE;
+                }
                 snprintf(host_ride, sizeof host_ride, "%s", s->act == A_RIDE_ON ? s->vehicle : "");
                 CLOG("campaign: %s.%s: client in slot %d %s %s", obj, ev, i, b[1] ? "rides on" : "gets off", s->vehicle);
             }
