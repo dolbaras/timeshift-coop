@@ -354,7 +354,11 @@ static void trap_check(void)
             continue;
         for (int i = 0; slot_at(i); i++) {
             char *s = slot_at(i), *ent = *(char **)(s + 4);
-            if (*(int *)s == 0 || !slot_joined(s) || !ent || !(dom_is_belong(dom, ent) & 0xff))
+            if (*(int *)s == 0 || !slot_joined(s) || !ent)
+                continue;
+            int in = dom_is_belong(dom, ent) & 0xff;
+            VLOG("coopreverse: trap %s (locks %d): client in slot %d %s", *p, *(int *)(dom + DOM_LOCKS), i, in ? "inside" : "outside");
+            if (!in)
                 continue;
             unsigned char b = PROTO;
             coopnet_send(i, SUB_TRAP, &b, 1);
@@ -737,6 +741,10 @@ int coopreverse_console(const char *text, char *out, int size)
     if (!strcmp(cmd, "start") && active()) {
         request(1, s);
         return snprintf(out, size, "reverse asked for %.1f s", (double)s), 1;
+    }
+    if (!strcmp(cmd, "trapcheck")) {   /* (lab) the container trap check of the end of a rewind, now */
+        trap_check();
+        return snprintf(out, size, "trap check run"), 1;
     }
     if (!strcmp(cmd, "stop") && active()) {
         request(0, 0.f);
