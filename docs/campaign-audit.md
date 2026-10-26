@@ -516,6 +516,84 @@ Not proven live (open):
 - Zeppelin 23 seats and cages, the level 18 lift, quads (remote driving), the truck ride at the start of level 9.
 - The host's own seat view on the zeppelin (host frames dark at `tur05`: check in a play pass).
 
+## 3c. Whole-campaign bot pass (N100 pair, 2026-10-26)
+
+`lab\campaign_bot.ps1` (private lab, Windows PowerShell 5.1): for each level it starts the pair on that level as a
+co-op session (story, time powers, campaign rules and rewind on by default), waits until the client runs it, checks
+both (session role, same level, story replays), takes frames, idles 25 s, then takes the level's exit on the host
+(unlock the reload domain, put the host's player into it; after 25 s without a level change the server's level
+change `!ss exit <next>`) and waits until both run the next level. Summaries:
+`work\runs\campaign-bot-20261026-015102.txt` (1-2), `-021430.txt` (3-24), `-033819.txt` (20-22 again with longer
+waits for first-time client loads, up to ~6 min while the second copy builds its shader cache).
+
+**24/24 levels traversed by host + client, no crash on either side, the client still joined after every level
+change.**
+
+| # | Level | Exit | Client on next level | Replays on client | Client "unknown object" | Run |
+|---|---|---|---|---|---|---|
+| 1 | city_part01 | natural | yes | - | 22 | n100pair-20261026-015102 |
+| 2 | city_part02 | natural | yes | - | 20 | -015852 |
+| 3 | city_part03 | natural | yes | 112 | 31 | -021430 |
+| 4 | skyscraper_part1 | natural | yes | 5 | 2 | -021654 |
+| 5 | skyscraper_part2 | natural | yes | 5 | 4 | -022044 |
+| 6 | skyscraper_part3 | natural | yes | 6 | 2 | -022403 |
+| 7 | skyscraper_part4 | natural | yes | 14 | 53 | -022631 |
+| 8 | zepride1_part01 | natural | yes | 28 | 2 | -022846 |
+| 9 | zepcrashsite_part01 | server | yes | 17 | 6 | -023112 |
+| 10 | zepcrashsite_part02 | server | yes | 0 | 3 | -023500 |
+| 11 | zepcrashsite_part03 | server | yes | 0 | 2 | -023927 |
+| 12 | summeroutdoor_part01 | natural | yes | 1 | 2 | -024308 |
+| 13 | summeroutdoor_part02 | natural | yes | 14 | 2 | -024641 |
+| 14 | guardfactory_part01 | natural | yes | 0 | 2 | -024905 |
+| 15 | guardfactory_part02 | natural | yes | 10 | 2 | -025208 |
+| 16 | guardfactory_part03 | server | yes | 762 | 3 | -025438 |
+| 17 | guardfactory_part04 | server | yes | 19 | 2 | -025859 |
+| 18 | guardfactory_part05 | natural | yes | 14 | 3 | -030250 |
+| 19 | zep_factory_part1 | server | yes | 102 | 31 | -030716 |
+| 20 | zep_factory_part2 | natural | yes | 0 | 2 | -033819 |
+| 21 | zep_factory_part3 | server | yes | 14 | 3 | -034105 |
+| 22 | zep_factory_part4 | natural | yes | 16 | 195 | -034349 |
+| 23 | zepride2_part01 | server | yes | 51 | 28 | -033113 |
+| 24 | cityfinal_part01 | (final) | - | 4 | 2 | -033551 |
+
+"server" = the bot's placement did not set the exit off, the server's level change did (same result for the
+session). Those exits are boxes above the floor (`!ss goto` snaps to the floor below them); the bot now uses
+`!cp putin <exit> 0` (no snap). Replays: story events the client ran for the host in the ~2 minutes of the run
+(verbose story log from level 3 on).
+
+Open items checked after the bot pass:
+
+| Item | Result | Run |
+|---|---|---|
+| Container trap (15) | the trap check finds a client inside a closed container and kills it (respawn); the check at the end of the engine's playback did not fire in the first try (client placed mid-air) - diagnostics added, `!rv trapcheck` (lab) | -034647, -035241 |
+| Crane (5), client view of a rewind | the client stood on the crane boom and was carried when the crane moved (frames client shot054 -> shot065); **during and after the host's rewind the client's crane did not move back** (shot070, shot081) | -040223 |
+| Lift (18) | gate waits, gathers the client, both ride up (y -104.8 -> -69.5) | -040836 |
+| Truck ride (9) | the client that joins after the truck stopped stands at the same place as the host; a client in time gets the ride (queued for loading clients, keeps its place on the bed) - not seen live | -041353 |
+| Quads (9) | a client can `StartUse` a quad and drive its **own copy** (moved 3.4 m on the client, not on the host): other players see only its body; scanners stay host-only, so no failures | -041353 |
+| Zeppelin seats (23) | client seated at the intro; the intro actor ends its animation every minute and re-seated the client each time -> seat rules now act once per level run (not yet re-run) | -041920 |
+| Host's seat view (8) | host frames on the bridge are fine; the dark view earlier was the `tur05` seat of the checkpoint restore (looks at the hull) | -022846 |
+| Wind (21) | not reproduced: after `$Propellers_mortal_Cine.Unlock()` neither host nor client was pushed (set-up, not co-op) | -042621 |
+
+Remaining gameplay gaps (the list for the next round):
+1. **Rewound puzzle actors on clients** (cranes, conveyors, bridges, lifts, cages, trains): `dynamic` actors animate
+   locally on every machine from the replayed `Start()` calls; the host's rewind restores its own copy only, and
+   these actors have no motion component the network update could carry (net write `0x645720` needs entity `+0x34`).
+   Fix: during a playback the host sends each rewind actor's animation id and time (`0x951660`, `0x951500` read them),
+   clients set them (setter still to find in the node's animation channel, `[[node+0x84]+0xc]...`) - M.
+2. Route-driven AI vehicles (helicopters, interceptors, bikes, the armoured car) do not move on clients (no motion
+   data; a client's own `StartRoute` on them crashed). Riders follow the host's position (armoured car, truck); others
+   are scenery on clients. Fix: mirror their transforms like the ride position (sub 75) - M.
+3. Quads: clients drive unsynced local copies - ride-along or a synced vehicle transform as in 2.
+4. Natural exits that are boxes above the floor need the host's player to fall/jump into them (fine in play).
+5. Level 16: cyclic machinery (`fire_kill_actor`, presses `PRESS6`, `FL*`) sends ~760 story replays in 2 minutes:
+   classify their animation-frame handlers as local - S.
+6. Clients miss the dialogue lines of actors the host has just created (`Intro_Cooke`, `Intro_rebel_1` on 8; the
+   name arrives after the replay) - delay replays naming not-yet-named objects a little longer, S.
+7. A replay waiting for an object that the client has destroyed (`s3d_refLocator480`, 23) logs an engine error every
+   frame for 5 s - stop waiting when the object is known to be gone, S.
+8. Unverified: the trap check at the end of a real playback, seat-once on 23, force fields of 5/16/17/19/21 (14 proven),
+   level 2's reverse zone.
+
 ## 4. Test plan for the live pass
 
 Set-up (N100 pair, `lab\n100_pair.ps1`; later the same steps with the main PC as client when the owner allows):
