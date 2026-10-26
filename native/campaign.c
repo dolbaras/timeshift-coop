@@ -1096,7 +1096,7 @@ typedef struct {
     int have;
 } Veh;
 static Veh vehs[MAX_VEH];
-static int n_veh, use_vehsync = 1, veh_sent, veh_got;
+static int n_veh, use_vehsync = 1, veh_sent, veh_got, veh_msgs_out, veh_msgs_in, veh_nopeer, veh_unknown;
 static DWORD veh_send_at;
 static char veh_level[0x110];
 
@@ -1170,6 +1170,18 @@ static int veh_mine(Veh *v, DWORD now)
                                                                                     * client drives it) */
 }
 
+static void veh_out(const unsigned char *msg, int n)
+{
+    int peers = coopnet_send(-1, SUB_VEH, msg, 2 + n * 52);
+    veh_msgs_out++;
+    if (peers > 0)
+        veh_sent += n;
+    else
+        veh_nopeer++;
+    if (veh_msgs_out <= 5 || (veh_msgs_out % 200) == 0)
+        CLOG("campaign: vehicle message %d out: %d vehicle(s) to %d peer(s)", veh_msgs_out, n, peers);
+}
+
 static void veh_send(DWORD now)
 {
     unsigned char msg[2 + 4 * 52];
@@ -1184,7 +1196,9 @@ static void veh_send(DWORD now)
         for (int i = 0; i < 12; i++)
             d = fmaxf(d, fabsf(m[i] - v->sent[i]));
         int moved = d > 0.004f, final = !moved && v->final_due && now - v->sent_at >= 500;
-        if (!moved && !final)
+        int keep = !moved && !final && now - v->sent_at >= 2000;   /* (a client that joins later gets the standing ones too:
+                                                                   * live level 9, the AI vehicles had stopped before it came) */
+        if (!moved && !final && !keep)
             continue;
         v->final_due = moved;
         memcpy(v->sent, m, sizeof m);
@@ -1193,21 +1207,22 @@ static void veh_send(DWORD now)
         memcpy(msg + 2 + n * 52 + 4, m, 48);
         if (++n == 4) {
             msg[0] = PROTO, msg[1] = (unsigned char)n;
-            coopnet_send(-1, SUB_VEH, msg, 2 + n * 52);
-            veh_sent += n;
+            veh_out(msg, n);
             n = 0;
         }
     }
     if (n) {
         msg[0] = PROTO, msg[1] = (unsigned char)n;
-        coopnet_send(-1, SUB_VEH, msg, 2 + n * 52);
-        veh_sent += n;
+        veh_out(msg, n);
     }
 }
 
 static void veh_receive(const unsigned char *b, int len)
 {
     DWORD now = GetTickCount();
+    veh_msgs_in++;
+    if (veh_msgs_in <= 5 || (veh_msgs_in % 200) == 0)
+        CLOG("campaign: vehicle message %d in: %d vehicle(s), %d byte(s)", veh_msgs_in, b[1], len);
     for (int j = 0; j < b[1] && 2 + (j + 1) * 52 <= len; j++) {
         unsigned h;
         memcpy(&h, b + 2 + j * 52, 4);
@@ -1225,8 +1240,12 @@ static void veh_receive(const unsigned char *b, int len)
                 v->b_at = now;
                 v->have = 1;
                 veh_got++;
-                break;
+                goto found;
             }
+        veh_unknown++;   /* (a vehicle this machine does not have, or not yet) */
+        if (veh_unknown <= 5)
+            CLOG("campaign: vehicle %08x from the other machine is not here (%d known)", h, n_veh);
+found:;
     }
 }
 
@@ -1450,7 +1469,8 @@ int campaign_console(const char *text, char *out, int size)
     }
     if (!strcmp(cmd, "vehs")) {   /* "!cp vehs": the vehicles of the stream (lab) */
         DWORD now = GetTickCount();
-        int n = snprintf(out, size, "%d vehicle(s), sent %d, got %d:", n_veh, veh_sent, veh_got);
+        int n = snprintf(out, size, "%d vehicle(s), sent %d (%d msgs, %d without peer), got %d (%d msgs, %d unknown):", n_veh,
+                         veh_sent, veh_msgs_out, veh_nopeer, veh_got, veh_msgs_in, veh_unknown);
         for (int k = 0; k < n_veh && n < size - 80; k++) {
             Veh *v = &vehs[k];
             float pos[3] = {0, 0, 0};
