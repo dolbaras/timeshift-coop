@@ -1,5 +1,14 @@
 # Local split screen (prototype)
 
+> **Resume here (2026-10-26):** all code is committed; what is left are the two-PC tests with pads (the client
+> side needs the main PC, where the virtual pads are): (1) split screen on a client end to end with
+> `lab/split_pair_t1.ps1` (host N100, client main PC): the announcement fix (`player_mp`) on the client, the
+> client's copy of player 2, both halves, HUD, weapon, hits, items, messages, death, jitter; (2) split host on the
+> main PC with an N100 client, `lab/split_pair_t2.ps1`: player 2's time power, its AI kill and its pick-up as
+> the client sees them; (3) "Second player on pad 2" on a co-op host (option path not run yet). Round 18 below
+> has the state.
+
+
 Two players on one PC: player 1 on keyboard, mouse and pad 1, player 2 on pad 2. The screen is split side by
 side on wide screens and top and bottom on others. The player turns it on in the mod's Co-op menu: **Co-op ->
 Split screen** shows the campaign's chapters (as the Co-op host frame) and the difficulty; **Start** starts the
