@@ -430,6 +430,7 @@ static void client_cam(BYTE *dst);
 static void client_view(int v);
 static BYTE *find_cp2(void);
 static void client_extra(int v);
+static int copy_updates;       /* (tests: updates of a client's copy of player 2) */
 static BYTE *extra_node;       /* client: one more body hidden for a view (the shadow's, or our player 2's player_mp) */
 static DWORD extra_flags;
 static int node_visible(BYTE *n);
@@ -668,7 +669,7 @@ static void restore_globals(void)
         *(DWORD *)(hud_hidden + 0x18) = (*(DWORD *)(hud_hidden + 0x18) & ~2u) | (hud_hidden_flags & 2u);
     hud_hidden = NULL;
     if (extra_node)
-        *(DWORD *)(extra_node + 4) = (*(DWORD *)(extra_node + 4) & ~1u) | (extra_flags & 1u);
+        *(DWORD *)(extra_node + 4) = (*(DWORD *)(extra_node + 4) & ~0x10001u) | (extra_flags & 0x10001u);
     extra_node = NULL;
     swapped = 0;
 }
@@ -1262,6 +1263,8 @@ static void TSCALL hook_update(void *pl)
         real_update(pl);
         return;
     }
+    if (client_split)
+        copy_updates++;
     p2_enter();
     real_update(pl);
     p2_leave();
@@ -2924,16 +2927,28 @@ static void shadow_sync(const NsState *st)
         return;
     *(float *)(p2 + 0x234) = st->life > 0 ? st->life : 1.0f;
     *(float *)(p2 + 0x2ac) = st->energy;
-    BYTE *rec = ammo_rec(p2, 0, NULL);
+    BYTE *rec = (int)(GetTickCount() - p2_born) > 3000 ? ammo_rec(p2, 0, NULL) : NULL;   /* (once its weapon exists) */
     if (rec) {
         *(float *)(rec + 8) = st->ammo_total;
         *(int *)(rec + 0xc) = st->magazine;
     }
-    int *b = (int *)(p2 + 0x3a8);
-    if ((b[0] != st->slots[0] || b[1] != st->slots[1] || b[2] != st->slots[2]) && (st->slots[0] | st->slots[1] | st->slots[2])) {
+    /* (the host's weapon slots: given to the copy once it exists for 2 s and whenever the host's change; compared
+     * with the last given ones, not with the copy's slots (run 20261026-214145: the copy held no weapon)) */
+    static int given[3] = {-1, -1, -1};
+    static BYTE *given_to;
+    if (given_to != p2)
+        given_to = p2, given[0] = given[1] = given[2] = -1;
+    if ((int)(GetTickCount() - p2_born) > 2000 && (st->slots[0] | st->slots[1] | st->slots[2])
+        && (given[0] != st->slots[0] || given[1] != st->slots[1] || given[2] != st->slots[2])) {
         char ssl[96], out[64];
+        memcpy(given, st->slots, sizeof given);
+        /* (always, also when the slots read the same: the copy's weapon is not selected until then, its half had no
+         * first-person weapon and an empty ammunition panel, run 20261027-005811) */
         snprintf(ssl, sizeof ssl, "$player2.SetupWeapon(%d, %d, %d)", st->slots[0], st->slots[1], st->slots[2]);
         ts_script_run(ssl, out, sizeof out);
+        ts_script_run("$player2.SelectHolster(0, 1)", out, sizeof out);
+        ts_log("split: our player 2's copy gets the host's weapons %d %d %d and selects the first (%s)", st->slots[0], st->slots[1],
+               st->slots[2], out);
     }
     for (int k = 0; k < 3; k++) {
         int i = ns_fx[k];
@@ -3141,20 +3156,35 @@ static void client_extra(int v)
     BYTE *o = NULL;
     if (v == 0)
         o = body_of(p2);
-    else
+    else {
         o = find_cp2();
+        BYTE *ob = body_of(o);   /* (a player_mp draws through its body object too, if it has one) */
+        if (ob && !IsBadReadPtr(ob, 0x234))
+            o = ob;
+    }
     BYTE *n = o ? *(BYTE **)(o + 0x230) : NULL;
     if (n && !IsBadReadPtr(n, 8)) {
         extra_node = n;
         extra_flags = *(DWORD *)(n + 4);
-        *(DWORD *)(n + 4) |= 1;
+        *(DWORD *)(n + 4) |= v == 1 ? (1u | 0x10000u) : 1u;   /* (the render prep skips 0x10000 in the main view) */
+    }
+    static DWORD last[2];   /* (tests: what each view hides, every 3 s) */
+    DWORD t = GetTickCount();
+    if (splitlog && v >= 0 && v < 2 && t - last[v] >= 3000) {
+        last[v] = t;
+        BYTE *cn = p2 ? *(BYTE **)(p2 + 0x230) : NULL;
+        float *cp = cn ? (float *)(cn + 0x68) : NULL;
+        ts_log("split: client view %d hides %p node %p (+4 %08lx vis %d); copy at %.2f %.2f %.2f, cam2 at %.2f %.2f %.2f, netid %d cp2 %p,"
+               " copy updates %d", v, (void *)o, (void *)n, n ? *(DWORD *)(n + 4) : 0, node_visible(n), cp ? cp[0] : 0, cp ? cp[1] : 0,
+               cp ? cp[2] : 0, ((float *)(cam2 + 0x30))[0], ((float *)(cam2 + 0x30))[1], ((float *)(cam2 + 0x30))[2], client_netid,
+               (void *)cp2, copy_updates);
     }
 }
 
 /* The client's copy of player 2 removed (split screen on this client ends). */
 static void shadow_remove(const char *why)
 {
-    gamepad_mask_player2(0);
+    gamepad_mask_player2(0, 0);
     if (!p2 || !client_split)
         return;
     p2_remove(why);
@@ -3319,8 +3349,12 @@ static void split_tick(float dt)
     if (stage < 3)
         return;
     install_msg_hook();
+    /* (the client's copy of player 2 does not fire (both triggers, right stick click), throw grenades or use powers:
+     * the host's player 2 does. A shot of the copy crashed the game when its hit found no shooter: 0x576180 with
+     * esi 0, run 20261026-221127. Its pictures of the shots come from the host's.) */
     gamepad_mask_player2(client_split ? XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_DPAD_UP
-                                            | XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT : 0);
+                                            | XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT | XINPUT_GAMEPAD_RIGHT_THUMB : 0,
+                         client_split);
     if (client_split && (net_noshadow || !cl_have))
         return;   /* (a client's player 2 is run by the host; its local copy only once the host runs it) */
     {   /* In a network game the player's update shows "Waiting for server" (GAME_WAIT_FOR_SERVER, 0x40c5c6) while
