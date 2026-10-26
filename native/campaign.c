@@ -1060,19 +1060,27 @@ int campaign_replay_wait(const char *obj, const char *ev)
     return 0;
 }
 
-/* ---- vehicles: a transform stream (TS_CAMPAIGN_VEHSYNC, default on; NOT YET RUN) ----
- * Vehicles (one engine class, vtable 0xd7ebb0: zeppelins, armoured cars, trucks, bikes/quads, helicopters, jets,
- * interceptors) have net ids but no motion component (+0x34), so nothing carries their transform: on a client the
- * route-driven ones stood still (their StartRoute there crashed the AI ones, AV 0x49bddd), and a client's quad moved
- * only on the client. Now every machine sends the vehicles it moves itself: the host every vehicle that moves on the
- * host (route, AI, physics, its own player's quad), unless a client sent that vehicle within the last second; a client
- * the vehicles that have a physics body on the client (+0x27c: only the one its player drives). Receivers place them
- * through the scene node's matrix setter (0x94dbf0(node, 4x4, 0): the same call the network readers end in,
- * 0x68e1b0), 100 ms behind, interpolated. Vehicles a client runs on its own route (campaign_local_call) are left
- * out. 10 Hz while moving, plus one send 0.5 s after a vehicle stops.
+/* ---- vehicles: a transform stream (TS_CAMPAIGN_VEHSYNC, default on) ----
+ * Vehicles (a family of nine engine classes: vtables 0xd90758 ... 0xd92b58, e.g. 0xd91610 bikes/quads, 0xd91970
+ * trucks and armoured cars; all share the vehicle base's method 0x51c160 in slot +0x78, which nothing else has [V,
+ * vtable scan of the exe]; live level 9: bike11/opp_bike1 0xd91610, vhc_truck/bronik1 0xd91970) have net ids but no
+ * motion component (+0x34), so nothing carries their transform: on a client the route-driven ones stood still (their
+ * StartRoute there crashed the AI ones, AV 0x49bddd), and a client's quad moved only on the client. Now every machine
+ * sends the vehicles it moves itself: the host every vehicle that moves on the host (route, AI, physics, its own
+ * player's quad), unless a client sent that vehicle within the last second; a client only the vehicle its own player
+ * uses (+0x9c0 = the user, as the player's network update 0x420120 finds it). Receivers place them through the scene
+ * node's matrix setter (0x94dbf0(node, 4x4, 0): the same call the network readers end in, 0x68e1b0), 100 ms behind,
+ * interpolated. Vehicles a client runs on its own route (campaign_local_call) are left out. 10 Hz while moving, plus
+ * one send 0.5 s after a vehicle stops.
  * Message 76 (either way): {u8 1, u8 n, n x {u32 name hash, f32 rows[3][3], f32 pos[3]}} (n <= 4: coopnet's 250). */
-#define VEH_VT 0xd7ebb0
-#define VEH_BODY 0x27c
+#define VEH_METHOD_SLOT 0x78
+#define VEH_METHOD 0x51c160
+#define VEH_USER 0x9c0
+static int is_vehicle(char *o)
+{
+    void **vt = o && !IsBadReadPtr(o, VEH_USER + 4) ? *(void ***)o : NULL;
+    return vt && !IsBadReadPtr(vt, VEH_METHOD_SLOT + 4) && vt[VEH_METHOD_SLOT / 4] == (void *)VEH_METHOD;
+}
 #define MAX_VEH 96
 #define NODE_MAT 0x38                        /* scene node: 4x4 world matrix (rows x, y, z, position) */
 #define ENT_BUCKETS (*(char **)0xecb7fc)
@@ -1129,7 +1137,7 @@ static void veh_scan(void)
     int nb = ENT_NBUCKETS;
     for (int i = 0; b && i < nb; i++)
         for (char *o = *(char **)(b + i * 12); o; ) {
-            if (*(DWORD *)o == VEH_VT && *(void **)(o + ENT_NODE) && !IsBadReadPtr(*(void **)(o + ENT_NODE), 0x78)) {
+            if (is_vehicle(o) && *(void **)(o + ENT_NODE) && !IsBadReadPtr(*(void **)(o + ENT_NODE), 0x78)) {
                 const char *nm = ent_name(o);
                 if (nm[0] && !veh_local_route(nm)) {
                     unsigned h = name_hash(nm);
@@ -1157,8 +1165,9 @@ static int veh_mine(Veh *v, DWORD now)
     if (!v->ent)
         return 0;
     if (role() == MODE_CLIENT)
-        return *(void **)(v->ent + VEH_BODY) != NULL;
-    return !v->have || now - v->b_at > 1000;   /* (host: unless a client drives it) */
+        return PLAYER && *(char **)(v->ent + VEH_USER) == PLAYER;
+    return (PLAYER && *(char **)(v->ent + VEH_USER) == PLAYER) || !v->have || now - v->b_at > 1000;   /* (host: unless a
+                                                                                    * client drives it) */
 }
 
 static void veh_send(DWORD now)
@@ -1226,8 +1235,6 @@ static void veh_apply(DWORD now)
     for (int k = 0; k < n_veh; k++) {
         Veh *v = &vehs[k];
         if (!v->have || !v->ent || veh_mine(v, now) || now - v->b_at > 3000)
-            continue;
-        if (role() == MODE_CLIENT && *(void **)(v->ent + VEH_BODY))
             continue;
         float span = (float)(v->b_at - v->a_at), t = span > 1.f ? (float)(now - v->b_at) / span : 1.f, m[12];
         t = t < 0.f ? 0.f : t > 1.f ? 1.f : t;   /* (100 ms behind: from a to b over the gap between them) */
@@ -1450,9 +1457,26 @@ int campaign_console(const char *text, char *out, int size)
             if (v->ent)
                 ent_pos(v->ent, pos);
             n += snprintf(out + n, size - n, " %s%s%s%s (%.1f %.1f %.1f);", v->ent ? ent_name(v->ent) : "?",
-                          v->ent && *(void **)(v->ent + VEH_BODY) ? " body" : "", veh_mine(v, now) ? " mine" : "",
+                          v->ent && PLAYER && *(char **)(v->ent + VEH_USER) == PLAYER ? " used" : "", veh_mine(v, now) ? " mine" : "",
                           v->have && now - v->b_at < 1000 ? " recv" : "", pos[0], pos[1], pos[2]);
         }
+        return 1;
+    }
+    if (!strcmp(cmd, "vts")) {   /* "!cp vts <text>": vtables of the world's entities whose name has <text> (lab) */
+        char *b = ENT_BUCKETS;
+        int nb = ENT_NBUCKETS, n = 0;
+        for (int i = 0; b && i < nb && n < size - 90; i++)
+            for (char *o = *(char **)(b + i * 12); o && n < size - 90; ) {
+                void *inst = *(void **)(o + ENT_INST);   /* (not every entry has a script instance: check) */
+                String s = inst && !IsBadReadPtr(inst, INST_NAME + 4) ? *(String *)((char *)inst + INST_NAME) : NULL;
+                const char *nm = s && !IsBadReadPtr(s, 8) && !IsBadStringPtrA(s->s, 256) ? s->s : "";
+                if (nm[0] && strstr(nm, a1))
+                    n += snprintf(out + n, size - n, " %s vt %lx%s%s;", nm, (unsigned long)*(DWORD *)o,
+                                  is_vehicle(o) ? " vehicle" : "", is_vehicle(o) && PLAYER
+                                  && *(char **)(o + VEH_USER) == PLAYER ? " used" : "");
+                char *next = *(char **)(o + 8);
+                o = next ? next - 4 : NULL;
+            }
         return 1;
     }
     if (!strcmp(cmd, "where")) {   /* "!cp where": this machine's player position (lab) */
@@ -1475,6 +1499,22 @@ int campaign_console(const char *text, char *out, int size)
         ent_pos(pl, pos);
         return snprintf(out, size, "player placed (flag %d) at %.2f %.2f %.2f, now %.2f %.2f %.2f, inside %d", flag, at[0],
                         at[1], at[2], pos[0], pos[1], pos[2], inside(dom, pl)), 1;
+    }
+    if (!strcmp(cmd, "at")) {   /* "!cp at x y z [object]": this machine's player to a point, facing the object (lab) */
+        char *pl = PLAYER, *node = pl ? *(char **)(pl + ENT_NODE) : NULL, look[64] = "";
+        float at[3], tp[3], pos[3];
+        if (!node || sscanf(text + 3, "%*s %f %f %f %63s", &at[0], &at[1], &at[2], look) < 3)
+            return snprintf(out, size, "usage: !cp at x y z [object]"), 1;
+        float dir[3] = {*(float *)(node + NODE_DIR), *(float *)(node + NODE_DIR + 4), *(float *)(node + NODE_DIR + 8)};
+        if (look[0] && ent_pos(find_ent(look), tp)) {
+            float dx = tp[0] - at[0], dz = tp[2] - at[2], l = sqrtf(dx * dx + dz * dz);
+            if (l > 0.01f)
+                dir[0] = dx / l, dir[1] = 0.f, dir[2] = dz / l;
+        }
+        ((void (TSCALL *)(void *, float *, float *, int))(*(void ***)pl)[PLAYER_PLACE / 4])(pl, at, dir, 0);
+        ent_pos(pl, pos);
+        return snprintf(out, size, "player at %.2f %.2f %.2f (dir %.2f %.2f %.2f)", pos[0], pos[1], pos[2], dir[0], dir[1],
+                        dir[2]), 1;
     }
     if (!strcmp(cmd, "gather") && r == MODE_SERVER) {
         char *dom = find_ent(a1);
