@@ -528,6 +528,23 @@ the vehicle notes below), (f) bot re-run (`lab\campaign_bot.ps1 -Env 'TS_CAMPAIG
 replay counts need TS_STORYSYNC_LOG=1 now). Test helpers: `work\tmp_agent\numbers.sh`, `pairrun.ps1`. Leave both PCs
 clean with `lab\safe_state.ps1`.
 
+### Bot regression with the 2026-10-27 DLL, chunk 1: levels 1-8 (summary `work	mp_agentot1.out`)
+
+All 8 levels: client joined the next level, no "Unhandled exception" on either side. (The bot's `crash h/c` column counts
+first-chance `AccessViolation` log lines; the mod's `IsBadReadPtr` probes add some, so use `Unhandled exception`.) Vehicle stream,
+rewind recorder, force-field/seat/trap rules all log "on" in every run; the recorder starts on levels 2-8.
+
+| # | Level | Exit | Client next | Replays | Unknown obj | Held back | Run | Note |
+|---|---|---|---|---|---|---|---|---|
+| 1 | city_part01 | server | yes | 23 | 4 | 2 | -165601 | was 22 unknown |
+| 2 | city_part02 | natural | yes | 46 | 18 | 3 | -165844 | was 20 |
+| 3 | city_part03 | natural | yes | 117 | 46 | 21 | -170101 | was 31: interceptor spawns `vhc_plane_interceptor_spwn_*|tur01` and `$fire1` |
+| 4 | skyscraper_part1 | natural | yes | 3 | 2 | 10 | -170323 | |
+| 5 | skyscraper_part2 | natural | yes | 4 | 4 | 1 | -170544 | |
+| 6 | skyscraper_part3 | natural | yes | 5 | 2 | 0 | -170800 | |
+| 7 | skyscraper_part4 | natural | yes | 12 | 53 | 8 | -171019 | the 53 are level 8's `Intro_Cooke`/`Intro_rebel_1` (client's own `Zeppelin_cruiser_Intro_plc.OnAnimBegin`): the known Cooke gap also hits the 7 -> 8 change (same as 2026-10-26) |
+| 8 | zepride1_part01 | natural | yes | 14 | 2 | 7 | -171232 | |
+
 ### Verified table (2026-10-27)
 
 | Item | By numbers | By frames | Not verified |
