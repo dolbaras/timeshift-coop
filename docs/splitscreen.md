@@ -1,11 +1,11 @@
 # Local split screen (prototype)
 
 > **Resume here (2026-10-27):** all code is committed. Done on the main PC: the split-screen soak through the 24 levels
-> (round 21 below), split on a client (round 19, basics), the Co-op menu option on a host (round 20). Left, needs the N100
-> (host) and the main PC (client with virtual pads): items, pick-up messages, death/respawn of the client's copy, a long walk
-> on a client (`lab/split_pair_t1.ps1`). Open from the soak: (1) after 21 level loads in one process the game crashed loading
-> level 22 (run `20261027-060114`, access violation `0xa63c1a`; level 22 alone is fine) - not yet compared with a game
-> without split screen; (2) level 20: player 2 keeps its weapon where the story takes player 1's away.
+> (round 21), the level-22 crash (round 22: address space, fixed by the large-address-aware flag the installer now sets),
+> split on a client (round 19, basics), the Co-op menu option on a host (round 20). Left, needs the N100 (host) and the
+> main PC (client with virtual pads): items, pick-up messages, death/respawn of the client's copy, a long walk on a client
+> (`lab/split_pair_t1.ps1`). Open: level 20, player 2 keeps its weapon where the story takes player 1's away; the installer's
+> exe step is tested on `work\install_test` only (not on a real install).
 
 
 Two players on one PC: player 1 on keyboard, mouse and pad 1, player 2 on pad 2. The screen is split side by
@@ -444,6 +444,30 @@ Gaps: player 2 does not take part in the story's weapon removals (20); only play
 cutscenes and computer-screen sequences are full screen; the crash after 21 loads in one process is not yet compared with a
 game without split screen (it may be the engine's own leak). A red-screen check found no leaks (red share <= 0.05, from the
 levels' own red lights).
+
+### Round 22 (2026-10-27, main PC alone: the crash loading level 22 after 21 level loads)
+
+`TS_MEMLOG=1` (split.c) logs the process's address space every 5 s (committed, reserved, free, largest free block); the soak
+(`lab/split_soak.ps1`, `-NoSplit` for a game without split screen) gave, per level of one process:
+
+| Run | Level 2-3 | Level 12-14 | Level 22 | Result |
+|---|---|---|---|---|
+| no split screen, 1-24 (`20261027-162311`) | committed 1.2 GB, reserved 0.21 GB, free 0.62 GB, largest free block 0.27 GB | free 0.52 GB, largest 0.19 GB | committed 1.25 GB, reserved 0.30 GB, **free 0.50 GB, largest 0.17 GB** | no crash through 24 |
+| split screen, 2-22 (`-163849`, fresh from level 2) | committed 1.2 GB, reserved 0.28 GB, free 0.57 GB, largest 0.22 GB | reserved 0.50 GB, free 0.33 GB, largest 0.05 GB | committed 1.24 GB, reserved 0.52 GB, **free 0.29 GB, largest 0.05 GB** | no crash (close to the limit) |
+| split screen, 1-21 + 22 (`-060114`) | - | - | - | **crashed loading level 22** (access violation `0xa63c1a`, write to 0 in a resource load: an allocation that failed) |
+| split screen, **large address aware**, 1-24 (`-221243`) | address space 4 GB; free 2.6 GB, largest 1.9 GB | free 2.2-2.4 GB, largest 1.9 GB | committed 1.26 GB, reserved 0.63 GB, **free 2.2 GB, largest 1.9 GB** | no crash through 24, one process |
+
+So it is the 2 GB address space of the 32-bit exe: the committed memory stays flat at about 1.2 GB, but the reserved
+address space grows with split screen (the second view's pictures and player 2's objects: 0.3 -> 0.5-0.6 GB over the
+campaign against 0.2 -> 0.3 GB without) and fragments it (largest free block 0.05 GB at level 22 against 0.17 GB). The
+crash is the failed allocation when the load needs a block bigger than that; the run after a restart or without split
+screen passes by a margin of a few tens of MB.
+
+Fix: the installer (`tools/installer.ps1`) makes `bin\TimeShift.exe` large address aware (PE header Characteristics 0x20; 4 GB
+on 64-bit Windows). The original exe (SHA-256 `689c63da...52641be4`, the gate is unchanged) is first kept in
+`coop-backup`, the patched exe's hash (`de1a0aeb...a24fb01c`) is recorded in `coop\install.txt` (`exe=`), a reinstall recognises
+the patched exe and leaves it, the uninstall puts the original back. Tested on `work\install_test` (install, reinstall,
+uninstall: the original hash back, nothing left). The soak above used the patched exe in the development copy.
 
 Still to run (needs the N100): split on a client end to end (copy, halves, HUD, weapon, hits, items, messages,
 death, jitter), and the split host + client checks (player 2's time power, its AI kill, its pick-up) with
