@@ -3671,7 +3671,7 @@ void split_install(void)
     }
     if ((stage >= 3 || !forced) && install_item_hooks() != 4)
         ts_log("split: item hooks not all set (pick-ups may not reach player 2)");
-    if (splitlog)
+    if (splitlog > 1)
         ts_log("split: %d item give methods logged (tests)", install_give_hooks());
     if (stage >= 3 || !forced) {
         int nh = install_hud_hooks();
