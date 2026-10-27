@@ -436,6 +436,8 @@ static int cl_body_ok, copy_free;   /* copy_free: TS_SPLIT_COPYFREE=1, the copy 
 static void client_slave(void);
 static BYTE *extra_node;       /* client: one more body hidden for a view (the shadow's, or our player 2's player_mp) */
 static DWORD extra_flags;
+static float extra_pos[3];
+static int extra_moved;
 static int node_visible(BYTE *n);
 static int view = -1;           /* the view this frame renders (-1: no split this frame) */
 static unsigned frame_no;
@@ -673,6 +675,9 @@ static void restore_globals(void)
     hud_hidden = NULL;
     if (extra_node)
         *(DWORD *)(extra_node + 4) = (*(DWORD *)(extra_node + 4) & ~0x10001u) | (extra_flags & 0x10001u);
+    if (extra_node && extra_moved)
+        memcpy(extra_node + 0x68, extra_pos, sizeof extra_pos);
+    extra_moved = 0;
     extra_node = NULL;
     swapped = 0;
 }
@@ -1406,6 +1411,12 @@ static int __stdcall hook_dispatch(BYTE *task, int msg, int a, int b)
     }
     /* On a client the local copy of player 2 (client_split) shoots pictures only: its hits go nowhere (the host's
      * player 2 fires the same shots with authority; their damage comes from the host). */
+    if (msg == 0x4e3 && client_split && p2 && task == p2) {   /* (a hit on the copy: its life comes from the host) */
+        static int n;
+        if (splitlog && n++ < 20)
+            ts_log("split: a hit on our player 2's copy dropped");
+        return 1;
+    }
     if (msg == 0x4e3 && client_split && p2 && a && task != p2 && !IsBadReadPtr((void *)a, 12)
         && is_p2_object(find_task((void *)0xecb7f8, ((int *)a)[2]))) {
         static int n;
@@ -3012,7 +3023,11 @@ static void client_slave(void)
     BYTE *n = *(BYTE **)(p2 + 0x230);
     if (!n || IsBadReadPtr(n, 0x74))
         return;
-    float *q = (float *)(n + 0x68), d[3] = {cl_body[0] - q[0], cl_body[1] - q[1], cl_body[2] - q[2]};
+    /* (0.6 m to the right of the host's player 2, not on it: on the same spot the host's player 2's replicated shots
+     * hit the copy and the game stopped in the hit handler without a shooter, 0x576180, run 20261027-050946) */
+    const float *rt = (const float *)cam2;
+    float want[3] = {cl_body[0] + rt[0] * 0.6f, cl_body[1], cl_body[2] + rt[2] * 0.6f};
+    float *q = (float *)(n + 0x68), d[3] = {want[0] - q[0], want[1] - q[1], want[2] - q[2]};
     float d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2], k = d2 > 36.0f ? 1.0f : 0.5f;
     if (d2 < 0.0004f)
         return;
@@ -3213,10 +3228,16 @@ static void client_extra(int v)
             o = ob;
     }
     BYTE *n = o ? *(BYTE **)(o + 0x230) : NULL;
-    if (n && !IsBadReadPtr(n, 8)) {
+    if (n && !IsBadReadPtr(n, 0x74)) {
         extra_node = n;
         extra_flags = *(DWORD *)(n + 4);
         *(DWORD *)(n + 4) |= v == 1 ? (1u | 0x10000u) : 1u;   /* (the render prep skips 0x10000 in the main view) */
+        if (v == 1 && o == find_cp2()) {   /* (the host's puppet of player 2 is also moved far away for this view: the
+                                              flags did not hide it, run 20261027-051718) */
+            memcpy(extra_pos, n + 0x68, sizeof extra_pos);
+            ((float *)(n + 0x68))[1] += 1000.0f;
+            extra_moved = 1;
+        }
     }
     static DWORD last[2];   /* (tests: what each view hides, every 3 s) */
     DWORD t = GetTickCount();
