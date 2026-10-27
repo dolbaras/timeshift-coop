@@ -411,6 +411,18 @@ host: time power, AI kill, item), `split_run.ps1 -Dll`.
 | The copy does not walk with pad 2 | the command pass for the copy runs about 70 times a second and pad 2's stick values reach it; the copy still moved about 1.3 m. Running its update in game mode 1 (`TS_SPLIT_COPYMODE=1`, off) did not change that | `20261027-012413` (`command pass`, `player 2 pass` log lines) |
 | The copy as a slave | `client_slave` moves the copy to the host's player 2's position (message 61) every frame, half way each time, a jump over 6 m at once, **0.6 m to the right of it**: on the same spot the host's player 2's replicated shots hit the copy and the game stopped in the hit handler without a shooter (`0x576180`, run `20261027-050946`). Hits on the copy are dropped. Its look direction stays its own (pad 2's right stick applied locally); its own walking still runs and is overwritten. `TS_SPLIT_COPYFREE=1` switches it off. The host's puppet of player 2 is moved 1000 m up for player 2's view (the flags alone did not hide it). Result: no crash for 330 s, player 2's half has its own camera, the first-person pistol, the crosshair, HUD and ammunition ("112 / 1"), the other players' bodies are seen as in local split, a red damage tint, the pick-up message in player 1's half | `20261027-052442` `shot113.png`, `shot117.png`; before: `-051718` (puppet body filling the half) |
 
+### Round 20 (2026-10-27, main PC alone: the Co-op menu option on a host)
+
+Driver `lab/host_option_run.ps1`: the profile gets `AutoTest = "host"` and `CoopSplitJoin = "1"` (no `TS_SPLIT`), two virtual
+pads, short walks of each player, a death of each; the keys are taken out again.
+
+| Item | Result | Evidence |
+|---|---|---|
+| "Second player on pad 2" on a co-op host | works: `split: on (a co-op host with "Second player on pad 2"; player 2 on XInput pad 2)`, player 2 spawned 8 s after the level started, both halves with a HUD each, the first-person weapon, the crosshair, the radar; no `TS_SPLIT` | `20261027-053204` `shot100.png`, `-053701` frames 096-113 |
+| Walks | player 2 walked forward and back (stick +/-, 2.5 s each), then player 1: the other player's body moves in each half as expected, nothing stuck; with a longer straight walk player 2 ended against a wall and stayed there (the test's direction, not a fault) | `-053701` (frames 096-113), `-053204` `shot134.png` |
+| Death and respawn | `$player2.Kill()`: `player 2 died: respawned next to player 1`; player 1's death screen (red, "До возрождения осталось: 3", the button named by the pad: RT) in its own half only, player 2's half stays in play; player 1 respawns | `-053204` `shot148.png`, `-053701` frames 126-156 |
+| Test windows | the strip right of the picture (1768x992 in 1912x1000) stays black | all frames |
+
 Still to run (needs the N100): split on a client end to end (copy, halves, HUD, weapon, hits, items, messages,
 death, jitter), and the split host + client checks (player 2's time power, its AI kill, its pick-up) with
 `split_pair_t2.ps1`.
