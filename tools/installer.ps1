@@ -31,6 +31,10 @@ $payload = Join-Path $here "files"
 $script:TITLE = "TimeShift Co-op"
 # The exe the mod is made for: TimeShift patch 1.2 (retail, as patched by the 1.2 update).
 $script:EXE_SHA = "689C63DA36CD5902EDCAD2ABE1111D4697A92B12C4E17FE0659B856752641BE4"
+# The same exe with the large-address-aware flag set (PE header Characteristics 0x20: a 32-bit game gets up to 4 GB of
+# address space on 64-bit Windows instead of 2 GB; the mod's own memory and a long session add up). The installer makes
+# it from the original (kept in coop-backup, put back on uninstall) and records this hash in coop\install.txt (exe=).
+$script:EXE_SHA_LAA = "DE1A0AEB4A52350ABCF8D0717E9BD715BCF57713CD0A65B16B6269A9A24FB01C"
 # A log line of the mod's proxy DLL (native/proxy.c): a bin\dinput8.dll with it is ours.
 $script:DLL_MARK = "TimeShift co-op proxy"
 $script:PAKS = @("coop.s3darc", "coop_ati.s3darc", "coop_nv.s3darc")
@@ -50,6 +54,8 @@ $script:TEXTS = @{
         "installed_now" = "Installed now: co-op "
         "original_kept" = "Original kept: "
         "copied" = "Copied {0} file(s)."
+        "large_address_aware" = "Large address aware flag set in bin\TimeShift.exe (the original is kept in coop-backup)"
+        "already_large_address_aware" = "bin\TimeShift.exe is already large address aware"
         "exe_wrong" = "This mod is made for TimeShift with patch 1.2 (bin\TimeShift.exe with SHA-256 689c63da...52641be4). The exe in this folder is another version (SHA-256 {0}).`nInstall the official patch 1.2 for your copy of the game, then run this installer again. Nothing was changed."
         "paks_missing" = "preload\paks\{0} is missing: this is not a complete TimeShift 1.2 folder. Nothing was changed."
         "paks_kept" = "The mod's data built by the last install is current: kept."
@@ -121,6 +127,8 @@ $script:TEXTS = @{
         "installed_now" = "Сейчас установлен кооп "
         "original_kept" = "Оригинал сохранён: "
         "copied" = "Скопировано файлов: {0}."
+        "large_address_aware" = "В bin\TimeShift.exe включён флаг large address aware (оригинал сохранён в coop-backup)"
+        "already_large_address_aware" = "bin\TimeShift.exe уже large address aware"
         "exe_wrong" = "Мод сделан для TimeShift с патчем 1.2 (bin\TimeShift.exe с SHA-256 689c63da...52641be4). В этой папке другая версия exe (SHA-256 {0}).`nУстановите официальный патч 1.2 для своей копии игры и запустите установщик снова. Ничего не изменено."
         "paks_missing" = "Нет preload\paks\{0}: это не полная папка TimeShift 1.2. Ничего не изменено."
         "paks_kept" = "Данные мода от прошлой установки актуальны: оставлены."
@@ -310,7 +318,7 @@ function Sha256-File($p) {
 # The exe's SHA-256 when it is not the one the mod is made for, else $null.
 function Exe-Mismatch($g) {
     $sha = Sha256-File (Join-Path $g "bin\TimeShift.exe")
-    if ($sha -eq $script:EXE_SHA) { return $null }
+    if ($sha -eq $script:EXE_SHA -or $sha -eq $script:EXE_SHA_LAA) { return $null }
     $sha.ToLower()
 }
 
@@ -355,7 +363,7 @@ function Is-CoopDll($p) { Has-Text $p @($script:DLL_MARK) }
 # The install record: version=, then file=, backup=, built=, shortcut= lines and arcname= (the
 # value of bin\steamwars.ini's [Preload] arcName before the install).
 function Read-Manifest($g) {
-    $m = @{ files = @(); backups = @(); built = @(); shortcuts = @(); version = ""; arcname = "" }
+    $m = @{ files = @(); backups = @(); built = @(); shortcuts = @(); version = ""; arcname = ""; exe = "" }
     $f = Join-Path $g "coop\install.txt"
     if (Test-Path -LiteralPath $f) {
         foreach ($line in Get-Content -LiteralPath $f) {
@@ -365,6 +373,7 @@ function Read-Manifest($g) {
             elseif ($line -match '^built=(.+)$') { $m.built += $Matches[1] }
             elseif ($line -match '^shortcut=(.+)$') { $m.shortcuts += $Matches[1] }
             elseif ($line -match '^arcname=(.+)$') { $m.arcname = $Matches[1] }
+            elseif ($line -match '^exe=(.+)$') { $m.exe = $Matches[1] }
         }
     }
     if ($m.files.Count -eq 0) { return (Find-Coop $g) }
@@ -776,10 +785,12 @@ function Install-From($g, $payload) {
     foreach ($b in $old.built) { $built.Add($b) }
     $links = @($old.shortcuts)
     $arcOrig = $old.arcname
+    $exeRecord = $old.exe
     $writeRecord = {
         $lines = @("version=$version") + ($files | ForEach-Object { "file=$_" }) + ($backups | ForEach-Object { "backup=$_" }) +
             ($built | ForEach-Object { "built=$_" }) + ($links | ForEach-Object { "shortcut=$_" })
         if ($arcOrig) { $lines += "arcname=$arcOrig" }
+        if ($exeRecord) { $lines += "exe=$exeRecord" }
         New-Item -ItemType Directory -Force (Join-Path $g "coop") | Out-Null
         Set-Content -LiteralPath (Join-Path $g "coop\install.txt") -Value $lines -Encoding UTF8
     }
@@ -852,6 +863,27 @@ function Install-From($g, $payload) {
         Set-ArcName $g "coop.s3darc"
         Ui-Log (L "ini_set")
     } elseif (-not $arcOrig) { $arcOrig = "patch.s3darc" }
+    & $writeRecord
+    # The exe made large-address-aware: only the original patch 1.2 exe (its SHA-256 is checked above), kept first in
+    # coop-backup (the uninstall puts it back); a reinstall finds the patched one (EXE_SHA_LAA) and leaves it.
+    $exeRel = "bin\TimeShift.exe"
+    $exePath = Join-Path $g $exeRel
+    $exeNow = Sha256-File $exePath
+    if ($exeNow -eq $script:EXE_SHA) {
+        & $keep $exeRel
+        $bytes = [IO.File]::ReadAllBytes($exePath)
+        $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+        $ch = [BitConverter]::ToUInt16($bytes, $pe + 22)
+        $ch = $ch -bor 0x20
+        $bytes[$pe + 22] = [byte]($ch -band 0xff)
+        $bytes[$pe + 23] = [byte]($ch -shr 8)
+        [IO.File]::WriteAllBytes($exePath, $bytes)
+        $exeRecord = Sha256-File $exePath
+        Ui-Log (L "large_address_aware")
+    } elseif ($exeNow -eq $script:EXE_SHA_LAA) {
+        if (-not $exeRecord) { $exeRecord = $exeNow }
+        Ui-Log (L "already_large_address_aware")
+    }
     & $writeRecord
     Ui-Step "copy" "done"
 

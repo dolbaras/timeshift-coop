@@ -3351,9 +3351,43 @@ static void net_split_tick(void)
 }
 
 /* main thread, script tick */
+/* Tests (TS_MEMLOG=1): the process's address space every 5 s: used and the largest free block (32-bit exe, 2 GB). */
+static void mem_log(void)
+{
+    static int on = -1;
+    static DWORD last;
+    char v[8];
+    if (on < 0)
+        on = ts_env("TS_MEMLOG", v, sizeof v) && v[0] == '1';
+    DWORD now = GetTickCount();
+    if (!on || now - last < 5000)
+        return;
+    last = now;
+    MEMORYSTATUSEX m = {sizeof m};
+    GlobalMemoryStatusEx(&m);
+    SIZE_T largest = 0, free_total = 0, commit = 0, reserve = 0;
+    MEMORY_BASIC_INFORMATION mb;
+    for (BYTE *a = NULL; VirtualQuery(a, &mb, sizeof mb) == sizeof mb; a = (BYTE *)mb.BaseAddress + mb.RegionSize) {
+        if (mb.State == MEM_FREE) {
+            free_total += mb.RegionSize;
+            if (mb.RegionSize > largest)
+                largest = mb.RegionSize;
+        } else if (mb.State == MEM_COMMIT)
+            commit += mb.RegionSize;
+        else
+            reserve += mb.RegionSize;
+        if ((DWORD)((BYTE *)mb.BaseAddress + mb.RegionSize) < (DWORD)mb.BaseAddress)
+            break;
+    }
+    ts_log("mem: address space %.0f MB total, committed %.0f MB, reserved %.0f MB, free %.0f MB, largest free block %.0f MB (system virtual avail %.0f MB)",
+           (double)m.ullTotalVirtual / 1048576, (double)commit / 1048576, (double)reserve / 1048576, (double)free_total / 1048576,
+           (double)largest / 1048576, (double)m.ullAvailVirtual / 1048576);
+}
+
 static void split_tick(float dt)
 {
     (void)dt;
+    mem_log();
     split_choice();
     if (splitlog) {
         static DWORD last;
