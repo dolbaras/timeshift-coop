@@ -1,12 +1,11 @@
 # Local split screen (prototype)
 
-> **Resume here (2026-10-26):** all code is committed; what is left are the two-PC tests with pads (the client
-> side needs the main PC, where the virtual pads are): (1) split screen on a client end to end with
-> `lab/split_pair_t1.ps1` (host N100, client main PC): the announcement fix (`player_mp`) on the client, the
-> client's copy of player 2, both halves, HUD, weapon, hits, items, messages, death, jitter; (2) split host on the
-> main PC with an N100 client, `lab/split_pair_t2.ps1`: player 2's time power, its AI kill and its pick-up as
-> the client sees them; (3) "Second player on pad 2" on a co-op host (option path not run yet). Round 18 below
-> has the state.
+> **Resume here (2026-10-27):** all code is committed. Done on the main PC: the split-screen soak through the 24 levels
+> (round 21 below), split on a client (round 19, basics), the Co-op menu option on a host (round 20). Left, needs the N100
+> (host) and the main PC (client with virtual pads): items, pick-up messages, death/respawn of the client's copy, a long walk
+> on a client (`lab/split_pair_t1.ps1`). Open from the soak: (1) after 21 level loads in one process the game crashed loading
+> level 22 (run `20261027-060114`, access violation `0xa63c1a`; level 22 alone is fine) - not yet compared with a game
+> without split screen; (2) level 20: player 2 keeps its weapon where the story takes player 1's away.
 
 
 Two players on one PC: player 1 on keyboard, mouse and pad 1, player 2 on pad 2. The screen is split side by
@@ -422,6 +421,29 @@ pads, short walks of each player, a death of each; the keys are taken out again.
 | Walks | player 2 walked forward and back (stick +/-, 2.5 s each), then player 1: the other player's body moves in each half as expected, nothing stuck; with a longer straight walk player 2 ended against a wall and stayed there (the test's direction, not a fault) | `-053701` (frames 096-113), `-053204` `shot134.png` |
 | Death and respawn | `$player2.Kill()`: `player 2 died: respawned next to player 1`; player 1's death screen (red, "До возрождения осталось: 3", the button named by the pad: RT) in its own half only, player 2's half stays in play; player 1 respawns | `-053204` `shot148.png`, `-053701` frames 126-156 |
 | Test windows | the strip right of the picture (1768x992 in 1912x1000) stays black | all frames |
+
+### Round 21 (2026-10-27, main PC alone: the soak through the campaign)
+
+`lab/split_soak.ps1` (pwsh 7): one TimeShift with `TS_SPLIT=1` and two virtual pads; for each level in order it waits until both
+players are placed (log), skips an intro cutscene with pad 1's Start, waits until both halves show their radar, takes a frame at
+full size, idles 20 s, takes a second frame, then the level's exit (reload domain unlocked and the player put in; if the level
+does not change in 20 s `$ui.LoadLevel(next)`). One line per level goes to `workuns\split-soak-<stamp>.txt`. Run
+`20261027-060114` (levels 1-21), `-062443` (23-24), `-161845` (22 alone, fresh).
+
+| Levels | Result |
+|---|---|
+| 1-18 | both players in and alive (health 100/100), 1.0-2.9 m apart, both halves with their radar, no crash, no stall. Level 1: the intro runs ~40 s before the HUD shows (waited for). Natural exit worked in 14 of 18, the others by the console |
+| 19 `zep_factory_part1` | a full-screen computer-screen sequence (the level's own cutscene): no split, no HUD (`shot1102.png`), as for any cutscene |
+| 20 `zep_factory_part2` | red corridor lighting (the level's own); **player 2 holds its weapon and ammunition, player 1 has none** (`shot1161.png`): the story takes player 1's weapons, player 2 keeps its own |
+| 21 `zep_factory_part3` | ok (HUD after ~20 s) |
+| 22 `zep_factory_part4` | **crashed loading it in the long session** (access violation `0xa63c1a`, write to 0, in a resource load; 21 level loads in one process); loaded alone from a fresh start it is fine (`-161845`, both halves, 1.6 m apart, natural exit) |
+| 23 `zepride2_part01` | the airship ride: player 1 in the gun turret, **player 2 stands in the cabin with its own view, weapon and ammunition** (`-062443` `shot119.png`); 21 m apart (turret vs cabin); player 2 cannot use the turret |
+| 24 `cityfinal_part01` | ok, 5.1 m apart (final level, no exit) |
+
+Gaps: player 2 does not take part in the story's weapon removals (20); only player 1 can use turrets and vehicles (23);
+cutscenes and computer-screen sequences are full screen; the crash after 21 loads in one process is not yet compared with a
+game without split screen (it may be the engine's own leak). A red-screen check found no leaks (red share <= 0.05, from the
+levels' own red lights).
 
 Still to run (needs the N100): split on a client end to end (copy, halves, HUD, weapon, hits, items, messages,
 death, jitter), and the split host + client checks (player 2's time power, its AI kill, its pick-up) with
