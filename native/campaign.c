@@ -1040,6 +1040,7 @@ int campaign_replay_wait(const char *obj, const char *ev)
 {
     static const struct { const char *level, *obj, *ev, *need[3]; } waits[] = {
         {"ts2_zepride1_part01", "Zeppelin_cruiser_Intro_plc", "OnAnimBegin", {"Intro_Cooke", "Intro_rebel_1", NULL}},
+        {"ts2_zepride2_part01", "Zep_Intro_actor", "OnAnimBegin", {"Intro_Cooke", "Intro_rebel_2", NULL}},
     };
     char base[0x110];
     if (!enabled || role() != MODE_CLIENT)

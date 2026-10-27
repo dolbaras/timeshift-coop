@@ -518,7 +518,29 @@ Not proven live (open):
 
 ## 3c. Whole-campaign bot pass (N100 pair, 2026-10-26)
 
-**Resume here (2026-10-26, stopped for the owner's shutdown).** Working through the gap list below in order.
+**Resume here (2026-10-27, after the rewind-by-numbers round).** Done and committed (8a4f3af and later): the host's
+own clip ring puts the rewind actors back during the engine's playback (lift 10, bridge 9, train 19, cages 23 and the
+crane 5 all end on the same clip/time on host and client), the recording start is retried, level 16 chatter is gone.
+Next, one small task at a time: (a) force fields 5/16/17/19/21 + level 2 zone by numbers (client `$player` position
+before/after a rewind, or `!cp node`), (b) trap check at the end of a real rewind on 15, (c) seat-once on 23, (d) the
+level 23 / 8 intro dialogue: Cooke's lines run in the CLIENT's own `Zep_Intro_actor.OnAnimBegin` (not a replay) before
+aisync names `Intro_Cooke`, so `campaign_replay_wait` does not apply - needs a local guard, (e) level 9 AI quads (see
+the vehicle notes below), (f) bot re-run (`lab\campaign_bot.ps1 -Env 'TS_CAMPAIGN_LOG=1;TS_STORYSYNC_LOG=1'`: the
+replay counts need TS_STORYSYNC_LOG=1 now). Test helpers: `work\tmp_agent\numbers.sh`, `pairrun.ps1`. Leave both PCs
+clean with `lab\safe_state.ps1`.
+
+### Verified table (2026-10-27)
+
+| Item | By numbers | By frames | Not verified |
+|---|---|---|---|
+| Crane 5 rewind on client | clip/time equal on host and client before/after (n100pair-20261027-053705, -054355 ring regression) | partly (client on the crane, 2026-10-26) | floor-view frame pair |
+| Lift 10, bridge 9, train 19, cages 23 | end clip/time equal on host and client after a host rewind (runs -054010/-054355, -060306, -055947, cage run 06:54) | - | frame pairs; client-owned rewind of these |
+| Armoured cars 19, truck 9 stream | client positions equal the host's | - | frames showing the vehicles |
+| Level 9 AI quads, level 7 helicopter | - | - | quads snap back on clients (known gap), helicopter static |
+| Level 16 chatter | 10 replays in 100 s (was ~760 in 2 min) | - | - |
+| Level 23 Cooke lines | still `unknown object Intro_Cooke` (local run, not a replay) | - | fix |
+| Force fields 5/16/17/19/21, level 2 zone, trap check 15, seat-once 23 | - | - | not run |
+| Bot re-run | - | - | not run |
 - (1) Rewound objects on clients: done in coopreverse.c (message 83). During the host's playback it sends each rewind
   actor's clip and time every 0.1 s; the client sets them with the actor's own `Start(clip, time[, cycle])` and `Stop()`;
   three more sends after the end. Live on level 5 (run `n100pair-20261026-044632`): the client's crane clip time went
