@@ -330,6 +330,8 @@ static const char *const traps[] = {
     "clone4|dom_mis_fail", NULL,
     NULL};
 
+static unsigned trap_sent;   /* (slots already told to die after this rewind: once each) */
+
 static void trap_check(void)
 {
     char base[0x110];
@@ -361,8 +363,9 @@ static void trap_check(void)
                 continue;
             int in = dom_is_belong(dom, ent) & 0xff;
             VLOG("coopreverse: trap %s (locks %d): client in slot %d %s", *p, *(int *)(dom + DOM_LOCKS), i, in ? "inside" : "outside");
-            if (!in)
+            if (!in || i >= 32 || (trap_sent & (1u << i)))
                 continue;
+            trap_sent |= 1u << i;
             unsigned char b = PROTO;
             coopnet_send(i, SUB_TRAP, &b, 1);
             RLOG("coopreverse: client in slot %d trapped in %s after the rewind: it dies", i, *p);
@@ -826,6 +829,7 @@ static void host_stop(const char *why)
     if (was_stock) {
         ring_finish();
         trap_until = GetTickCount() + 1500;
+        trap_sent = 0;
         anim_final_at = GetTickCount() + 200;
         anim_finals = 3;
         stock_run = stock_ours = 0;
