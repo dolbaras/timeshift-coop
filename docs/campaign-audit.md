@@ -564,6 +564,22 @@ Not proven live (open):
   is shared; look for who writes node +0x38..0x74 from `ent+0x23c`). Lab commands added for this: `!cp scan <obj> x y
   z`, `entset`, `ptrset`, `placeobj` (placeobj crashes the argument list: do not use), `!cp node` prints the raw
   flags and the user pointer.
+- **Goal 2 attempts (level 5 crane, level 9 bridge; 2026-10-27, runs n100pair-20261027-0200xx .. -0245xx).** No usable
+  frame pair yet. Findings for the next try: (a) the stock rewind on the host only runs from the host's real B key
+  (`n100_key.ps1 -Which host -Code 0x30 -Ms 300`, "engine playback, 216 snapshots"); `!rv start` on the host runs the
+  quick variant with no playback. (b) The crane is above the hall ceiling: from the hall floor next to
+  `dom_hint_krane` (`!cp putin dom_hint_krane 0`, hall centre 13.1 -10.7 14.0) a camera turned with
+  `$player.DoRotateView("Kran_actor", 0.1)` sees the crane arm and its crate at the top left (client shot079/090 of
+  n100pair-20261027-024212) - but both players land in the same spot and the crates block the view, and the client
+  was killed there once; put only the client there, a few metres to the right of the hint domain's centre. (c) Level 9:
+  the bridge actor sits 100 m above the canyon floor (`dom_kill_bridge` below it kills a placed player: do not use
+  `!cp at`/`putin dom_hint_bridge` there); with `$bridge_puzle_actor.Start("UP")` started from the console on both
+  machines and the host's B key 6 s later, host AND client stayed at `anim 2 t 1.5` - the engine's playback did not
+  rewind that actor on the host either (its puzzle runs through `dom_time_zone*` / `$tc.SetMode("puzzle_reverse_once")`,
+  so the player must stand in a time zone), so level 9's bridge needs the zone set-up first. (d) `!cp near/find` on
+  level 9 crashed the game once (fixed: entity back-pointer check), `!cp pos` does not work for domains (no node).
+  Lab commands: `!cp at x y z [obj]` now also pitches `dir` toward the object (the engine ignores the pitch; use
+  DoRotateView), `entset`, `ptrset`, `scan`.
 - Earlier plan for (2) AI vehicles on clients. `!cp nodeset <obj> 68 x y z` writes on a client persist (the crane probe), so try
   a host position stream (node +0x38/+0x48/+0x58 rows and +0x68, maybe +0x14) for route-driven vehicles. Then (3)-(6) as
   listed in the coordinator's order (16 chatter, Cooke's dialogue on 8, the replay flood on 23, the unverified items),

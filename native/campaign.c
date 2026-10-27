@@ -1454,13 +1454,13 @@ int campaign_console(const char *text, char *out, int size)
         if (!strcmp(cmd, "near") && (!(c = find_ent(a1)) || !ent_pos(c, cp)))
             return snprintf(out, size, "%s: none", a1), 1;
         for (int i = 0; data && i < cnt && n < size - 70; i++) {
-            String nm = data[i] ? *(String *)((char *)data[i] + INST_NAME) : NULL;
-            char *e = data[i] ? *(char **)((char *)data[i] + INST_NATIVE) : NULL;
+            String nm = data[i] && !IsBadReadPtr(data[i], INST_NATIVE + 4) ? *(String *)((char *)data[i] + INST_NAME) : NULL;
+            char *e = nm ? *(char **)((char *)data[i] + INST_NATIVE) : NULL;
             float p[3];
-            if (!nm || !nm->s[0])
+            if (!nm || IsBadReadPtr(nm, 8) || IsBadStringPtrA(nm->s, 200) || !nm->s[0])
                 continue;
             if (c) {
-                if (!ent_pos(e, p) || (p[0] - cp[0]) * (p[0] - cp[0]) + (p[1] - cp[1]) * (p[1] - cp[1])
+                if (!e || IsBadReadPtr(e, ENT_INST + 4) || *(void **)(e + ENT_INST) != data[i] || !ent_pos(e, p) || (p[0] - cp[0]) * (p[0] - cp[0]) + (p[1] - cp[1]) * (p[1] - cp[1])
                     + (p[2] - cp[2]) * (p[2] - cp[2]) > rad * rad)
                     continue;
             } else if (!strstr(nm->s, a1))
@@ -1582,9 +1582,9 @@ int campaign_console(const char *text, char *out, int size)
             return snprintf(out, size, "usage: !cp at x y z [object]"), 1;
         float dir[3] = {*(float *)(node + NODE_DIR), *(float *)(node + NODE_DIR + 4), *(float *)(node + NODE_DIR + 8)};
         if (look[0] && ent_pos(find_ent(look), tp)) {
-            float dx = tp[0] - at[0], dz = tp[2] - at[2], l = sqrtf(dx * dx + dz * dz);
+            float dx = tp[0] - at[0], dy = tp[1] - at[1], dz = tp[2] - at[2], l = sqrtf(dx * dx + dy * dy + dz * dz);
             if (l > 0.01f)
-                dir[0] = dx / l, dir[1] = 0.f, dir[2] = dz / l;
+                dir[0] = dx / l, dir[1] = dy / l, dir[2] = dz / l;
         }
         ((void (TSCALL *)(void *, float *, float *, int))(*(void ***)pl)[PLAYER_PLACE / 4])(pl, at, dir, 0);
         ent_pos(pl, pos);
