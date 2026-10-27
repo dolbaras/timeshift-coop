@@ -52,6 +52,7 @@
  */
 #include <windows.h>
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -429,11 +430,11 @@ static const char *const actor_clips[] = {
     "Kran_actor", "FORTH", "BACK", NULL,
     "Conveyer_actor", "LEFT", "RIGHT", NULL,
     "bridge_puzle_actor", "DOWN", "UP", "IDLE", NULL,
-    "Lift_actor", "DOWN", "UP", NULL,
-    "Actor_train", "MOVE", NULL,
-    "Actor_ghost_train", "MOVE", NULL,
-    "cage1_actor", "FALL", NULL,
-    "cage2_actor", "FALL", NULL,
+    "Lift_actor", "DOWN", "UP", "IDLE", NULL,
+    "Actor_train", "MOVE", "IDLE", NULL,
+    "Actor_ghost_train", "MOVE", "IDLE", NULL,
+    "cage1_actor", "FALL", "IDLE", NULL,
+    "cage2_actor", "FALL", "IDLE", NULL,
     NULL};
 #define MAX_ANIM_ACTORS 4
 static int (TSCALL *node_clip_index)(void *, const char *) = (void *)0x952a60;
@@ -542,6 +543,117 @@ static void apply_anims(void)
     }
 }
 
+/* The host's own record of the rewind actors' animation (clip, time, running; 10 Hz, 33 s). Live 2026-10-27: the
+ * engine's playback put the crane back but left the lift of level 10 (and the bridge of 9) at their end pose on the
+ * host too, so nothing could reach the clients. During a playback the host therefore steps these actors back itself:
+ * the engine's snapshot counter (REC_FRAMES) tells how much history it has played, the sample that far back is
+ * set through Start(clip, time) + Stop() (held), and when the playback ends the last sample goes back in with its real
+ * running state. The clients follow through message 83 as before. TS_COOP_REWIND_ANIMS=0 switches it off. */
+#define RING 330
+typedef struct { signed char ci; unsigned char fl; float t; } Samp;
+static Samp ring[MAX_ANIM_ACTORS][RING];
+static Samp ring_last[MAX_ANIM_ACTORS];
+static int ring_n, ring_head, ring_frames0, use_ring = 1;
+static DWORD ring_at, ring_log;
+static char ring_level[0x110];
+
+static int sample_actor(const char *name, Samp *s)
+{
+    char *e = named_ent(name), *node = e ? *(char **)(e + 0x230) : NULL;
+    const char *const *c = clips_of(name);
+    if (!node || IsBadReadPtr(node, 0x88) || !c)
+        return 0;
+    int id = node_clip(node), ci = -1;
+    for (int j = 0; id >= 0 && c[j]; j++)
+        if (node_clip_index(node, c[j]) == id) {
+            ci = j;
+            break;
+        }
+    if (ci < 0)
+        return 0;
+    unsigned fl = *(unsigned *)(e + 0x280);
+    s->ci = (signed char)ci;
+    s->fl = (unsigned char)((fl & 1 ? 1 : 0) | (fl & 0x10 ? 2 : 0));
+    s->t = node_clip_time(node);
+    return 1;
+}
+
+static void ring_sample(DWORD now)   /* (host script tick, not during a playback) */
+{
+    if (!use_ring || now - ring_at < 100)
+        return;
+    ring_at = now;
+    if (strcmp(ring_level, LEVEL_NAME) != 0) {
+        snprintf(ring_level, sizeof ring_level, "%s", LEVEL_NAME);
+        ring_n = 0;
+    }
+    const char *const *a = level_actors();
+    for (int k = 0; a && a[k] && k < MAX_ANIM_ACTORS; k++) {
+        Samp s = {-1, 0, 0.f};
+        sample_actor(a[k], &s);
+        ring[k][ring_n % RING] = s;
+    }
+    ring_n++;
+}
+
+static void ring_begin(void)
+{
+    ring_head = ring_n - 1;
+    ring_frames0 = *(int *)(REC + REC_FRAMES);
+    for (int k = 0; k < MAX_ANIM_ACTORS; k++)
+        ring_last[k].ci = -2;
+}
+
+static void ring_set(const char *name, const Samp *s, int hold)
+{
+    const char *const *c = clips_of(name);
+    char stmt[160], res[120];
+    if (!c || s->ci < 0)
+        return;
+    snprintf(stmt, sizeof stmt, "$%s.Start(\"%s\",%.3f%s)", name, c[s->ci], (double)s->t, s->fl & 2 ? ",1" : "");
+    ts_script_run(stmt, res, sizeof res);
+    if (hold || !(s->fl & 1)) {
+        snprintf(stmt, sizeof stmt, "$%s.Stop()", name);
+        ts_script_run(stmt, res, sizeof res);
+    }
+}
+
+static void ring_play(void)   /* (recorder tick, host, during a playback) */
+{
+    if (!use_ring || ring_n <= 0)
+        return;
+    int frames = *(int *)(REC + REC_FRAMES), consumed = ring_frames0 - frames, lo = ring_n > RING ? ring_n - RING : 0;
+    int idx = ring_head - (consumed > 0 ? consumed : 0);
+    if (idx < lo)
+        idx = lo;
+    if (idx < 0)
+        return;
+    const char *const *a = level_actors();
+    for (int k = 0; a && a[k] && k < MAX_ANIM_ACTORS; k++) {
+        Samp s = ring[k][idx % RING];
+        if (s.ci < 0 || (ring_last[k].ci == s.ci && fabsf(ring_last[k].t - s.t) < 0.04f))
+            continue;
+        ring_last[k] = s;
+        ring_set(a[k], &s, 1);
+    }
+    if (verbose && GetTickCount() - ring_log > 1000) {
+        ring_log = GetTickCount();
+        RLOG("coopreverse: playback: %d snapshots left of %d, sample %d of %d (head %d)", frames, ring_frames0, idx, ring_n,
+             ring_head);
+    }
+}
+
+static void ring_finish(void)   /* (host, the playback ended: the last sample goes back with its real running state) */
+{
+    const char *const *a = level_actors();
+    for (int k = 0; use_ring && a && a[k] && k < MAX_ANIM_ACTORS; k++)
+        if (ring_last[k].ci >= 0)
+            ring_set(a[k], &ring_last[k], 0);
+    for (int k = 0; k < MAX_ANIM_ACTORS; k++)
+        ring_last[k].ci = -2;
+    ring_n = 0;   /* (the history before the rewind is gone, as the engine's) */
+}
+
 /* The recorder task's per-frame update (0x584960, its vtable +0x138) keeps running during a playback, when the
  * script tick (this file's frame) does not: the network updates of the rewind actors and the end of a client's reverse
  * happen here. */
@@ -552,6 +664,7 @@ __attribute__((used)) void crw_tick(void)
     if (!stock || !on || !stock_run || game_mode() != MODE_SERVER)
         return;
     if (playing()) {
+        ring_play();
         push_rewind_actors();
         if (GetTickCount() - anim_last >= 100) {
             anim_last = GetTickCount();
@@ -606,7 +719,7 @@ __asm__(".text\n"
  * 0x5846b0, ecx = the recorder, starts it). */
 #define SLOT_INGAME 1
 static int rec_paused;
-static DWORD rec_resume_at;
+static DWORD rec_resume_at, rec_retry_at;
 static void rec_pause_step(void)
 {
     char *r = REC;
@@ -635,6 +748,19 @@ static void rec_pause_step(void)
                          : [fn] "r"(0x5846b0)
                          : "eax", "edx", "memory", "cc", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7");
         RLOG("coopreverse: recording on again (%s)", (GAME_FLAGS & 0x200000u) ? "recording" : "not started");
+    } else if (!rec_paused && !(GAME_FLAGS & 0x200000u) && (GAME_FLAGS & 0x80000000u) && now - rec_retry_at >= 2000) {
+        /* (live, level 19: the start 3 s after the client's load was refused - the level opens with a film - and the
+         * recording never began, so no rewind ran: ask again every 2 s until the engine accepts) */
+        static int tries;
+        rec_retry_at = now;
+        __asm__ volatile("call *%[fn]"
+                         : "+c"(r)
+                         : [fn] "r"(0x5846b0)
+                         : "eax", "edx", "memory", "cc", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7");
+        if ((GAME_FLAGS & 0x200000u) || ++tries <= 3)
+            RLOG("coopreverse: recording asked for again (%s)", (GAME_FLAGS & 0x200000u) ? "recording" : "not started");
+        if (GAME_FLAGS & 0x200000u)
+            tries = 0;
     }
 }
 
@@ -680,6 +806,7 @@ static void host_start(int who, float secs, const char *why)
         }
         stock_run = stock_ours = 1;
         stock_since = GetTickCount();
+        ring_begin();
     }
     owner = who;
     until = GetTickCount() + (DWORD)(secs * 1000.f);
@@ -697,6 +824,7 @@ static void host_stop(const char *why)
         rev_end(PLAYER, MODE_REVERSE, 0);   /* (ends the engine's playback) */
     apply(0, 0);   /* (with stock_run still set: the engine fires the host's OnStopTReverse itself) */
     if (was_stock) {
+        ring_finish();
         trap_until = GetTickCount() + 1500;
         anim_final_at = GetTickCount() + 200;
         anim_finals = 3;
@@ -846,6 +974,7 @@ static void frame(float dt)
             stock_run = 1;
             stock_ours = 0;
             stock_since = now;
+            ring_begin();
             owner = 0;
             until = now + 60000;   /* (the engine ends it) */
             apply(1, 0);
@@ -855,6 +984,8 @@ static void frame(float dt)
             host_stop("engine playback ended");
         if (on && stock_run && playing())
             push_rewind_actors();
+        if (!stock_run && !playing())
+            ring_sample(now);
         if (trap_until && (int)(now - trap_until) < 0)
             trap_check();
         else
@@ -906,10 +1037,11 @@ int coopreverse_console(const char *text, char *out, int size)
         return snprintf(out, size, "reverse stop asked"), 1;
     }
     snprintf(out, size, "coopreverse %s, active %d, on %d, yours %d, owner %d, %.1f s at %.2f energy/s, energy %.2f;"
-             " stock rewind %d (ready %d, running %d, recorder %p, serializer %p, snapshots %d, flags %x, playback %d)",
+             " stock rewind %d (ready %d, running %d, recorder %p, serializer %p, snapshots %d, flags %x, playback %d, game flags %x/%x)",
              enabled ? "enabled" : "off", active(), on, yours, owner, (double)rev_seconds, (double)rev_cost,
              PLAYER ? (double)*(float *)(PLAYER + ENERGY) : -1.0, stock, stock_ready(), stock_run, (void *)REC,
-             (void *)TR_SAVE, REC ? *(int *)(REC + REC_FRAMES) : -1, REC ? *(int *)(REC + REC_FLAGS) : 0, playing());
+             (void *)TR_SAVE, REC ? *(int *)(REC + REC_FRAMES) : -1, REC ? *(int *)(REC + REC_FLAGS) : 0, playing(), (unsigned)GAME_FLAGS,
+             (unsigned)*(volatile unsigned *)0xfcace0);
     return 1;
 }
 
@@ -943,6 +1075,7 @@ void coopreverse_install(void)
         if (!ts_patch_bytes(0x43edda, want_av, r, 6))
             ts_log("coopreverse: reverse availability check not found: the key stays off where nothing is recorded");
     }
+    use_ring = !(ts_env("TS_COOP_REWIND_ANIMS", v, sizeof v) && v[0] == '0');
     if (ts_env("TS_COOP_REWIND", v, sizeof v) && v[0] == '1') {
         /* the recorder code's game-mode reads (mov eax/ecx, [0xfcab34]) -> "single player" on a co-op host */
         static const DWORD sites_eax[] = {0x583912, 0x583952, 0x58398c, 0x5839d6, 0x584679, 0x5846b0, 0x585b97};
