@@ -580,6 +580,16 @@ Not proven live (open):
   level 9 crashed the game once (fixed: entity back-pointer check), `!cp pos` does not work for domains (no node).
   Lab commands: `!cp at x y z [obj]` now also pitches `dir` toward the object (the engine ignores the pitch; use
   DoRotateView), `entset`, `ptrset`, `scan`.
+- **Rewinds by numbers (method, 2026-10-27).** `work\tmp_agent\numbers.sh <level> <actor> '<ssl trigger>' <wait s>`
+  starts the actor on both machines from the console, presses the host's B key, and prints `!cp node <actor>` (clip
+  id and time) on both sides before, after and later, plus the `coopreverse` lines of both logs (env
+  `TS_COOP_REVERSE_LOG=1`: host "<actor> clip X at t (runs|stopped) sent", client "<actor> set to clip X at t -> Ok").
+  Level 10 lift (run n100pair-20261027-050556): clip DOWN is 4 s long and the rewind began 9 s after its start, i.e.
+  5 s back was still the finished pose, so host and client both stayed `anim 1 t 4.000` and the log shows the host's
+  three sends and the client's three "set ... -> Ok" (message 83 reaches the client; the test did not move the actor).
+  Use a wait of 2 s (rewind then reaches the pose before the start) for the lift (`$Lift_actor.Start("DOWN")`), train 19
+  (`$Actor_train.Start("MOVE",0)`) and cages 23 (`$cage1_actor.Start("FALL",0,0)`); the bridge on 9 needs the player
+  inside a `dom_time_zone` first.
 - Earlier plan for (2) AI vehicles on clients. `!cp nodeset <obj> 68 x y z` writes on a client persist (the crane probe), so try
   a host position stream (node +0x38/+0x48/+0x58 rows and +0x68, maybe +0x14) for route-driven vehicles. Then (3)-(6) as
   listed in the coordinator's order (16 chatter, Cooke's dialogue on 8, the replay flood on 23, the unverified items),
