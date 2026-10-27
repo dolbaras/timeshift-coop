@@ -1037,6 +1037,25 @@ static int named_quiet(const char *name)   /* (the script manager's named object
     return 0;
 }
 
+/* The intro dialogue of levels 8 and 23: the handler's delayed ShowMsg lines talk to Intro_Cooke / Intro_rebel_*, which the
+ * host creates in the same handler; a client gets their names a moment after its own copy of the handler ran, so every
+ * line logged "unknown object" (up to 53 per run). The client skips these lines (the host's own run plays them). */
+int campaign_wrap_call(const char *stmt)
+{
+    static const char *const lines[] = {"$Intro_Cooke.ShowMsg", "$Intro_rebel_1.ShowMsg", "$Intro_rebel_2.ShowMsg",
+                                      "$Intro_Cooke.Die", "$Intro_rebel_1.Die", "$Intro_rebel_2.Die", NULL};
+    char base[0x110];
+    if (!enabled || !stmt)
+        return 0;
+    level_base(LEVEL_NAME, base, sizeof base);
+    if (_stricmp(base, "ts2_zepride1_part01") != 0 && _stricmp(base, "ts2_zepride2_part01") != 0)
+        return 0;
+    for (int i = 0; lines[i]; i++)
+        if (strstr(stmt, lines[i]))
+            return 1;
+    return 0;
+}
+
 int campaign_replay_wait(const char *obj, const char *ev)
 {
     static const struct { const char *level, *obj, *ev, *need[3]; } waits[] = {

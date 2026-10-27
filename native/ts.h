@@ -70,6 +70,7 @@ void campaign_story_event(const char *obj, const char *ev, const char *arg0);   
 int campaign_local_setspeed(void);   /* storysync.c (client): domain SetSpeed runs locally (force fields, wind) */
 int campaign_local_call(const char *stmt, const char *name, int len);   /* storysync.c (client): 1 = runs locally too */
 int campaign_frame_local(const char *obj, const char *ev, const char *stmt);   /* storysync.c: 1 = each machine runs it */
+int campaign_wrap_call(const char *stmt);   /* storysync.c (client): 1 = wrap this statement (skipped on clients) */
 int campaign_replay_wait(const char *obj, const char *ev);    /* storysync.c (client): 1 = hold this replay a little */
 
 /* aisync.c: AI soldiers on clients of a campaign level */

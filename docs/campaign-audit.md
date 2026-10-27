@@ -545,6 +545,27 @@ rewind recorder, force-field/seat/trap rules all log "on" in every run; the reco
 | 7 | skyscraper_part4 | natural | yes | 12 | 53 | 8 | -171019 | the 53 are level 8's `Intro_Cooke`/`Intro_rebel_1` (client's own `Zeppelin_cruiser_Intro_plc.OnAnimBegin`): the known Cooke gap also hits the 7 -> 8 change (same as 2026-10-26) |
 | 8 | zepride1_part01 | natural | yes | 14 | 2 | 7 | -171232 | |
 
+### Bot regression, chunk 2: levels 9-16 (`work	mp_agentot2.out`, DLL of commit 5922d7c)
+
+All 8 levels: client on the next level, no "Unhandled exception" on either side, 5-7 vehicle messages in per run on 9-15 (0 on 16, no vehicles there), the
+vehicle stream finds its vehicles (only 2 "not here" lines on level 9: Jets). Quads: unchanged known gap on 9 and 12 (AI quads snap back on the client).
+
+| # | Level | Exit | Client next | Replays | Unknown obj | Held back | Run |
+|---|---|---|---|---|---|---|---|
+| 9 | zepcrashsite_part01 | natural | yes | 15 | 5 | 3 | -221338 |
+| 10 | zepcrashsite_part02 | natural | yes | 12 | 5 | 11 | -221559 |
+| 11 | zepcrashsite_part03 | natural | yes | 3 | 2 | 3 | -221817 |
+| 12 | summeroutdoor_part01 | natural | yes | 1 | 2 | 4 | -222039 |
+| 13 | summeroutdoor_part02 | natural | yes | 10 | 2 | 7 | -222256 |
+| 14 | guardfactory_part01 | natural | yes | 4 | 2 | 0 | -222517 |
+| 15 | guardfactory_part02 | natural | yes | 17 | 2 | 9 | -222737 |
+| 16 | guardfactory_part03 | natural | yes | 7 | 3 | 7 | -222947 (was 762 replays on 2026-10-26) |
+
+Intro_Cooke / Intro_rebel_* (levels 8 and 23, seen on 7 -> 8): `campaign_wrap_call` (campaign.c, hooked into storysync's
+classifier) now wraps the client's copies of the intro handlers' `$Intro_Cooke/_rebel_1/_rebel_2 .ShowMsg/.Die` lines (host-only; the
+host's run plays them). Level 8: 0 unknown-object lines for them (was up to 10-11 each); level 23: the script errors are gone, 2 benign lines
+per intro remain (aisync's own name probe just before it names the object). Dialogue lines of Cooke are therefore not heard on clients.
+
 ### Verified table (2026-10-27)
 
 | Item | By numbers | By frames | Not verified |
@@ -554,7 +575,7 @@ rewind recorder, force-field/seat/trap rules all log "on" in every run; the reco
 | Armoured cars 19, truck 9 stream | client positions equal the host's | - | frames showing the vehicles |
 | Level 9 AI quads, level 7 helicopter | - | - | quads snap back on clients (known gap), helicopter static |
 | Level 16 chatter | 10 replays in 100 s (was ~760 in 2 min) | - | - |
-| Level 23 Cooke lines | still `unknown object Intro_Cooke` (local run, not a replay) | - | fix |
+| Level 8 / 23 Cooke lines | no script errors any more (wrapped on the client, see chunk 2) | - | hearing Cooke's lines on clients |
 | Force fields 5, 16, 17, 19, 21 (client-owned reverse, `!cp dspeed`) | 5: force_field1/2 1.8/-1.8 -> -1.8/1.8 during, back after; 16: dom_ffield_conveyer 3 -> -3 -> 3 (power enabled first: `$player.DisableTC("time_reverse",0)` + `$tc.SetMode("reverse")`, the story does that); 17: force_field1/2 3/-3 flip and back; 19: force_field 1.5 -> -1.5 -> 1.5 (after the opening chase: the key does nothing during the film); 21: WIND 25/25 -> -5/-7.5 -> 25/25 (runs n100pair-20261027-162214, -162411.., -163306.., -163758) | - | the host's own copies do not flip while a CLIENT owns the reverse (they stay 1.8 etc.; the host player is not pushed) |
 | Trap check 15 after a real rewind | client placed in `s3d_Container_1\|dom_mis_fail`, host's real rewind (B key): one host line "trapped ... it dies", ONE kill on the client (was 73 kills in 1.5 s: now once per client per rewind), client respawns at 70.04 2.04 -9.10 (n100pair-20261027-163916, -164xxx) | - | the host's own trap = the level's script (mission fail) |
 | Level 2 reverse zone | client in `tc_domain_bridge` (its OnEnter sets tc mode reverse): the client's B key starts a co-op reverse ("reverse on (mine)", 5 s, off) (n100pair-20261027-1645xx) | - | the debris/bridge rewinding itself (needs the mech to wreck the bridge first) |
