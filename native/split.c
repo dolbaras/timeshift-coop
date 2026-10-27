@@ -2479,7 +2479,8 @@ static void split_choice(void)
     char out[64];
     if (!forced) {
         ts_script_run("return $ui.GetStr(\"CoopSplitJoin\")", out, sizeof out);
-        client_choice = strcmp(out, "1") == 0;
+        if (!strcmp(out, "1") || !strcmp(out, "0"))   /* (anything else: the script engine was busy, the last answer holds) */
+            client_choice = out[0] == '1';
     }
     if (forced || remote_host || client_split)
         return;
@@ -2487,7 +2488,12 @@ static void split_choice(void)
     /* (the Co-op menu's split screen (single player), or a co-op host with the Co-op frame's "Second player on
      * pad 2" and a second pad) */
     int host = net_mode() == 2 && client_choice && gamepad_slot(1) >= 0;
-    int want = strcmp(out, "1") == 0 || host;
+    /* (a host's split screen is given up only after 5 s without the conditions: a level change and the loads of a
+     * session pass through states where the mode or the answers are not there; run 20261027-224033: split screen
+     * went off 28 s after the level change and did not come back) */
+    static int host_miss;
+    host_miss = host ? 0 : host_miss + 1;
+    int want = strcmp(out, "1") == 0 || host || (stage && host_miss < 5 && net_mode() != 1 && client_choice);
     if (want && !stage) {
         stage = 3;
         set_single_thread(1);
@@ -2500,7 +2506,7 @@ static void split_choice(void)
         set_single_thread(0);
         restore_globals();
         pic_ok[0] = pic_ok[1] = 0;
-        ts_log("split: off");
+        ts_log("split: off (CoopSplit \"%s\", join %d, net mode %d, pad 2 %d)", out, client_choice, net_mode(), gamepad_slot(1) + 1);
     }
 }
 

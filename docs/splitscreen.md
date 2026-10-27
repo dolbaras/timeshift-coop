@@ -469,6 +469,11 @@ on 64-bit Windows). The original exe (SHA-256 `689c63da...52641be4`, the gate is
 the patched exe and leaves it, the uninstall puts the original back. Tested on `work\install_test` (install, reinstall,
 uninstall: the original hash back, nothing left). The soak above used the patched exe in the development copy.
 
+Round 22b (LAA exe, main PC): the installer was run with the LAA exe into `work\install_test` and the game started from it (main
+menu and Co-op frame as before, `mem: address space 4096 MB`, `20261027-223916`); in the development copy with the patched exe
+the Co-op menu option on a host (walks, deaths, a level change part02 -> part03) ran as without it: no crash, both halves with
+HUD and weapon on part03 (`20261027-224520`, `shot185.png`). Not run: a LAA host + client join on two PCs.
+
 Still to run (needs the N100): split on a client end to end (copy, halves, HUD, weapon, hits, items, messages,
 death, jitter), and the split host + client checks (player 2's time power, its AI kill, its pick-up) with
 `split_pair_t2.ps1`.
