@@ -957,6 +957,7 @@ static void latejoin_step(DWORD now)
     int running = (GAME_FLAGS & FLAG_LEVEL_RUNNING) != 0;
     if (running && !was_running) {   /* a level (or the same level after a team restart) is up */
         level_start = now;
+        CLOG("campaign: level run starts (%s)", LEVEL_NAME);
         memset(&hst, 0, sizeof hst);
         n_known = 0;
     }
