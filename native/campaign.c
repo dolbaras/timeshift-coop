@@ -1576,6 +1576,21 @@ int campaign_console(const char *text, char *out, int size)
         ent_pos(e, pos);
         return snprintf(out, size, "%s placed (flag %d), now %.2f %.2f %.2f", a1, flag, pos[0], pos[1], pos[2]), 1;
     }
+    if (!strcmp(cmd, "dspeed")) {   /* "!cp dspeed <domain> [domain2 ...]": the force-field domains' speed vector (+0x100) (lab) */
+        int n = 0;
+        char names[8][64];
+        int cnt = sscanf(text + 3, "%*s %63s %63s %63s %63s %63s %63s %63s %63s", names[0], names[1], names[2], names[3],
+                         names[4], names[5], names[6], names[7]);
+        for (int i = 0; i < cnt && n < size - 80; i++) {
+            char *d = find_ent(names[i]);
+            if (!is_domain(d) || IsBadReadPtr(d, 0x110))
+                n += snprintf(out + n, size - n, "%s: none; ", names[i]);
+            else
+                n += snprintf(out + n, size - n, "%s: %.1f %.1f %.1f; ", names[i], (double)*(float *)(d + 0x100),
+                              (double)*(float *)(d + 0x104), (double)*(float *)(d + 0x108));
+        }
+        return 1;
+    }
     if (!strcmp(cmd, "at")) {   /* "!cp at x y z [object]": this machine's player to a point, facing the object (lab) */
         char *pl = PLAYER, *node = pl ? *(char **)(pl + ENT_NODE) : NULL, look[64] = "";
         float at[3], tp[3], pos[3];

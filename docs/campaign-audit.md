@@ -521,8 +521,7 @@ Not proven live (open):
 **Resume here (2026-10-27, after the rewind-by-numbers round).** Done and committed (8a4f3af and later): the host's
 own clip ring puts the rewind actors back during the engine's playback (lift 10, bridge 9, train 19, cages 23 and the
 crane 5 all end on the same clip/time on host and client), the recording start is retried, level 16 chatter is gone.
-Next, one small task at a time: (a) force fields 5/16/17/19/21 + level 2 zone by numbers (client `$player` position
-before/after a rewind, or `!cp node`), (b) trap check at the end of a real rewind on 15, (c) seat-once on 23, (d) the
+Next, one small task at a time: (a) level 2 zone by numbers (force fields 5/16/17/19/21 are done, see the table), (b) trap check at the end of a real rewind on 15, (c) seat-once on 23, (d) the
 level 23 / 8 intro dialogue: Cooke's lines run in the CLIENT's own `Zep_Intro_actor.OnAnimBegin` (not a replay) before
 aisync names `Intro_Cooke`, so `campaign_replay_wait` does not apply - needs a local guard, (e) level 9 AI quads (see
 the vehicle notes below), (f) bot re-run (`lab\campaign_bot.ps1 -Env 'TS_CAMPAIGN_LOG=1;TS_STORYSYNC_LOG=1'`: the
@@ -539,7 +538,8 @@ clean with `lab\safe_state.ps1`.
 | Level 9 AI quads, level 7 helicopter | - | - | quads snap back on clients (known gap), helicopter static |
 | Level 16 chatter | 10 replays in 100 s (was ~760 in 2 min) | - | - |
 | Level 23 Cooke lines | still `unknown object Intro_Cooke` (local run, not a replay) | - | fix |
-| Force fields 5/16/17/19/21, level 2 zone, trap check 15, seat-once 23 | - | - | not run |
+| Force fields 5, 16, 17, 19, 21 (client-owned reverse, `!cp dspeed`) | 5: force_field1/2 1.8/-1.8 -> -1.8/1.8 during, back after; 16: dom_ffield_conveyer 3 -> -3 -> 3 (power enabled first: `$player.DisableTC("time_reverse",0)` + `$tc.SetMode("reverse")`, the story does that); 17: force_field1/2 3/-3 flip and back; 19: force_field 1.5 -> -1.5 -> 1.5 (after the opening chase: the key does nothing during the film); 21: WIND 25/25 -> -5/-7.5 -> 25/25 (runs n100pair-20261027-162214, -162411.., -163306.., -163758) | - | the host's own copies do not flip while a CLIENT owns the reverse (they stay 1.8 etc.; the host player is not pushed) |
+| Level 2 zone, trap check 15, seat-once 23 | - | - | not run |
 | Bot re-run | - | - | not run |
 - (1) Rewound objects on clients: done in coopreverse.c (message 83). During the host's playback it sends each rewind
   actor's clip and time every 0.1 s; the client sets them with the actor's own `Start(clip, time[, cycle])` and `Stop()`;
