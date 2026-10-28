@@ -51,6 +51,7 @@ dialog and no crash: Continue is simply unavailable. Tested by editing the file 
 | `20261028-041206` / `-041426` / `-041727` | the new record format (`format=1`, `health=56.0`, `energy=1.00`) in `continue-Default.txt`; Continue on part02: weapons 1 0 0, ammunition 128/16, life 56 and time energy 1.00 put back (`coopsave: ... put back (ok)`) |
 | `-0419..` to `-0423..` | the record edited: no `format=` line, `format=2`, unknown chapter `ts2_nonexistent_part9`, `health=nan` + `checkpoint=abc`, 3 KB of random bytes: each time `CoopHasSave = 0`, no crash, the game runs on |
 | `20261028-042417` | no record file: `CoopHasSave = 0`, Continue greyed, the hint says it appears after a checkpoint (`shot062.png`); with a record (`-042547`, `shot056.png`) the button is lit and the hint describes it |
+| `20261028-044653` / `-045257` / `-045809` (N100 host, main PC client) | host on ts2_city_part03 through the Continue path (`AutoTestContinue = "1"`, a planted record with `format=1`, checkpoint 2, life 64, energy 0.50): `continuing ts2_city_part03 at checkpoint 2`, `restarted at checkpoint 2 ($Check_Point_2.Unlock() -> Ok)`, `put back (ok)`; the client joined 75 s later (`client 1 joined 109 s into the level`): no crash on either side for 200 s, the client stands on the Kronengarden platform 1 m from the host (its camera -168.63 -10.18 -145.09, the host's -169.62 -10.18 -145.22) and sees it ("Default" tag, its weapon at the edge of the view: `-045809` `shot088.png`, `shot092.png`); the host on the platform: `n100/shot160.png` |
 | installer (`work\install_test`) | `continue-Default.txt` present, reinstall (`-Quiet`): file still there; `-Uninstall`: `coop\` gone with it |
 
 ## What is and is not restored
@@ -66,6 +67,6 @@ checkpoint (no teleport into a story state that was not rebuilt).
 
 ## Not done
 
-- A client joining a continued session (the respawn points are moved by the restore as in a team restart; not run).
+- A client joining a continued session was run once on part03 (above); the continued session has no list of who was in it before: a client who was in the first session joins as a new one (its loadout is the level's own).
 - One record (the last checkpoint of the last session); no list of saves.
 - The record is written only by the host of a co-op session (single-player saves are the game's own).

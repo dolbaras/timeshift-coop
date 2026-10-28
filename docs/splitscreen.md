@@ -2,7 +2,12 @@
 
 > **Resume here (2026-10-28):** all code is committed. New: the Co-op menu's **Continue** (round 23, `docs/coop-continue.md`;
 > host side proven on the main PC, with life/energy, a per-profile record `coop\continue-<profile>.txt` kept across a
-> reinstall, damaged/old records ignored, hint texts in 9 languages; a client joining a continued session not yet run). Done earlier: the split-screen soak
+> reinstall, damaged/old records ignored, hint texts in 9 languages; a client joining a continued session ran on the N100
+> pair, part03: no crash, the client next to the host at the checkpoint). Split on a client, N100 run 2026-10-28
+> (`lab/split_pair_t3.ps1`, `20261028-043741`): a 50 s walk of the copy stayed in the part02 courtyard (walls: ~8 m, no
+> long open path tried yet), the host's slave's death/respawn ran (`player 2 died: respawned next to player 1`) without a
+> crash; the pick-up test found the level's pistol pick-up already taken by player 1, so a pick-up by the copy is still not
+> shown (use `TS_SPLIT_ITEMTEST=nearitems`). Done earlier: the split-screen soak
 > through the 24 levels (round 21), the level-22 crash = address space, fixed by the large-address-aware flag the installer
 > sets (round 22; a LAA host + client join on the N100 was clean), split on a client (round 19, basics), the Co-op menu
 > option on a host (round 20). Left, needs the N100 (host) and the main PC (client with virtual pads): items, pick-up
