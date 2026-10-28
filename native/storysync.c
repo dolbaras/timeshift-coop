@@ -1200,6 +1200,7 @@ static void checkpoint(int id)
     last_cp = id;
     memcpy(cp_pos, pos, sizeof pos);
     cp_pos_set = 1;
+    coopsave_checkpoint(id, pos);
     int n = set_spawns(pos);
     SLOG("storysync: checkpoint %d at %.1f %.1f %.1f (%s), %d respawn point(s) moved", id, pos[0], pos[1], pos[2],
          from, n);
@@ -1329,6 +1330,18 @@ static void level_changed(void)
     if (!restore_pending) {
         last_cp = 0;
         cp_pos_set = 0;
+        /* a "Continue" of the Co-op menu: this level, put back at the recorded checkpoint like a team restart does */
+        char base[0x104];
+        level_base(LEVEL_NAME, base, sizeof base);
+        int cp = game_mode() == MODE_SERVER ? coopsave_resume(base) : 0;
+        if (cp > 0) {
+            snprintf(restore_level, sizeof restore_level, "%s", base);
+            restore_cp = cp;
+            restore_pending = 1;
+            restore_seen_off = 0;
+            restore_at = 0;
+            restore_since = GetTickCount();
+        }
     }
 }
 

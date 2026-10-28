@@ -60,6 +60,13 @@ int coopreverse_console(const char *text, char *out, int size);   /* "!rv ..."; 
 
 /* storysync.c: the campaign story in co-op (host runs it, clients replay it; exits, checkpoints; TS_STORYSYNC) */
 void storysync_install(void);
+/* coopsave.c: the co-op "Continue" record (a host's checkpoint, weapons, ammunition) */
+void coopsave_checkpoint(int id, const float *pos);   /* storysync.c: the host reached a checkpoint */
+int coopsave_resume(const char *level_base);           /* storysync.c: a level came up on the host: the checkpoint to restore (0: none) */
+void coopsave_publish(void);                           /* menu poll: UI strings CoopHasSave, CoopContLevel */
+void coopsave_tick(void);                              /* script tick: the weapons of a continued session */
+int split_ammo_get(unsigned char *player, float *total, int *magazine);   /* split.c: primary weapon's ammunition */
+int split_ammo_set(unsigned char *player, float total, int magazine);
 int storysync_console(const char *text, char *out, int size);   /* "!ss ..." test commands; 0 = not ours */
 
 /* campaign.c: whole-campaign co-op rules over storysync.c (TS_CAMPAIGN=1; not yet run in a game) */

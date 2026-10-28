@@ -38,44 +38,51 @@ child = [
          }
          {
             type        = button
-            name        = Host
+            name        = Continue
             posX        = center, 100%
             posY        = 130, 30
+            text        = COOP_BTN_CONTINUE
+         }
+         {
+            type        = button
+            name        = Host
+            posX        = center, 100%
+            posY        = 160, 30
             text        = UI_BTN_LAN_SERVER
          }
          {
             type        = button
             name        = JoinLAN
             posX        = center, 100%
-            posY        = 160, 30
+            posY        = 190, 30
             text        = UI_BTN_LAN_CLIENT
          }
          {
             type        = button
             name        = JoinInternet
             posX        = center, 100%
-            posY        = 190, 30
+            posY        = 220, 30
             text        = UI_BTN_IP_CLIENT
          }
          {
             type        = button
             name        = JoinDirect
             posX        = center, 100%
-            posY        = 220, 30
+            posY        = 250, 30
             text        = UI_BTN_DIRECT_CONNECT
          }
          {
             type        = button
             name        = Split
             posX        = center, 100%
-            posY        = 250, 30
+            posY        = 280, 30
             text        = COOP_BTN_SPLIT
          }
          {
             type        = select
             name        = CoopSplitJoin
             posX        = 10%, 80%
-            posY        = 285, 30
+            posY        = 315, 30
             text        = COOP_OPT_SPLITJOIN
             textAlign   = left centerY
             typeVal     = String
@@ -185,6 +192,33 @@ ssl = <<<
          $ui.SetStr("CoopAuto", "join_address")
          $ui.ShowFrame("AddressInputFrame")
       end
+      // Continue: enabled while the mod has a record of the host's last checkpoint (CoopHasSave, set by the DLL)
+      Element("Continue").Enable($ui.GetStr("CoopHasSave") == "1")
+   end
+
+   // Continue: a co-op session on the recorded chapter (the host frame's own launch, CoopAuto), put back at the
+   // recorded checkpoint by the DLL when the level is up (CoopContinue)
+   override OnButtonPressed("Continue")
+      var v : string
+      $ui.SetStr("CoopLevel", $ui.GetStr("CoopContLevel"))
+      v := $ui.GetUserVar("CoopDifficulty")
+      if v == "null" or v == ""
+         v := "1"
+      end
+      $ui.SetStr("CoopDifficulty", v)
+      v := $ui.GetUserVar("CoopMaxPlayers")
+      if v == "null" or v == ""
+         v := "4"
+      end
+      $ui.SetStr("CoopMaxPlayers", v)
+      v := $ui.GetUserVar("CoopNetwork")
+      if v == "null" or v == ""
+         v := "0"
+      end
+      $ui.SetStr("CoopNetwork", v)
+      $ui.SetStr("CoopPassword", "")
+      $ui.SetStr("CoopContinue", "1")
+      $ui.SetStr("CoopAuto", "host")
    end
 
    override OnButtonPressed("Host")

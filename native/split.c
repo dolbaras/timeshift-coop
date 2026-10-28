@@ -2452,6 +2452,7 @@ void gamepad_after_poll(void (*fn)(void));   /* gamepad.c */
 
 static void publish_pad2(void)
 {
+    coopsave_publish();
     static DWORD last, logged;
     DWORD now = GetTickCount();
     if (now - last < 1000)
@@ -2618,6 +2619,26 @@ static BYTE *ammo_rec(BYTE *pl, int which, BYTE **set_out)
         return NULL;
     BYTE *rec = ((BYTE *(TSCALL *)(void *, int))(*(void ***)vb)[0x4c / 4])(vb, which);
     return rec && !IsBadReadPtr(rec, 0x24) ? rec : NULL;
+}
+
+int split_ammo_get(unsigned char *pl, float *total, int *magazine)
+{
+    BYTE *rec = ammo_rec(pl, 0, NULL);
+    if (!rec)
+        return 0;
+    *total = *(float *)(rec + 8);
+    *magazine = *(int *)(rec + 0xc);
+    return 1;
+}
+
+int split_ammo_set(unsigned char *pl, float total, int magazine)
+{
+    BYTE *rec = ammo_rec(pl, 0, NULL);
+    if (!rec)
+        return 0;
+    *(float *)(rec + 8) = total;
+    *(int *)(rec + 0xc) = magazine;
+    return 1;
 }
 
 /* Player 2's weapons and hands made again (after a load took them), as at its spawn: the player's weapon set-up
@@ -3393,6 +3414,7 @@ static void mem_log(void)
 static void split_tick(float dt)
 {
     (void)dt;
+    coopsave_tick();
     mem_log();
     split_choice();
     if (splitlog) {

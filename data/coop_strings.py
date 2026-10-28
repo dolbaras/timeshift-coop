@@ -139,6 +139,17 @@ STRINGS = [
         "hungarian": "Két játékos ezen a gépen, a képernyő kettéosztva. Csatlakoztass két gamepadet: a 2. játékos "
                      "a másodikkal játszik, az 1. játékos az elsővel vagy billentyűzettel és egérrel.",
     }),
+    ("COOP_BTN_CONTINUE", {   # Co-op menu entry: host the last checkpoint again (upper case like the entries next to it)
+        "english": "CONTINUE",
+        "russian": "ПРОДОЛЖИТЬ",
+        "german": "FORTSETZEN",
+        "french": "CONTINUER",
+        "italian": "CONTINUA",
+        "spanish": "CONTINUAR",
+        "polish": "KONTYNUUJ",
+        "czech": "POKRAČOVAT",
+        "hungarian": "FOLYTATÁS",
+    }),
     ("COOP_OPT_SPLITJOIN", {   # Co-op frame option: joining with split screen
         "english": "Second player on pad 2",
         "russian": "Второй игрок на геймпаде 2",

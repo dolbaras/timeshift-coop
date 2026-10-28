@@ -221,6 +221,7 @@ def build(ctx):
       $ui.SetStr("CoopSession", "")
       $ui.SetStr("CoopStage", "")
       $ui.SetStr("CoopSplit", "")
+      $ui.SetStr("CoopContinue", "")
       CoopSplitJoinInit()
       if $ui.GetStr("CoopError") != ""
          CoopShowError($ui.ShowFrame("ErrorMsg"))

@@ -1,11 +1,13 @@
 # Local split screen (prototype)
 
-> **Resume here (2026-10-27):** all code is committed. Done on the main PC: the split-screen soak through the 24 levels
-> (round 21), the level-22 crash (round 22: address space, fixed by the large-address-aware flag the installer now sets),
-> split on a client (round 19, basics), the Co-op menu option on a host (round 20). Left, needs the N100 (host) and the
-> main PC (client with virtual pads): items, pick-up messages, death/respawn of the client's copy, a long walk on a client
-> (`lab/split_pair_t1.ps1`). Open: level 20, player 2 keeps its weapon where the story takes player 1's away; the installer's
-> exe step is tested on `work\install_test` only (not on a real install).
+> **Resume here (2026-10-28):** all code is committed. New: the Co-op menu's **Continue** (round 23, `docs/coop-continue.md`;
+> host side proven on the main PC, a client joining a continued session not yet run). Done earlier: the split-screen soak
+> through the 24 levels (round 21), the level-22 crash = address space, fixed by the large-address-aware flag the installer
+> sets (round 22; a LAA host + client join on the N100 was clean), split on a client (round 19, basics), the Co-op menu
+> option on a host (round 20). Left, needs the N100 (host) and the main PC (client with virtual pads): items, pick-up
+> messages, death/respawn of the client's copy, a long walk on a client (`lab/split_pair_t1.ps1`); a client joining a
+> continued session. Open: level 20, player 2 keeps its weapon where the story takes player 1's away; the installer's exe
+> step is tested on `work\install_test` only (not on a real install).
 
 
 Two players on one PC: player 1 on keyboard, mouse and pad 1, player 2 on pad 2. The screen is split side by
