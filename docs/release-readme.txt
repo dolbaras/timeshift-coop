@@ -24,6 +24,11 @@ What the mod does
   the campaign give every player a seat (or a place on the car); enemies, turrets and cannons
   that aim "at the player" aim at the nearest player; a death scene kills only the player who
   walked into it; the scanners of the quad levels count the host only.
+- Continue: after you reach a checkpoint as the host of a co-op game, Co-op -> Continue hosts that
+  chapter again from the checkpoint with your weapons, ammunition, health and time energy; friends join
+  as usual. The save is per profile, is kept when you update the mod and removed when you uninstall it.
+  Grenades are not saved. Where a chapter has no checkpoint marker to restore, it restarts from the
+  start of that chapter.
 - Real rewind: the reverse power rewinds the world (the host keeps the history): the cranes, lifts,
   bridges, trains, cages and force fields of the puzzles go back on every machine, the reverse
   puzzles work for a client's own reverse key, and a player trapped in a closed container after a
@@ -45,16 +50,21 @@ What the mod does
   both bodies. On a client the second player is supported in basic form (experimental).
 
 Not finished / known limits
-- Co-op "Continue" and chapter saves of a co-op campaign are not there yet: the host starts any of the
-  24 chapters from the Co-op menu; the host's own checkpoints and autosaves work.
 - Quads on the quad levels (9 and 12): the enemies' quads follow the host's positions on the clients'
-  screens (checked by coordinates on level 9); a client driving a quad is not tested.
+  screens (checked by coordinates on level 9); a client driving a quad is not tested. The truck ride at
+  the start of level 9 works: a client that is already in the game rides along (checked by log and
+  coordinates).
 - The lines Cooke and the rebels speak in the zeppelin intros (levels 8 and 23) are not heard on the
   clients' machines.
 - Split screen: cutscenes, the pause menu and the loading screens are full screen for both; only
   player 1 uses turrets in local split screen; the scripts and the enemies treat player 1 as "the
   player"; each half is drawn every second frame, so each half runs at half of the game's frame rate;
-  the shot sounds of player 2 are untested; player 2's time power on a client's split screen is not synced.
+  the shot sounds of player 2 are untested. Split screen on a client is experimental: its copy of
+  player 2 was run in basic form only; player 2's time power, kills and pick-ups over the network were
+  not checked in a live game yet.
+- Most checks of the rewind, force fields, vehicles and container traps were made by reading clip and
+  time values, coordinates and the logs of both machines, not by watching the screens: the results are
+  in the numbers, but how it looks in play has had little human testing.
 - Only the PC version of the game with patch 1.2 is supported; the Steam edition is not.
 - Joining over the Internet (through OpenSpy and a forwarded port) is untested; LAN and a virtual
   LAN are what was tested. A whole campaign played by people from the first to the last level has
