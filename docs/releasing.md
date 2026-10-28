@@ -79,7 +79,7 @@ three levels below the workspace root (so `..\..\..\tools\vigem-dl\python-3.12.1
 `-PythonZip <path>`. Done with HEAD 1d3a40a: 28 zip entries, no game files; no "Serj", "Ajbol", "@gmail" or a user profile
 path in the DLL or in any text file (the only hits are the repository name in the launcher and Python's own strings);
 `native\build\`, `dist\` and `__pycache__` are git-ignored and every file the package needs is tracked (data\coop_display.py,
-native\coopsave.c...). The version is `0.0.1-dev` in ts.h, version.txt and the DLL (ts.h is 0.1.0 since 2026-10-28). A quiet
+native\coopsave.c...). The version was `0.0.1-dev` in ts.h, version.txt and the DLL at that time (ts.h is 0.1.0 since 2026-10-28). A quiet
 install of the zip into a copy of the clean game and the uninstall left 5426 files with the same SHA-256 listing; the
 installed exe is the large-address-aware one (DE1A0AEB...), the original comes back; the log of an uninstall stays in `%TEMP%`.
 
@@ -103,3 +103,14 @@ taken before; never on the owner's install, never beside a running game from tha
   `coop-launcher.ps1 -Feed http://127.0.0.1:8765/latest.json -NoStart` (or `TIMESHIFT_COOP_FEED` for a
   start through the shortcut): the version, the record and both shortcuts after the update; an
   up-to-date feed, a 404 feed and the real GitHub URL start the game without a word.
+
+## Published releases
+
+| Tag | Date | Asset SHA-256 | Notes |
+|---|---|---|---|
+| v0.1.0 | 2026-10-28 | `6b4f37a60c92ab3c1a7b3be206a8a6e99adf8619129bbc03f5b54b5e45fd9100` | first public build, commit 9a8b81e; the release page lists what is not finished |
+
+The release is made with `gh release create v<version> dist	imeshift-coop-<version>.zip --repo dolbaras/timeshift-coop
+--target main --title "TimeShift Co-op <version>" --notes-file <notes>` after pushing `main`; then compare the asset's
+`digest` in `gh release view --json assets` with the SHA-256 of the local zip and check that `releases/latest` answers
+the new tag.
