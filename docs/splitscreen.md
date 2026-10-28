@@ -1,7 +1,8 @@
 # Local split screen (prototype)
 
 > **Resume here (2026-10-28):** all code is committed. New: the Co-op menu's **Continue** (round 23, `docs/coop-continue.md`;
-> host side proven on the main PC, a client joining a continued session not yet run). Done earlier: the split-screen soak
+> host side proven on the main PC, with life/energy, a per-profile record `coop\continue-<profile>.txt` kept across a
+> reinstall, damaged/old records ignored, hint texts in 9 languages; a client joining a continued session not yet run). Done earlier: the split-screen soak
 > through the 24 levels (round 21), the level-22 crash = address space, fixed by the large-address-aware flag the installer
 > sets (round 22; a LAA host + client join on the N100 was clean), split on a client (round 19, basics), the Co-op menu
 > option on a host (round 20). Left, needs the N100 (host) and the main PC (client with virtual pads): items, pick-up

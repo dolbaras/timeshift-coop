@@ -37,6 +37,17 @@ child = [
             wordwrap  = yes
          }
          {
+            type      = text
+            name      = ContHint
+            posX      = 8%, 85%
+            posY      = 98, 28
+            textScale = 7
+            textAlign = leftX centerY
+            textColor = 200 210 225 255
+            wordwrap  = yes
+            text      = COOP_HINT_CONTINUE_NONE
+         }
+         {
             type        = button
             name        = Continue
             posX        = center, 100%
@@ -194,6 +205,11 @@ ssl = <<<
       end
       // Continue: enabled while the mod has a record of the host's last checkpoint (CoopHasSave, set by the DLL)
       Element("Continue").Enable($ui.GetStr("CoopHasSave") == "1")
+      if $ui.GetStr("CoopHasSave") == "1"
+         Element("ContHint").SetText("COOP_HINT_CONTINUE")
+      else
+         Element("ContHint").SetText("COOP_HINT_CONTINUE_NONE")
+      end
    end
 
    // Continue: a co-op session on the recorded chapter (the host frame's own launch, CoopAuto), put back at the

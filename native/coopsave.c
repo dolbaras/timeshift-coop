@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "ts.h"
 
 #define LEVEL_NAME ((const char *)0xfcabc8)
@@ -28,9 +29,28 @@
 typedef struct {
     int valid, cp;
     char level[0x80];
-    float pos[3], ammo_total;
+    float pos[3], ammo_total, health, energy;
     int slots[3], magazine;
 } Rec;
+
+#define FORMAT 1   /* the record's own version: another number (an older or newer mod) is not used */
+
+/* the campaign's chapters (the host frame's list): a record of any other level is not offered */
+static const char *const CHAPTERS[] = {
+    "ts2_city_part01", "ts2_city_part02", "ts2_city_part03", "ts2_skyscraper_part1", "ts2_skyscraper_part2",
+    "ts2_skyscraper_part3", "ts2_skyscraper_part4", "ts2_zepride1_part01", "ts2_zepcrashsite_part01",
+    "ts2_zepcrashsite_part02", "ts2_zepcrashsite_part03", "ts2_summeroutdoor_part01", "ts2_summeroutdoor_part02",
+    "ts2_guardfactory_part01", "ts2_guardfactory_part02", "ts2_guardfactory_part03", "ts2_guardfactory_part04",
+    "ts2_guardfactory_part05", "ts2_zep_factory_part1", "ts2_zep_factory_part2", "ts2_zep_factory_part3",
+    "ts2_zep_factory_part4", "ts2_zepride2_part01", "ts2_cityfinal_part01"};
+
+static int known_chapter(const char *l)
+{
+    for (size_t i = 0; i < sizeof CHAPTERS / sizeof *CHAPTERS; i++)
+        if (!_stricmp(l, CHAPTERS[i]))
+            return 1;
+    return 0;
+}
 
 static int off = -1;
 static Rec pending;           /* the record being applied to the running session */
@@ -56,12 +76,22 @@ static int disabled(void)
     return off;
 }
 
-/* <game folder>\coop\continue.txt (the folder above the exe's own) */
+/* <game folder>\coop\continue-<profile>.txt: per game folder (the folder above the exe's own) and per game profile
+ * (bin\steamwars.ini [Profile] Name). A reinstall keeps it, the uninstall removes it with coop\. */
 static void record_path(char *out, int size, int make_dir)
 {
-    char exe[MAX_PATH];
+    char exe[MAX_PATH], ini[MAX_PATH], prof[64], clean[64];
     GetModuleFileNameA(NULL, exe, sizeof exe);
-    char *s = strrchr(exe, '\\');
+    snprintf(ini, sizeof ini, "%s", exe);
+    char *s = strrchr(ini, '\\');
+    if (s)
+        snprintf(s, sizeof ini - (size_t)(s - ini), "\\steamwars.ini");
+    GetPrivateProfileStringA("Profile", "Name", "Default", prof, sizeof prof, ini);
+    int n = 0;
+    for (const char *c = prof; *c && n < 40; c++)
+        clean[n++] = (isalnum((unsigned char)*c) || *c == '_' || *c == '-') ? *c : '_';
+    clean[n] = 0;
+    s = strrchr(exe, '\\');
     if (s)
         *s = 0;
     s = strrchr(exe, '\\');
@@ -72,7 +102,12 @@ static void record_path(char *out, int size, int make_dir)
         snprintf(d, sizeof d, "%s\\coop", exe);
         CreateDirectoryA(d, NULL);
     }
-    snprintf(out, size, "%s\\coop\\continue.txt", exe);
+    snprintf(out, size, "%s\\coop\\continue-%s.txt", exe, clean);
+}
+
+static int sane(float v, float lo, float hi)
+{
+    return v == v && v >= lo && v <= hi;   /* (not NaN) */
 }
 
 static int read_record(Rec *r)
@@ -83,9 +118,12 @@ static int read_record(Rec *r)
     FILE *f = fopen(path, "r");
     if (!f)
         return 0;
-    while (fgets(line, sizeof line, f)) {
+    int format = 0, lines = 0;
+    while (fgets(line, sizeof line, f) && lines++ < 40) {
         line[strcspn(line, "\r\n")] = 0;
-        if (!strncmp(line, "level=", 6))
+        if (!strncmp(line, "format=", 7))
+            format = atoi(line + 7);
+        else if (!strncmp(line, "level=", 6))
             snprintf(r->level, sizeof r->level, "%s", line + 6);
         else if (!strncmp(line, "checkpoint=", 11))
             r->cp = atoi(line + 11);
@@ -95,9 +133,18 @@ static int read_record(Rec *r)
             sscanf(line + 6, "%d %d %d", &r->slots[0], &r->slots[1], &r->slots[2]);
         else if (!strncmp(line, "ammo=", 5))
             sscanf(line + 5, "%f %d", &r->ammo_total, &r->magazine);
+        else if (!strncmp(line, "health=", 7))
+            sscanf(line + 7, "%f", &r->health);
+        else if (!strncmp(line, "energy=", 7))
+            sscanf(line + 7, "%f", &r->energy);
     }
     fclose(f);
-    r->valid = r->level[0] != 0 && r->cp > 0;
+    /* a record of another format, an unknown chapter or values out of range is not used (a damaged or old file) */
+    r->valid = format == FORMAT && known_chapter(r->level) && r->cp >= 1 && r->cp <= 99 && sane(r->ammo_total, 0, 99999) &&
+               r->magazine >= 0 && r->magazine <= 9999 && sane(r->health, 0, 1000) && sane(r->energy, 0, 10);
+    for (int i = 0; i < 3; i++)
+        if (r->slots[i] < 0 || r->slots[i] > 40)
+            r->valid = 0;
     return r->valid;
 }
 
@@ -119,6 +166,10 @@ void coopsave_checkpoint(int id, const float *pos)
         memcpy(r.slots, pl + 0x3a8, sizeof r.slots);
     if (pl)
         split_ammo_get(pl, &r.ammo_total, &r.magazine);
+    if (pl && !IsBadReadPtr(pl + 0x234, 4))
+        r.health = *(float *)(pl + 0x234);
+    if (pl && !IsBadReadPtr(pl + 0x2ac, 4))
+        r.energy = *(float *)(pl + 0x2ac);
     char path[MAX_PATH];
     record_path(path, sizeof path, 1);
     FILE *f = fopen(path, "w");
@@ -126,8 +177,8 @@ void coopsave_checkpoint(int id, const float *pos)
         ts_log("coopsave: cannot write %s", path);
         return;
     }
-    fprintf(f, "level=%s\ncheckpoint=%d\npos=%.2f %.2f %.2f\nslots=%d %d %d\nammo=%.1f %d\n", r.level, id, pos[0], pos[1], pos[2],
-            r.slots[0], r.slots[1], r.slots[2], r.ammo_total, r.magazine);
+    fprintf(f, "format=%d\nlevel=%s\ncheckpoint=%d\npos=%.2f %.2f %.2f\nslots=%d %d %d\nammo=%.1f %d\nhealth=%.1f\nenergy=%.2f\n", FORMAT,
+            r.level, id, pos[0], pos[1], pos[2], r.slots[0], r.slots[1], r.slots[2], r.ammo_total, r.magazine, r.health, r.energy);
     fclose(f);
     ts_log("coopsave: checkpoint %d of %s recorded (weapons %d %d %d, ammunition %.0f/%d)", id, r.level, r.slots[0], r.slots[1], r.slots[2],
            r.ammo_total, r.magazine);
@@ -190,6 +241,12 @@ void coopsave_tick(void)
         ts_script_run(ssl, out, sizeof out);
     }
     int ok = split_ammo_set(pl, pending.ammo_total, pending.magazine);
-    ts_log("coopsave: the host's weapons %d %d %d and ammunition %.0f/%d put back (%s)", pending.slots[0], pending.slots[1],
-           pending.slots[2], pending.ammo_total, pending.magazine, ok ? "ok" : "no weapon record");
+    /* life (never below 1: a record taken at 0 would be a dead host) and time energy */
+    if (!IsBadWritePtr(pl + 0x234, 4) && pending.health > 0)
+        *(float *)(pl + 0x234) = pending.health < 1.0f ? 1.0f : pending.health;
+    if (!IsBadWritePtr(pl + 0x2ac, 4))
+        *(float *)(pl + 0x2ac) = pending.energy;
+    ts_log("coopsave: the host's weapons %d %d %d, ammunition %.0f/%d, life %.0f and time energy %.2f put back (%s)", pending.slots[0],
+           pending.slots[1], pending.slots[2], pending.ammo_total, pending.magazine, pending.health, pending.energy,
+           ok ? "ok" : "no weapon record");
 }
