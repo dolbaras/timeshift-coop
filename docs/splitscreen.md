@@ -7,7 +7,13 @@
 > (`lab/split_pair_t3.ps1`, `20261028-043741`): a 50 s walk of the copy stayed in the part02 courtyard (walls: ~8 m, no
 > long open path tried yet), the host's slave's death/respawn ran (`player 2 died: respawned next to player 1`) without a
 > crash; the pick-up test found the level's pistol pick-up already taken by player 1, so a pick-up by the copy is still not
-> shown (use `TS_SPLIT_ITEMTEST=nearitems`). Done earlier: the split-screen soak
+> shown (use `TS_SPLIT_ITEMTEST=nearitems`). Second N100 slot (`lab/split_pair_t5.ps1`, `t6.ps1`; runs `-050409`, `-051811`,
+> `-052504`): the copy's follow of the host's player 2 measured over a 2 min wall-following walk on part03: median 0.55 m
+> from it (the 0.6 m design offset), at most 1.2 m while walking, no jitter or lag seen, camera and HUD in its half fine;
+> but the walk stayed in the part03 start/stairwell area (path 24 m, about 12 m across), not an open 25 m. Pick-up: on the
+> host the item update reaches player 2 (`item_grenade_pack ... in player 2's reach: not taken`), player 2 put on the
+> level's ammo box (ammunition 30 -> 30, the copy's HUD stays 14) took nothing: **a pick-up by the copy is still not shown**
+> (the split host's pick-up worked in round 8; the remote-host player 2 does not take). The split-client gaps stay open. Done earlier: the split-screen soak
 > through the 24 levels (round 21), the level-22 crash = address space, fixed by the large-address-aware flag the installer
 > sets (round 22; a LAA host + client join on the N100 was clean), split on a client (round 19, basics), the Co-op menu
 > option on a host (round 20). Left, needs the N100 (host) and the main PC (client with virtual pads): items, pick-up
