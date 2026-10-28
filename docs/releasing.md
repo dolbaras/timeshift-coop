@@ -72,6 +72,17 @@ What every later release has to keep:
 A change to any of these needs a launcher that copes with both the old and the new form, shipped one
 release before the old form is dropped.
 
+## Dry run from a clean clone (2026-10-28)
+
+`git clone` the repo, `sh native/build.sh` (zig path in `ZIG`), `powershell.exe -File tools\package.ps1`. The clone must sit
+three levels below the workspace root (so `..\..\..\tools\vigem-dl\python-3.12.10-embed-amd64.zip` resolves) or get
+`-PythonZip <path>`. Done with HEAD 1d3a40a: 28 zip entries, no game files; no "Serj", "Ajbol", "@gmail" or a user profile
+path in the DLL or in any text file (the only hits are the repository name in the launcher and Python's own strings);
+`native\build\`, `dist\` and `__pycache__` are git-ignored and every file the package needs is tracked (data\coop_display.py,
+native\coopsave.c...). The version is `0.0.1-dev` in ts.h, version.txt and the DLL (change ts.h before a 0.1.0 build). A quiet
+install of the zip into a copy of the clean game and the uninstall left 5426 files with the same SHA-256 listing; the
+installed exe is the large-address-aware one (DE1A0AEB...), the original comes back; the log of an uninstall stays in `%TEMP%`.
+
 ## Tests before a release (Windows PowerShell 5.1: `powershell.exe`, never pwsh)
 
 Work on a copy of a clean game (`robocopy <game> work\install_test /E`) and a SHA-256 listing of it

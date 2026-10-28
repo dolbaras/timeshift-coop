@@ -11,8 +11,8 @@
 #     coop\coop-launcher.ps1                 behind the "TimeShift Co-op" shortcut (auto-update)
 #     coop\README-COOP*.txt, coop\payload.txt
 # The package holds no game files: the data archives are built on the player's PC.
-# Run native\build.sh first. Usage: package.ps1 [-Version <TS_VERSION>]
-param([string] $Version = "")
+# Run native\build.sh first. Usage: package.ps1 [-Version <TS_VERSION>] [-PythonZip <python-3.12.10-embed-amd64.zip>]
+param([string] $Version = "", [string] $PythonZip = "")
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $tsh = Get-Content -LiteralPath (Join-Path $root "native\ts.h") -Raw
@@ -32,7 +32,8 @@ if (-not $dllText.Contains("TimeShift co-op proxy")) { throw "native\build\dinpu
 if (-not $dllText.Contains("`0$Version`0")) { throw "native\build\dinput8.dll was not built with TS_VERSION $Version (rebuild it)" }
 # python.org's embeddable CPython, SHA-256 pinned; only what build_pak.py, s3darc.py and the
 # recipes need (zlib, hashlib's sha256, tempfile are built into python312.dll / python312.zip).
-$pyZip = Join-Path $root "..\..\..\tools\vigem-dl\python-3.12.10-embed-amd64.zip"
+# (default: the workspace's tools folder three levels above the repo; -PythonZip for a clone placed elsewhere)
+$pyZip = if ($PythonZip) { $PythonZip } else { Join-Path $root "..\..\..\tools\vigem-dl\python-3.12.10-embed-amd64.zip" }
 $pySha = "4ACBED6DD1C744B0376E3B1CF57CE906F9DC9E95E68824584C8099A63025A3C3"
 if (-not (Test-Path -LiteralPath $pyZip)) { throw "tools\vigem-dl\python-3.12.10-embed-amd64.zip missing (python.org)" }
 if ((Sha256 $pyZip) -ne $pySha) { throw "the Python zip is not the pinned one" }
