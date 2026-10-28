@@ -1903,6 +1903,26 @@ static void TSCALL hook_item_update(BYTE *item)
     BYTE **h = md == 2 ? p1_record_handle() : NULL, *h_was = h ? *h : NULL;
     if (h)
         *h = p2;
+    if (splitlog && md == 2) {   /* (tests: which stage of a server's give refuses player 2) */
+        static DWORD dbg_at;
+        if (GetTickCount() - dbg_at > 5000) {
+            dbg_at = GetTickCount();
+            p2_enter();
+            int c208 = ((int (TSCALL *)(void *, void *, int))vt[0x208 / 4])(item, p2, 1);
+            int f248 = ((int (TSCALL *)(void *, void *))vt[0x248 / 4])(item, p2) & 0xff;
+            p2_leave();
+            ts_log("split: item %p kind %d debug: record handle %p (p1 %p, p2 %p), +0x208 check %d, filter +0x248 %d, p2 life %.1f", (void *)item,
+                   kind, (void *)h, (void *)PLAYER_B, (void *)p2, c208, f248, *(float *)(p2 + 0x234));
+            BYTE *pn = *(BYTE **)(p2 + 0x230), *p1n = PLAYER_B ? *(BYTE **)(PLAYER_B + 0x230) : NULL;
+            if (pn && !IsBadReadPtr(pn, 0x74) && node && !IsBadReadPtr(node, 0x74))
+                ts_log("split:   item at %.2f %.2f %.2f, player 2 node at %.2f %.2f %.2f (+4 %08lx), player 1 at %.2f %.2f %.2f; item +0x270 %08lx +0x2c %08lx, vt+0x10c %d",
+                       ((float *)(node + 0x68))[0], ((float *)(node + 0x68))[1], ((float *)(node + 0x68))[2], ((float *)(pn + 0x68))[0],
+                       ((float *)(pn + 0x68))[1], ((float *)(pn + 0x68))[2], *(DWORD *)(pn + 4),
+                       p1n && !IsBadReadPtr(p1n, 0x74) ? ((float *)(p1n + 0x68))[0] : 0.0f, p1n && !IsBadReadPtr(p1n, 0x74) ? ((float *)(p1n + 0x68))[1] : 0.0f,
+                       p1n && !IsBadReadPtr(p1n, 0x74) ? ((float *)(p1n + 0x68))[2] : 0.0f, *(DWORD *)(item + 0x270), *(DWORD *)(item + 0x2c),
+                       ((int (TSCALL *)(void *))vt[0x10c / 4])(item));
+        }
+    }
     p2_enter();
     int r = ((int (TSCALL *)(void *, void *, int))vt[0x20c / 4])(item, p2, 1);
     p2_leave();

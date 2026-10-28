@@ -13,7 +13,16 @@
 > but the walk stayed in the part03 start/stairwell area (path 24 m, about 12 m across), not an open 25 m. Pick-up: on the
 > host the item update reaches player 2 (`item_grenade_pack ... in player 2's reach: not taken`), player 2 put on the
 > level's ammo box (ammunition 30 -> 30, the copy's HUD stays 14) took nothing: **a pick-up by the copy is still not shown**
-> (the split host's pick-up worked in round 8; the remote-host player 2 does not take). The split-client gaps stay open. Done earlier: the split-screen soak
+> (the split host's pick-up worked in round 8; the remote-host player 2 does not take). The split-client gaps stay open.
+> Items for the host-side player 2, third N100 slot (2026-10-28): the plain split host takes items for player 2 (main PC,
+> `lab/item_host_run.ps1`, run `-130617`: `item_grenade_pack ... in player 2's reach: taken by player 2`, the debug line shows
+> the record handle found, `+0x208` check 1, filter `+0x248` 1). On a client's session the host's player 1, standing next to
+> player 2, takes each drop first (`pick-up .. by player 1: taken`, then `player 2 ... not taken` because the item is gone,
+> runs `-133030`, `-131420`), which explains most of the earlier "not taken" lines; the swap of player 1's record handle and
+> the filter work for it too (`record handle` non-NULL, filter 1). Not proven: a pick-up by a client's player 2 with player 1
+> out of reach (one run, `-131854`, a pack in reach and not taken; the later runs had no drop near it). `TS_SPLITLOG` now logs
+> the stages (`item .. debug`, positions, flags) every 5 s for an item in player 2's reach on a server. Gap stays: *a pick-up
+> by player 2 of a client is not shown*. Done earlier: the split-screen soak
 > through the 24 levels (round 21), the level-22 crash = address space, fixed by the large-address-aware flag the installer
 > sets (round 22; a LAA host + client join on the N100 was clean), split on a client (round 19, basics), the Co-op menu
 > option on a host (round 20). Left, needs the N100 (host) and the main PC (client with virtual pads): items, pick-up
