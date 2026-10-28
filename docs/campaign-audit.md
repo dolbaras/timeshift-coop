@@ -596,7 +596,7 @@ answering the console; no crash. Leaving the credits needs a click on "Continue"
 | Crane 5 rewind on client | clip/time equal on host and client before/after (n100pair-20261027-053705, -054355 ring regression) | partly (client on the crane, 2026-10-26) | floor-view frame pair |
 | Lift 10, bridge 9, train 19, cages 23 | end clip/time equal on host and client after a host rewind (runs -054010/-054355, -060306, -055947, cage run 06:54) | - | frame pairs; client-owned rewind of these |
 | Armoured cars 19, truck 9 stream | client positions equal the host's | - | frames showing the vehicles |
-| Level 9 AI quads, level 7 helicopter | - | - | quads snap back on clients (known gap), helicopter static |
+| Level 9 AI quads, level 7 helicopter | AI quads at the host's coordinates on the client after the node-sync skip; helicopter static | - | a client driving a quad |
 | Level 16 chatter | 10 replays in 100 s (was ~760 in 2 min) | - | - |
 | Level 8 / 23 Cooke lines | no script errors any more (wrapped on the client, see chunk 2) | - | hearing Cooke's lines on clients |
 | Force fields 5, 16, 17, 19, 21 (client-owned reverse, `!cp dspeed`) | 5: force_field1/2 1.8/-1.8 -> -1.8/1.8 during, back after; 16: dom_ffield_conveyer 3 -> -3 -> 3 (power enabled first: `$player.DisableTC("time_reverse",0)` + `$tc.SetMode("reverse")`, the story does that); 17: force_field1/2 3/-3 flip and back; 19: force_field 1.5 -> -1.5 -> 1.5 (after the opening chase: the key does nothing during the film); 21: WIND 25/25 -> -5/-7.5 -> 25/25 (runs n100pair-20261027-162214, -162411.., -163306.., -163758) | - | the host's own copies do not flip while a CLIENT owns the reverse (they stay 1.8 etc.; the host player is not pushed) |
@@ -675,6 +675,19 @@ answering the console; no crash. Leaving the credits needs a click on "Continue"
   Use a wait of 2 s (rewind then reaches the pose before the start) for the lift (`$Lift_actor.Start("DOWN")`), train 19
   (`$Actor_train.Start("MOVE",0)`) and cages 23 (`$cage1_actor.Start("FALL",0,0)`); the bridge on 9 needs the player
   inside a `dom_time_zone` first.
+- **AI quads solved (2026-10-28, run n100pair-20261028-040950).** `!cp watch <obj> node|ent <hex>` (a DR0 write watchpoint on the main thread)
+  showed two writers alternating on the bike's node `+0x68` on the client: this file's `veh_apply` (-144.57, the host's position) and the
+  engine's node sync `0x571ad0` (called every frame; [eax+4] = the entity, [eax+0x14] = a component that hands out a matrix, here the AI quad's
+  which never moved on the client: -301.00, the start place) via the setter `0x94dbf0`. The truck had no such component. Fix: `cp_sync_hook` at
+  `0x571ad0` returns at once on a client for vehicles the stream places (fresh host data, not driven by this client's player);
+  `TS_CAMPAIGN_SYNCSKIP=0` switches it off. Result: `opp_bike1/2` at the host's coordinates on the client (-144.57 -42.66 -247.87 and
+  -140.74 -41.93 -254.55 on both sides, before they stood at -301 -31.7 -409), no crash. The frame pair (-041144) shows the same scene on both
+  machines but not the quad itself. A client DRIVING a quad (its own physics body) is still untested.
+- **Truck ride level 9 (2026-10-28, run n100pair-20261028-040236).** With the client joined first and the host changing the level
+  (`!ss exit` to the same level): host log "truck_place.OnAnimBegin: client in slot 1 rides on vhc_truck" 04:13.011, client "riding on vhc_truck"
+  2 s later (placed on top: it was 207 m away while loading), "gets off" at the OnAnimEnd 15 s later; at the end the client stood 1.5 m from the
+  truck's final position (client -125.67 -38.84 -266.32, truck -126.72 -40.08 -267.39), and the truck was at the same coordinates on both.
+  The level has no quad ride at its start.
 - Earlier plan for (2) AI vehicles on clients. `!cp nodeset <obj> 68 x y z` writes on a client persist (the crane probe), so try
   a host position stream (node +0x38/+0x48/+0x58 rows and +0x68, maybe +0x14) for route-driven vehicles. Then (3)-(6) as
   listed in the coordinator's order (16 chatter, Cooke's dialogue on 8, the replay flood on 23, the unverified items),

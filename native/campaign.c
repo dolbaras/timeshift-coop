@@ -1291,6 +1291,47 @@ static void veh_apply(DWORD now)
     }
 }
 
+/* The engine's node sync (0x571ad0, eax = a node controller: [eax+4] = the entity, [eax+0x14] = a component that hands out a
+ * matrix, which goes through the node's matrix setter 0x94dbf0) rewrote the world matrix of a client's AI quad with the
+ * start place EVERY frame (watchpoint on the node's +0x68, live level 9: writers 0x571b06 <- 0x94dc56, alternating with this
+ * file's veh_apply), so the streamed position never held; the truck, route-driven, had no such component. On a client the
+ * sync is skipped for the vehicles the stream places (the host's data is fresh and the client does not drive them). */
+extern void cp_sync_hook(void) __asm__("cp_sync_hook");
+__attribute__((used)) int cp_sync_skip(void *ctl) __asm__("cp_sync_skip");
+static int use_syncskip = 1;
+__attribute__((used)) int cp_sync_skip(void *ctl)
+{
+    DWORD now = GetTickCount();
+    if (!use_syncskip || !use_vehsync || !enabled || role() != MODE_CLIENT || !ctl || IsBadReadPtr(ctl, 8))
+        return 0;
+    char *ent = *(char **)((char *)ctl + 4);
+    for (int k = 0; k < n_veh; k++)
+        if (vehs[k].ent == ent && vehs[k].have && now - vehs[k].b_at < 3000 && !veh_mine(&vehs[k], now))
+            return 1;
+    return 0;
+}
+__asm__(".text\n"
+        ".globl cp_sync_hook\n"
+        "cp_sync_hook:\n"
+        "  pushl %eax\n"
+        "  pushl %ecx\n"
+        "  pushl %edx\n"
+        "  pushl %eax\n"
+        "  call cp_sync_skip\n"
+        "  addl $4, %esp\n"
+        "  testl %eax, %eax\n"
+        "  popl %edx\n"
+        "  popl %ecx\n"
+        "  popl %eax\n"
+        "  jnz 1f\n"
+        "  pushl %ebp\n"
+        "  movl %esp, %ebp\n"
+        "  andl $-8, %esp\n"
+        "  pushl $0x571ad6\n"
+        "  ret\n"
+        "1:\n"
+        "  ret\n");
+
 static void veh_step(DWORD now)
 {
     if (!use_vehsync || !(GAME_FLAGS & 0x2000) || !LEVEL_NAME[0])
@@ -1380,6 +1421,48 @@ static void frame(float dt)
 }
 
 /* ---- test console: "!cp ..." ---- */
+/* ---- lab: a hardware write watchpoint on a 4-byte address of this machine's main thread ("!cp watch ...") ---- */
+static volatile DWORD watch_addr, watch_tid;
+static volatile LONG watch_hits;
+static LONG CALLBACK watch_handler(EXCEPTION_POINTERS *x)
+{
+    CONTEXT *c = x->ContextRecord;
+    if (x->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP || !(c->Dr6 & 1) || !watch_addr)
+        return EXCEPTION_CONTINUE_SEARCH;
+    LONG n = InterlockedIncrement(&watch_hits);
+    if (n <= 12) {
+        DWORD rets[6], offs[6];
+        NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+        int k = ts_stack_returns(c->Esp, (DWORD)tib->StackBase, rets, offs, 6);
+        ts_log("watch: %08lx written (now %.2f), eip after the write %08lx, returns: %08lx %08lx %08lx %08lx %08lx %08lx",
+               (unsigned long)watch_addr, (double)*(volatile float *)watch_addr, c->Eip, k > 0 ? rets[0] : 0, k > 1 ? rets[1] : 0,
+               k > 2 ? rets[2] : 0, k > 3 ? rets[3] : 0, k > 4 ? rets[4] : 0, k > 5 ? rets[5] : 0);
+    }
+    c->Dr6 = 0;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+static DWORD WINAPI watch_thread(void *arg)
+{
+    (void)arg;
+    HANDLE th = OpenThread(THREAD_ALL_ACCESS, FALSE, watch_tid);
+    if (!th)
+        return 1;
+    SuspendThread(th);
+    CONTEXT c;
+    memset(&c, 0, sizeof c);
+    c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(th, &c)) {
+        c.Dr0 = watch_addr;
+        c.Dr6 = 0;
+        c.Dr7 = watch_addr ? (1u | (1u << 16) | (3u << 18)) : 0;   /* local enable 0, write, 4 bytes */
+        SetThreadContext(th, &c);
+    }
+    ResumeThread(th);
+    CloseHandle(th);
+    return 0;
+}
+
 int campaign_console(const char *text, char *out, int size)
 {
     if (strncmp(text, "!cp", 3) != 0)
@@ -1611,6 +1694,34 @@ int campaign_console(const char *text, char *out, int size)
         }
         return 1;
     }
+    if (!strcmp(cmd, "watch")) {   /* "!cp watch <object> node|ent <hex offset>" or "!cp watch off": write watchpoint (lab) */
+        static int installed;
+        char where[8] = "";
+        unsigned o = 0;
+        char *e = strcmp(a1, "off") ? find_ent(a1) : NULL;
+        if (!installed) {
+            AddVectoredExceptionHandler(1, watch_handler);
+            installed = 1;
+        }
+        watch_tid = GetCurrentThreadId();
+        if (!strcmp(a1, "off")) {
+            watch_addr = 0;
+        } else {
+            if (!e || sscanf(text + 3, "%*s %*s %7s %x", where, &o) != 2)
+                return snprintf(out, size, "usage: !cp watch <object> node|ent <hex offset> | off"), 1;
+            char *base = !strcmp(where, "node") ? *(char **)(e + ENT_NODE) : e;
+            if (!base)
+                return snprintf(out, size, "%s: no %s", a1, where), 1;
+            watch_addr = (DWORD)(base + o);
+        }
+        watch_hits = 0;
+        HANDLE h = CreateThread(NULL, 0, watch_thread, NULL, 0, NULL);
+        if (h) {
+            WaitForSingleObject(h, 2000);
+            CloseHandle(h);
+        }
+        return snprintf(out, size, "watch %s %08lx", watch_addr ? "on" : "off", (unsigned long)watch_addr), 1;
+    }
     if (!strcmp(cmd, "at")) {   /* "!cp at x y z [object]": this machine's player to a point, facing the object (lab) */
         char *pl = PLAYER, *node = pl ? *(char **)(pl + ENT_NODE) : NULL, look[64] = "";
         float at[3], tp[3], pos[3];
@@ -1669,6 +1780,14 @@ void campaign_install(void)
         *(DWORD *)(r + 1) = (DWORD)cp_veh_guard - (0x49bd70 + 5);
         if (!(ts_env("TS_CAMPAIGN_VEHGUARD", v, sizeof v) && v[0] == '0') && !ts_patch_bytes(0x49bd70, want_vg, r, 6))
             ts_log("campaign: vehicle guard site not as expected (other exe)");
+    }
+    {
+        static const unsigned char want_sy[6] = {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8};
+        unsigned char r[6] = {0xe9, 0, 0, 0, 0, 0x90};
+        *(DWORD *)(r + 1) = (DWORD)cp_sync_hook - (0x571ad0 + 5);
+        use_syncskip = !(ts_env("TS_CAMPAIGN_SYNCSKIP", v, sizeof v) && v[0] == '0');
+        if (use_syncskip && !ts_patch_bytes(0x571ad0, want_sy, r, 6))
+            ts_log("campaign: node sync site not as expected (other exe)");
     }
     for (int i = 0; i < N_HOOKS; i++) {
         const Hook *h = &hooks[i];

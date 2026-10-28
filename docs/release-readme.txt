@@ -47,9 +47,8 @@ What the mod does
 Not finished / known limits
 - Co-op "Continue" and chapter saves of a co-op campaign are not there yet: the host starts any of the
   24 chapters from the Co-op menu; the host's own checkpoints and autosaves work.
-- Quads on the quad levels (9 and 12): the enemy riders' quads stay where they start on the clients'
-  screens (the riders themselves move); a client driving a quad is not tested. Armoured cars, trucks
-  and the zeppelin follow the host's positions.
+- Quads on the quad levels (9 and 12): the enemies' quads follow the host's positions on the clients'
+  screens (checked by coordinates on level 9); a client driving a quad is not tested.
 - The lines Cooke and the rebels speak in the zeppelin intros (levels 8 and 23) are not heard on the
   clients' machines.
 - Split screen: cutscenes, the pause menu and the loading screens are full screen for both; only
