@@ -566,6 +566,29 @@ classifier) now wraps the client's copies of the intro handlers' `$Intro_Cooke/_
 host's run plays them). Level 8: 0 unknown-object lines for them (was up to 10-11 each); level 23: the script errors are gone, 2 benign lines
 per intro remain (aisync's own name probe just before it names the object). Dialogue lines of Cooke are therefore not heard on clients.
 
+### Bot regression, chunk 3: levels 17-24 (`work	mp_agentot3.out`, DLL of b93047f)
+
+All 8 levels: client on the next level (24 is the last), no "Unhandled exception" on either side. 21 and 23 advanced through the server's
+level change (their exits are boxes above the floor), the others naturally.
+
+| # | Level | Exit | Client next | Replays | Unknown obj | Held back | Run |
+|---|---|---|---|---|---|---|---|
+| 17 | guardfactory_part04 | natural | yes | 30 | 2 | 6 | -224224 |
+| 18 | guardfactory_part05 | natural | yes | 21 | 8 | 5 | -224444 |
+| 19 | zep_factory_part1 | natural | yes | 67 | 13 | 9 | -224709 (was 102 replays / 31 unknown) |
+| 20 | zep_factory_part2 | natural | yes | 14 | 4 | 7 | -224928 |
+| 21 | zep_factory_part3 | server | yes | 14 | 3 | 5 | -225145 |
+| 22 | zep_factory_part4 | natural | yes | 16 | 10 | 6 | -225432 (was 195 unknown) |
+| 23 | zepride2_part01 | server | yes | 50 | 28 | 27 | -225648 (was 51 / 28; `train1_ref_*`, `mine*` names, no Intro_* script errors) |
+| 24 | cityfinal_part01 | final | - | 4 | 2 | 1 | -225945 |
+
+Finale (level 24, run n100pair-20261028-035137): the bot only idles there, so the end was driven by hand: `$FMV_Manager.Start("FMV_17")` on the
+host (the finale's last film, its OnAnimEnd calls `$ui.ShowCredits(true)`). Host and client both ran the whole FMV_17 handler chain (the client by replay: OnAnimBegin,
+OnActionFrame x2, OnAnimEnd) and both show the scrolling credits screen (host shot179, client shot156, full size viewed), both still
+answering the console; no crash. Leaving the credits needs a click on "Continue" (not tested: no input into the test windows). A host-driven
+`$ui.LoadLevel("ts2_city_part01.lg")` at that point is an ordinary level change for the session: the client followed to level 1 and ran it
+(run -035503), so nothing breaks after the finale; the real post-credits path (menu) is [G].
+
 ### Verified table (2026-10-27)
 
 | Item | By numbers | By frames | Not verified |
@@ -580,7 +603,7 @@ per intro remain (aisync's own name probe just before it names the object). Dial
 | Trap check 15 after a real rewind | client placed in `s3d_Container_1\|dom_mis_fail`, host's real rewind (B key): one host line "trapped ... it dies", ONE kill on the client (was 73 kills in 1.5 s: now once per client per rewind), client respawns at 70.04 2.04 -9.10 (n100pair-20261027-163916, -164xxx) | - | the host's own trap = the level's script (mission fail) |
 | Level 2 reverse zone | client in `tc_domain_bridge` (its OnEnter sets tc mode reverse): the client's B key starts a co-op reverse ("reverse on (mine)", 5 s, off) (n100pair-20261027-1645xx) | - | the debris/bridge rewinding itself (needs the mech to wreck the bridge first) |
 | Seat-once 23 | host `takes ... tur04` once per level run: the repeats every ~60 s coincide with "level run starts" lines (the unattended level restarts each minute: zeppelin destroyed -> restart from the level start), so one seat per run (n100pair-20261027-165xxx) | - | with a player who keeps the zeppelin alive |
-| Bot re-run | - | - | not run |
+| Bot re-run, all 24 levels (2026-10-27) | chunks 1-3 above: client follows on every level, no unhandled exception | - | post-credits menu flow, 21/23 natural exits |
 - (1) Rewound objects on clients: done in coopreverse.c (message 83). During the host's playback it sends each rewind
   actor's clip and time every 0.1 s; the client sets them with the actor's own `Start(clip, time[, cycle])` and `Stop()`;
   three more sends after the end. Live on level 5 (run `n100pair-20261026-044632`): the client's crane clip time went
