@@ -29,6 +29,8 @@ param([string] $Game = "", [switch] $Uninstall, [switch] $Quiet, [string] $Lang 
       [switch] $AutoClose, [switch] $NoShortcut, [string] $ShortcutDir = "", [string] $GameProcess = "TimeShift",
       [string] $SteamUpdate = "")
 $ErrorActionPreference = "Stop"
+# The first act: "Install Co-op.bat" waits for this file to know that PowerShell really started the installer.
+if (-not $Quiet) { try { [IO.File]::WriteAllText((Join-Path ([IO.Path]::GetTempPath()) "timeshift-coop-installer-started.flag"), "1") } catch { } }
 $here = $PSScriptRoot
 $payload = Join-Path $here "files"
 $script:TITLE = "TimeShift Co-op"
@@ -142,6 +144,7 @@ $script:TEXTS = @{
         "choose_folder" = "The game was not found automatically: choose its folder (the one with the bin folder)."
         "no_exe" = "There is no bin\TimeShift.exe in this folder."
         "found" = "TimeShift 1.2 found."
+        "other_games" = "Other copies of the game were found: {0}`nUse Browse to choose another one."
         "found_other" = "TimeShift found, but its exe is not patch 1.2: the mod cannot be installed (README-COOP.txt says more)."
         "already" = "Co-op {0} is already installed: it will be installed again."
         "reinstall" = "Reinstall"
@@ -244,6 +247,7 @@ $script:TEXTS = @{
         "choose_folder" = "Игра не найдена автоматически: выберите её папку (ту, где есть папка bin)."
         "no_exe" = "В этой папке нет bin\TimeShift.exe."
         "found" = "TimeShift 1.2 найдена."
+        "other_games" = "Найдены другие копии игры: {0}`nДругую можно выбрать кнопкой «Обзор»."
         "found_other" = "TimeShift найдена, но её exe не от патча 1.2: мод нельзя установить (подробнее в README-COOP-ru.txt)."
         "already" = "Кооп {0} уже установлен: будет установлен заново."
         "reinstall" = "Переустановить"
@@ -346,6 +350,7 @@ $script:TEXTS = @{
         "choose_folder" = "Das Spiel wurde nicht automatisch gefunden: wähle seinen Ordner (den mit dem Ordner bin)."
         "no_exe" = "In diesem Ordner gibt es keine bin\TimeShift.exe."
         "found" = "TimeShift 1.2 gefunden."
+        "other_games" = "Weitere Kopien des Spiels gefunden: {0}`nWähle mit 'Durchsuchen' eine andere."
         "found_other" = "TimeShift gefunden, aber die exe ist nicht Patch 1.2: Der Mod kann nicht installiert werden (mehr in README-COOP.txt)."
         "already" = "Koop {0} ist bereits installiert: Er wird neu installiert."
         "reinstall" = "Neu installieren"
@@ -448,6 +453,7 @@ $script:TEXTS = @{
         "choose_folder" = "Le jeu n'a pas été trouvé automatiquement : choisissez son dossier (celui qui contient le dossier bin)."
         "no_exe" = "Il n'y a pas de bin\TimeShift.exe dans ce dossier."
         "found" = "TimeShift 1.2 trouvé."
+        "other_games" = "D'autres copies du jeu ont été trouvées : {0}`nUtilisez Parcourir pour en choisir une autre."
         "found_other" = "TimeShift trouvé, mais son exe n'est pas le patch 1.2 : le mod ne peut pas être installé (plus de détails dans README-COOP.txt)."
         "already" = "Le coop {0} est déjà installé : il sera réinstallé."
         "reinstall" = "Réinstaller"
@@ -550,6 +556,7 @@ $script:TEXTS = @{
         "choose_folder" = "El juego no se encontró automáticamente: elige su carpeta (la que contiene la carpeta bin)."
         "no_exe" = "No hay bin\TimeShift.exe en esta carpeta."
         "found" = "TimeShift 1.2 encontrado."
+        "other_games" = "Se encontraron otras copias del juego: {0}`nUsa Examinar para elegir otra."
         "found_other" = "TimeShift encontrado, pero su exe no es el parche 1.2: el mod no se puede instalar (más en README-COOP.txt)."
         "already" = "El coop {0} ya está instalado: se instalará de nuevo."
         "reinstall" = "Reinstalar"
@@ -652,6 +659,7 @@ $script:TEXTS = @{
         "choose_folder" = "Il gioco non è stato trovato automaticamente: scegli la sua cartella (quella che contiene la cartella bin)."
         "no_exe" = "In questa cartella non c'è bin\TimeShift.exe."
         "found" = "TimeShift 1.2 trovato."
+        "other_games" = "Sono state trovate altre copie del gioco: {0}`nUsa Sfoglia per sceglierne un'altra."
         "found_other" = "TimeShift trovato, ma il suo exe non è la patch 1.2: la mod non può essere installata (altro in README-COOP.txt)."
         "already" = "Il coop {0} è già installato: verrà installato di nuovo."
         "reinstall" = "Reinstalla"
@@ -991,7 +999,7 @@ function Set-ArcName($g, $value) {
     # (trailing blanks of the old value stay where they were)
     $old = $g2.Value.TrimEnd(" ", "`t")
     $t2 = $t.Substring(0, $g2.Index) + $value + $t.Substring($g2.Index + $old.Length)
-    if ($t2 -ne $t) { [IO.File]::WriteAllBytes($p, $enc.GetBytes($t2)) }
+    if ($t2 -ne $t) { Make-Writable $p; [IO.File]::WriteAllBytes($p, $enc.GetBytes($t2)) }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1188,6 +1196,8 @@ function Do-Uninstall($g) {
     if ($m.files.Count -eq 0 -and $steamRec.replaced.Count -eq 0 -and $steamRec.added.Count -eq 0) { throw (L "not_installed" $g) }
     if (Game-Running $g) { throw (L "close_game") }
     Lock-Install
+    $wp = Probe-Write $g
+    if ($wp) { throw (L "write_denied" $wp) }
     Ui-Step "rm" "run"
     # The game's own archive first: whatever happens next, the game starts as it was.
     if ((Test-Path -LiteralPath (Ini-Path $g)) -and (Get-ArcName $g) -ieq "coop.s3darc") {
@@ -1440,6 +1450,24 @@ function Lock-Install {
     if (-not $got) { throw (L "another_install") }
 }
 
+# Can the folders the install writes to be written (a read-only drive or folder, an ACL, a full disk)? The first problem as
+# text, else $null. (Administrator rights are asked for before this: Need-Admin.)
+function Probe-Write($g) {
+    foreach ($d in @($g, (Join-Path $g "bin"), (Join-Path $g "preload\paks"))) {
+        $probe = Join-Path $d ("coop-write-test-" + $PID + ".tmp")
+        try { [IO.File]::WriteAllText($probe, "1"); Remove-Item -LiteralPath $probe -Force }
+        catch { return ("{0} ({1})" -f $d, $_.Exception.Message) }
+    }
+    $null
+}
+
+# A file with the read-only flag (a game folder made read-only): the flag off before the installer rewrites it.
+function Make-Writable($p) {
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return }
+    $f = Get-Item -LiteralPath $p -Force
+    if ($f.Attributes -band [IO.FileAttributes]::ReadOnly) { $f.Attributes = $f.Attributes -bxor [IO.FileAttributes]::ReadOnly }
+}
+
 # Program Files: writing there needs administrator rights.
 function Need-Admin($g) {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -1504,6 +1532,8 @@ function Install-From($g, $payload) {
         throw (L "exe_wrong" $($info.sha.ToLower()))
     }
     Lock-Install
+    $wp = Probe-Write $g
+    if ($wp) { throw (L "write_denied" $wp) }
     $old = Read-Manifest $g
     if ($old.version) { Ui-Log ((L "installed_now") + $old.version) }
     if ($info.ok -and $info.kind -eq "community") { Ui-Log (L "notice_community") }
@@ -1615,7 +1645,11 @@ function Install-From($g, $payload) {
     if ([IO.Path]::GetFullPath($src) -ne [IO.Path]::GetFullPath($dst)) { Copy-Item -LiteralPath $src $dst -Force }
     if ($files -notcontains "coop-installer.ps1") { $files.Add("coop-installer.ps1") }
     $un = "Uninstall Co-op.bat"
-    Set-Content -LiteralPath (Join-Path $g $un) -Encoding ASCII -Value '@start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0coop-installer.ps1" -Uninstall -Game "%~dp0."'
+    # (hidden, with the started-flag check of "Install Co-op.bat": a PowerShell that cannot start leaves a message)
+    Set-Content -LiteralPath (Join-Path $g $un) -Encoding ASCII -Value @('@echo off', 'set "FLAG=%TEMP%\timeshift-coop-installer-started.flag"', 'del "%FLAG%" >nul 2>&1',
+        'start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0coop-installer.ps1" -Uninstall -Game "%~dp0."',
+        'for /l %%i in (1,1,25) do (', '  if exist "%FLAG%" goto started', '  ping -n 2 127.0.0.1 >nul', ')',
+        'echo TimeShift Co-op: the removal window did not start (PowerShell blocked?). Log: %TEMP%\timeshift-coop-install.log', 'pause', 'exit /b 1', ':started', 'del "%FLAG%" >nul 2>&1')
     if ($files -notcontains $un) { $files.Add($un) }
     & $writeRecord
 
@@ -1657,6 +1691,7 @@ function Install-From($g, $payload) {
         $ch = $ch -bor 0x20
         $bytes[$pe + 22] = [byte]($ch -band 0xff)
         $bytes[$pe + 23] = [byte]($ch -shr 8)
+        Make-Writable $exePath
         [IO.File]::WriteAllBytes($exePath, $bytes)
         $exeRecord = Sha256-File $exePath
         Ui-Log (L "large_address_aware")
@@ -1810,7 +1845,7 @@ $pSetup.Controls.Add($tbPkg)
 $btPkg = New-Button $pSetup (L "browse_zip") 402 255 110 $false
 $btPkgDir = New-Button $pSetup (L "browse_dir") 520 255 112 $false
 $lbPkgState = New-Label $pSetup "" 28 296 604 36 (Font 9.5) $C.dim
-foreach ($c in $lbPkg, $tbPkg, $btPkg, $btPkgDir, $lbPkgState) { $c.Visible = $false }
+foreach ($ctl in $lbPkg, $tbPkg, $btPkg, $btPkgDir, $lbPkgState) { $ctl.Visible = $false }
 
 # --- page 2: the steps and the progress
 $pWork = New-Object Windows.Forms.Panel
@@ -1864,7 +1899,7 @@ $lbResText.Visible = $false
 $form.ResumeLayout($false)
 
 $script:busy = $false
-$script:exitCode = 1
+$script:exitCode = 0   # (a closed window is not a failure; a failed run sets 1)
 $script:target = ""
 $script:t0 = Get-Date
 $script:removeVer = ""
@@ -1938,9 +1973,11 @@ function Update-Setup {
             $lines += (L "what")
             $lines += ""
             $lines += (L "same_version")
+            $others = @($script:allGames | Where-Object { $_ -and $_ -ne $g })
+            if ($others.Count) { $lines += ""; $lines += (L "other_games" ($others -join "; ")) }
         }
     }
-    foreach ($c in $lbPkg, $tbPkg, $btPkg, $btPkgDir, $lbPkgState) { $c.Visible = $steamMode }
+    foreach ($ctl in $lbPkg, $tbPkg, $btPkg, $btPkgDir, $lbPkgState) { $ctl.Visible = $steamMode }
     $lbInfo.Height = $(if ($steamMode) { 132 } else { 220 })
     if ($steamMode) { $btGo.Text = L "install_steam" }
     $lbInfo.Text = $lines -join "`n"
@@ -1958,7 +1995,7 @@ function Check-Package {
     if (-not $script:pkgSearched -and -not $tbPkg.Text.Trim()) {
         $script:pkgSearched = $true
         $first = if ($SteamUpdate) { $SteamUpdate } else { Find-Package }
-        if ($first) { $script:settingPkg = $true; $tbPkg.Text = $first; $script:settingPkg = $false; $script:pkgFoundPath = $first }
+        if ($first) { $script:settingPkg = $true; $tbPkg.Text = $first; $script:settingPkg = $false; if (-not $SteamUpdate) { $script:pkgFoundPath = $first } }
     }
     $p = $tbPkg.Text.Trim().Trim('"')
     $script:pkgPath = ""
@@ -2063,6 +2100,7 @@ function Start-Install($g) {
         $script:logLines.Add("at: " + ($_.ScriptStackTrace -replace "`r?`n", " | "))
         if ($script:ui.running) { $script:ui.running.icon.Text = [string][char]0x2716; $script:ui.running.icon.ForeColor = $C.bad }
         Save-Log $g
+        $script:exitCode = 1
         Show-Result $false (L "install_failed") ($_.Exception.Message + "`n`n" + (L "log_in"))
     }
 }
@@ -2091,6 +2129,7 @@ function Start-Uninstall($g) {
     } catch {
         Ui-Log ("ERROR: " + $_.Exception.Message)
         Save-Log ""
+        $script:exitCode = 1
         Show-Result $false (L "remove_failed") ($_.Exception.Message + "`n`n" + (L "log_in"))
     }
 }
@@ -2150,6 +2189,24 @@ $form.Add_HandleCreated({ if ($script:haveWin) { [TsCoopWin]::DarkTitle($form.Ha
 $form.Add_Shown({
     if ($script:haveWin) { [TsCoopWin]::SetWindowTheme($tbLog.Handle, "DarkMode_Explorer", $null) | Out-Null }
     $form.Activate()
+    # tests: TS_INSTALLER_SHOT=<png> saves the window's picture a moment after it shows (no screen capture) and closes it
+    if ($env:TS_INSTALLER_SHOT) {
+        $script:shotTimer = New-Object Windows.Forms.Timer
+        $script:shotTimer.Interval = 1500
+        $script:shotTimer.Add_Tick({
+            $script:shotTimer.Stop()
+            try {
+                $bmp = New-Object Drawing.Bitmap($form.Width, $form.Height)
+                $form.DrawToBitmap($bmp, (New-Object Drawing.Rectangle(0, 0, $form.Width, $form.Height)))
+                $bmp.Save($env:TS_INSTALLER_SHOT, [Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
+            } catch { }
+            $script:busy = $false
+            $form.Close()
+        })
+        $script:shotTimer.Start()
+        # (the page only: nothing starts)
+        if ($Game -and (Test-Game $Game)) { $tbGame.Text = (Resolve-Path -LiteralPath $Game).Path.TrimEnd('\'); return }
+    }
     if ($Game) {
         if (-not (Test-Game $Game)) {
             $tbGame.Text = $Game
@@ -2177,6 +2234,7 @@ $form.Add_Shown({
         }
     } else {
         $found = @(Find-Games)
+        $script:allGames = $found
         if ($found.Count -ge 1) { $tbGame.Text = $found[0] } else { Update-Setup }
         $btGo.Focus()
     }

@@ -21,8 +21,12 @@ function Log($s) { try { Add-Content -LiteralPath $log -Encoding UTF8 -Value ("{
 $uiLang = (Get-UICulture).TwoLetterISOLanguageName
 if ($uiLang -in "uk", "be", "kk") { $uiLang = "ru" }
 $T = @{
-    en = @{ title = "TimeShift Co-op"; found = "Co-op {0} is out (you have {1}). Downloading..."; verify = "Checking the download..."; failed = "The update could not be installed: {0}`nThe game starts with co-op {1}."; bad = "The download does not match the release's checksum." }
-    ru = @{ title = "TimeShift Co-op"; found = "Вышел кооп {0} (у вас {1}). Загрузка..."; verify = "Проверка загрузки..."; failed = "Обновление не удалось установить: {0}`nИгра запустится с коопом {1}."; bad = "Загрузка не совпадает с контрольной суммой выпуска." }
+    en = @{ title = "TimeShift Co-op"; found = "Co-op {0} is out (you have {1}). Downloading..."; verify = "Checking the download..."; failed = "The update could not be installed: {0}`nThe game starts with co-op {1}."; bad = "The download does not match the release's checksum."; nostart = "The game could not be started: {0}`nStart bin\TimeShift.exe yourself, or run the installer again. The log is coop\launcher-log.txt." }
+    ru = @{ title = "TimeShift Co-op"; found = "Вышел кооп {0} (у вас {1}). Загрузка..."; verify = "Проверка загрузки..."; failed = "Обновление не удалось установить: {0}`nИгра запустится с коопом {1}."; bad = "Загрузка не совпадает с контрольной суммой выпуска."; nostart = "Игру не удалось запустить: {0}`nЗапустите bin\TimeShift.exe сами или снова запустите установщик. Журнал: coop\launcher-log.txt." }
+    de = @{ title = "TimeShift Co-op"; found = "Koop {0} ist erschienen (du hast {1}). Download läuft..."; verify = "Download wird geprüft..."; failed = "Das Update konnte nicht installiert werden: {0}`nDas Spiel startet mit Koop {1}."; bad = "Der Download passt nicht zur Prüfsumme des Release."; nostart = "Das Spiel konnte nicht gestartet werden: {0}`nStarte bin\TimeShift.exe selbst oder führe das Installationsprogramm erneut aus. Das Protokoll ist coop\launcher-log.txt." }
+    fr = @{ title = "TimeShift Co-op"; found = "Le coop {0} est sorti (vous avez {1}). Téléchargement..."; verify = "Vérification du téléchargement..."; failed = "La mise à jour n'a pas pu être installée : {0}`nLe jeu démarre avec le coop {1}."; bad = "Le téléchargement ne correspond pas à la somme de contrôle de la version."; nostart = "Le jeu n'a pas pu être lancé : {0}`nLancez bin\TimeShift.exe vous-même ou relancez l'installateur. Le journal est coop\launcher-log.txt." }
+    es = @{ title = "TimeShift Co-op"; found = "Ha salido el coop {0} (tienes {1}). Descargando..."; verify = "Comprobando la descarga..."; failed = "No se pudo instalar la actualización: {0}`nEl juego se inicia con el coop {1}."; bad = "La descarga no coincide con la suma de comprobación de la versión."; nostart = "No se pudo iniciar el juego: {0}`nInicia bin\TimeShift.exe tú mismo o vuelve a ejecutar el instalador. El registro es coop\launcher-log.txt." }
+    it = @{ title = "TimeShift Co-op"; found = "È uscito il coop {0} (hai {1}). Download in corso..."; verify = "Verifica del download..."; failed = "Non è stato possibile installare l'aggiornamento: {0}`nIl gioco parte con il coop {1}."; bad = "Il download non corrisponde al checksum della versione."; nostart = "Non è stato possibile avviare il gioco: {0}`nAvvia bin\TimeShift.exe da solo o riesegui il programma di installazione. Il registro è coop\launcher-log.txt." }
 }
 if (-not $T.ContainsKey($uiLang)) { $uiLang = "en" }
 function L($k) { $T[$uiLang][$k] }
@@ -32,7 +36,36 @@ function Start-Game {
     Log ("start: $exe" + $(if ($NoStart) { " (-NoStart)" } else { "" }))
     if ($NoStart) { return }
     # (the game reads bin\steamwars.ini and its paths relative to bin)
-    Start-Process -FilePath $exe -WorkingDirectory (Join-Path $gameDir "bin")
+    try { Start-Process -FilePath $exe -WorkingDirectory (Join-Path $gameDir "bin") }
+    catch {
+        # (the shortcut hides this window: a game that does not start must not fail in silence)
+        Log "start failed: $($_.Exception.Message)"
+        try {
+            Add-Type -AssemblyName System.Windows.Forms
+            [Windows.Forms.MessageBox]::Show(((L "nostart") -f $_.Exception.Message), (L "title"), "OK", "Error") | Out-Null
+        } catch { }
+    }
+}
+
+# What a failed update check was, in one line for the log: GitHub's rate limit (60 requests an hour without a login: 403 or 429
+# with X-RateLimit-Remaining 0), no network, a missing release (404) or anything else. The game starts in every case.
+function Explain-Error($ex) {
+    $e = $ex
+    while ($e.InnerException -and -not ($e -is [Net.WebException])) { $e = $e.InnerException }
+    if ($e -is [Net.WebException] -and $e.Response) {
+        $code = [int]$e.Response.StatusCode
+        $left = $e.Response.Headers["X-RateLimit-Remaining"]
+        $reset = $e.Response.Headers["X-RateLimit-Reset"]
+        if (($code -eq 403 -or $code -eq 429) -and ($left -eq "0" -or $code -eq 429)) {
+            $when = ""
+            if ($reset -match '^\d+$') { $when = " (resets " + [DateTimeOffset]::FromUnixTimeSeconds([long]$reset).LocalDateTime.ToString("HH:mm") + ")" }
+            return "GitHub's rate limit is used up${when}: no update check this time"
+        }
+        if ($code -eq 404) { return "no release yet (404)" }
+        return "GitHub answered HTTP $code"
+    }
+    if ($e -is [Net.WebException]) { return "no network: " + $e.Message }
+    $ex.Message
 }
 
 function Version-Of($s) {
@@ -134,6 +167,7 @@ function Try-Update {
     $p = Start-Process powershell -PassThru -Wait -WindowStyle Hidden -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$inst`"", "-Game", "`"$gameDir`"", "-AutoClose", "-NoShortcut")
     Log "installer exit $($p.ExitCode)"
+    Remove-Item -LiteralPath (Join-Path ([IO.Path]::GetTempPath()) "timeshift-coop-installer-started.flag") -Force -ErrorAction SilentlyContinue
     if ($p.ExitCode -ne 0) { throw "installer exit $($p.ExitCode)" }
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -148,7 +182,7 @@ if (Get-Process -Name TimeShift -ErrorAction SilentlyContinue |
 if (-not $NoUpdate) {
     try { Try-Update } catch {
         $why = $_.Exception.Message
-        Log "update: $why"
+        Log ("update: " + (Explain-Error $_.Exception))
         # (offline, no release yet, GitHub slow: no message, the game just starts; a failed install is said)
         if ($form) {
             $form.Hide()

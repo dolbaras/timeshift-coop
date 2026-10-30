@@ -64,6 +64,10 @@ Get-ChildItem -LiteralPath $data -Recurse -File | Where-Object { $_.FullName -no
 }
 [IO.File]::WriteAllText((Join-Path $files "coop\version.txt"), "$Version`r`n", (New-Object Text.ASCIIEncoding))
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "launcher.ps1") (Join-Path $files "coop\coop-launcher.ps1")
+# The bug-report collector (tools\collect-logs.ps1) and a double-clickable start for it: <game>\coop\Collect logs.bat
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "collect-logs.ps1") (Join-Path $files "coop\collect-logs.ps1")
+[IO.File]::WriteAllText((Join-Path $files "coop\Collect logs.bat"),
+    "@powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0collect-logs.ps1`"`r`n", (New-Object Text.ASCIIEncoding))
 Copy-Item -LiteralPath (Join-Path $root "docs\release-readme.txt") (Join-Path $files "coop\README-COOP.txt")
 Copy-Item -LiteralPath (Join-Path $root "docs\release-readme-ru.txt") (Join-Path $files "coop\README-COOP-ru.txt")
 # Every file of the payload: the installer checks the folder it got against it before touching the game.
@@ -71,8 +75,26 @@ $list = @(Get-ChildItem -LiteralPath $files -Recurse -File | ForEach-Object { $_
 [IO.File]::WriteAllLines((Join-Path $files "coop\payload.txt"), [string[]]$list, (New-Object Text.ASCIIEncoding))
 # The installer and the texts at the archive's root.
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "installer.ps1") (Join-Path $stage "coop-installer.ps1")
-[IO.File]::WriteAllText((Join-Path $stage "Install Co-op.bat"),
-    "@start `"`" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"%~dp0coop-installer.ps1`" %*`r`n", (New-Object Text.ASCIIEncoding))
+# The installer starts hidden (its own window is the interface) and writes a flag file as its first act; when the flag does
+# not appear within 25 s (Windows, Defender or a policy stopped PowerShell and the hidden window swallowed the message) the
+# batch file says so on screen instead of leaving the player with nothing.
+$bat = @'
+@echo off
+set "FLAG=%TEMP%\timeshift-coop-installer-started.flag"
+del "%FLAG%" >nul 2>&1
+start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0coop-installer.ps1" %*
+for /l %%i in (1,1,25) do (
+  if exist "%FLAG%" goto started
+  ping -n 2 127.0.0.1 >nul
+)
+echo TimeShift Co-op: the installer window did not start (PowerShell blocked by Windows, a policy or an antivirus?).
+echo See README-COOP.txt, "Troubleshooting". Log: %TEMP%\timeshift-coop-install.log
+pause
+exit /b 1
+:started
+del "%FLAG%" >nul 2>&1
+'@
+[IO.File]::WriteAllText((Join-Path $stage "Install Co-op.bat"), (($bat -split "`r?`n") -join "`r`n") + "`r`n", (New-Object Text.ASCIIEncoding))
 Copy-Item -LiteralPath (Join-Path $root "docs\release-readme.txt") (Join-Path $stage "README-COOP.txt")
 Copy-Item -LiteralPath (Join-Path $root "docs\release-readme-ru.txt") (Join-Path $stage "README-COOP-ru.txt")
 Copy-Item -LiteralPath (Join-Path $root "LICENSE") (Join-Path $stage "LICENSE.txt")
