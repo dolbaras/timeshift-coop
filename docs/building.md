@@ -61,7 +61,7 @@ def build(ctx): ...        # generated content
 | Recipe | Members | Effect |
 |---|---|---|
 | `coop_rules` | `contwosaves.ui`, `ai_brain.cls` | in a multiplayer session a failed autosave no longer opens the empty "continue without saves" menu (multiplayer.md section 8); `isSyncMP = Yes` on the AI (AI replicated to clients, with `native/aisync.c`) |
-| `coop_menu` | `mainmenu.ui`, `multiplayer.ui`, `creategame.ui`, `commsettings_pc.ui`, `servermodifiers.ui`; new `coopmenu.ui`, `coophost.ui` (from `data/ui/`) | the Co-op menu (below) |
+| `coop_menu` | `mainmenu.ui`, `multiplayer.ui`, `creategame.ui`, `commsettings_pc.ui`, `servermodifiers.ui`, `ingamemulti.ui`; new `coopmenu.ui`, `coophost.ui`, `coopsplit.ui` (from `data/ui/`) | the Co-op menu (below); the pause menu's Regroup button |
 | `coop_strings` | every `Strings/strings_<language>` | the menu's texts in all 9 languages of the game (en, ru, de, fr, it, es, pl, cs, hu); the game shows the table of its own language |
 
 What stays stock: the map list (`gs_map_list.cls` is read, not changed: the campaign levels are not
@@ -114,6 +114,7 @@ UI strings (live while the game runs) shared by the frames, the DLL and the lab 
 | `CoopAuto` | lab recipe only | `host` / `join`: CoopMenu and CoopHost start that step by themselves |
 | `CoopError` | DLL | why the last co-op session ended (`COOP_ERR_VERSION,<host>,<own>`), shown by the main menu |
 | `CoopDataVersion` | main menu | the data's version, for the DLL |
+| `CoopRegroup` | pause menu (`ingamemulti.ui`, button Regroup) | `1` = the player asked to regroup; coopsession.c polls it 5 times a second, clears it and calls campaign.c's `campaign_regroup()` |
 
 ## The DLL side (`native/coopsession.c`)
 
@@ -126,6 +127,11 @@ UI strings (live while the game runs) shared by the frames, the DLL and the lab 
   `TS_COOP=0` switches all of it off.
 - Session info and version check: coopnet subtypes 40 (server -> client: flags, difficulty, max players,
   version) and 41 (client -> server: same / other version), see the file's header.
+- Regroup (pause menu, co-op session only: the button replaces the Quit row's place and Quit moves one row down; outside co-op
+  the stock rows are untouched) and the gate hint: a line on the HUD (`$ui.ShowGamePlayHint("<string id>,<arg>")`, texts
+  `COOP_MSG_REGROUP_*`, `COOP_HINT_GATE_*` in all 9 languages). While campaign.c's `campaign_gate_waiting()` reports players
+  missing at a gate where the host's player waits, the host shows its line and sends subtype 43 (u8 proto, u8 missing) every
+  3 s; each client shows its own line.
 - `TS_TIMESYNC` defaults to `1` (timesync.c acts on campaign levels in network games only, so the stock
   multiplayer is untouched). `TS_STORYSYNC` stays opt-in until storysync.c asks `ts_coop_active()`:
   it acts in every network game, stock maps too.
