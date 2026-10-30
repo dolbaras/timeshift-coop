@@ -117,6 +117,7 @@ static void (TSCALL *node_pos)(void *, float *) = (void *)0x94c8e0;
 #define SUB_SEAT 73                          /* take this seat */
 #define SUB_RIDE 74                          /* ride on this vehicle (on/off) */
 #define SUB_VEH 76                           /* vehicle transforms (either way, see veh_step) */
+#define SUB_VOICE 77                         /* server -> clients: an actor's ShowMsg / PlaySound line started */
 #define SUB_LAST 79
 #define PROTO 1
 
@@ -432,6 +433,8 @@ static int ride_rel;                         /* (client) 1 = keep the place rela
 static float ride_off[3];                    /* (client) that place in the vehicle's frame (right, up, forward) */
 
 static void veh_receive(const unsigned char *b, int len);
+static void voice_receive(const unsigned char *b, int len);
+static void voice_client_step(void);
 static void on_message(int peer, unsigned short sub, const unsigned char *b, int len)
 {
     (void)peer;
@@ -441,6 +444,10 @@ static void on_message(int peer, unsigned short sub, const unsigned char *b, int
     }
     if (role() != MODE_CLIENT || len < 1 || b[0] != PROTO)
         return;
+    if (sub == SUB_VOICE) {
+        voice_receive(b, len);
+        return;
+    }
     if (sub == SUB_GATHER && len >= 15) {
         memcpy(pend.pos, b + 2, 12);
         pend.ring = b[1];
@@ -572,6 +579,7 @@ static void client_frame(void)
     }
     if (ride_vehicle[0])
         ride_step();
+    voice_client_step();
 }
 
 /* ---- seats and rides of the host's story events (storysync.c calls campaign_story_event on the host) ---- */
@@ -749,6 +757,7 @@ int campaign_local_call(const char *stmt, const char *name, int len)
 typedef struct { void **type; unsigned data; } Variant;
 static void *(*type_int)(void) = (void *)0x9c8c50;
 static void *(*type_bool)(void) = (void *)0x9c8d00;
+static void *(*type_float)(void) = (void *)0x9c8e10;
 static void *(*type_str)(void) = (void *)0x9c8ec0;
 static int (TSCALL *named_cmp)(void *, void **, void **) = (void *)0x8fb500;      /* <0 / 0 / >0 by name */
 static void (TSCALL *named_insert)(void *, int, void **, int) = (void *)0x8fb000; /* (array, index, &inst, 1) */
@@ -918,8 +927,273 @@ AI_HOOK(hk_tgt1, cp_t_tgt1)
 AI_HOOK(hk_tgt2, cp_t_tgt2)
 AI_HOOK(hk_tgt3, cp_t_tgt3)
 
-typedef struct { DWORD addr, seh; void *hook; int group; } Hook;   /* group 1 late join, 2 AI */
+/* ---- actors' voice lines (host -> clients, TS_CAMPAIGN_VOICE, default on) ----
+ * ShowMsg(strId, time, usage) and PlaySound(snd, obj) are natives of every level object (0x647d40, 0x6478e0: virtual
+ * +0xc4 / +0xb8). Their handlers are "local" for the story sync (presentation only), so each machine runs its own, and a
+ * client's copy fails when the actor is one the host created in play (`$farm.Create`: the name arrives from aisync a
+ * moment later; "unknown object"): Cooke and the rebels of the intros of ts2_zepride1_part01 and ts2_zepride2_part01
+ * (campaign_wrap_call skips the client's copy there), `Mitchell` on ts2_zep_factory_part2, the prison rebels of
+ * ts2_zepcrashsite_part03, ... (survey in the audit). So the host tells the clients every such line the moment it
+ * STARTS (the hook runs when a delayed `:N` line fires): message 77 {u8 1, u8 kind (0 ShowMsg, 1 PlaySound), name, string,
+ * f32 time, string usage/object}. A client waits 1.2 s, skips the line when it heard the same one meanwhile (its own
+ * copy of the handler ran, or an earlier message) within 30 s - and a local copy that comes after a played message is
+ * suppressed the same way - else plays it on its copy of the actor as soon as the actor has its name (up to 12 s).
+ * Players, sound managers/actors ("snd*") and music are left out; at most 12 messages a second, the same line once a
+ * second. Log: TS_CAMPAIGN_VOICELOG=1 lists every ShowMsg/PlaySound call on both machines ("voice:" lines: the audit
+ * of which lines the clients play) and what the client did with each message. */
+TRAMP("cp_t_showmsg", "0x647d47", "0xc7eba8");
+TRAMP("cp_t_playsnd", "0x6478e7", "0xc7ec28");
+extern void TSCALL cp_t_showmsg(void *, int, Variant *, Variant *, void *) __asm__("cp_t_showmsg");
+extern void TSCALL cp_t_playsnd(void *, int, Variant *, Variant *, void *) __asm__("cp_t_playsnd");
+
+static unsigned name_hash(const char *s);
+static int use_voice = 1, voice_log;
+static LONG voice_logged;
+#define VOLOG(...) do { if (voice_log && InterlockedIncrement(&voice_logged) <= 6000) ts_log(__VA_ARGS__); } while (0)
+static char *split_p2(void) { return (char *)split_player2(); }
+
+static int voice_skip_name(const char *n)
+{
+    return !n[0] || !strncmp(n, "snd", 3) || !strncmp(n, "music", 5) || !strncmp(n, "Music", 5);
+}
+
+static int is_player_ent(char *e)
+{
+    if (!e || e == PLAYER || e == split_p2())
+        return 1;
+    for (int i = 0; slot_at(i); i++)
+        if (*(char **)(slot_at(i) + 4) == e)
+            return 1;
+    return 0;
+}
+
+static const char *var_str(int argc, Variant *argv, int i)
+{
+    if (argc <= i || !argv || argv[i].type != type_str() || !argv[i].data || IsBadReadPtr((void *)argv[i].data, 16))
+        return "";
+    return ((String)argv[i].data)->s;
+}
+
+static float var_float(int argc, Variant *argv, int i)
+{
+    float f = 0.f;
+    if (argc > i && argv && argv[i].type == type_float())
+        memcpy(&f, &argv[i].data, 4);
+    else if (argc > i && argv && argv[i].type == type_int())
+        f = (float)(int)argv[i].data;
+    return f;
+}
+
+/* the lines this machine heard lately: (name, kind, string) hash -> tick */
+#define HEARD_MAX 128
+static struct { unsigned key; DWORD at; } heard[HEARD_MAX];
+static int heard_next;
+#define HEARD_MS 30000
+
+static unsigned voice_key(const char *name, int kind, const char *id)
+{
+    return name_hash(name) * 31u + name_hash(id) + (unsigned)kind * 7u;
+}
+
+static int heard_recently(unsigned key, DWORD now)
+{
+    for (int i = 0; i < HEARD_MAX; i++)
+        if (heard[i].key == key && heard[i].at && now - heard[i].at < HEARD_MS)
+            return 1;
+    return 0;
+}
+
+static void heard_set(unsigned key, DWORD now)
+{
+    for (int i = 0; i < HEARD_MAX; i++)
+        if (heard[i].key == key) {
+            heard[i].at = now;
+            return;
+        }
+    heard[heard_next].key = key;
+    heard[heard_next].at = now;
+    heard_next = (heard_next + 1) % HEARD_MAX;
+}
+
+static DWORD voice_ignore_until;   /* (the client's own replay of a forwarded line passes the hook again) */
+static int voice_sent, voice_played, voice_dup, voice_dropped, voice_calls;
+
+/* (host) tell the clients; (client) remember it as heard, or drop a copy that was played from a message just before.
+ * Returns 1 = the client must not run the native (heard a moment ago). */
+static int voice_call(void *obj, int kind, int argc, Variant *argv)
+{
+    int r = role();
+    if (!use_voice || !r || !obj || IsBadReadPtr(obj, ENT_NODE + 4))
+        return 0;
+    const char *name = ent_name(obj), *id = var_str(argc, argv, 0);
+    if (!id[0] || is_player_ent(obj))
+        return 0;
+    DWORD now = GetTickCount();
+    voice_calls++;
+    VOLOG("voice: %s %s.%s(\"%s\")%s", r == MODE_SERVER ? "host" : "client", name, kind ? "PlaySound" : "ShowMsg", id,
+          now < voice_ignore_until ? " [from the host's message]" : "");
+    if (voice_skip_name(name))
+        return 0;
+    unsigned key = voice_key(name, kind, id);
+    if (r == MODE_CLIENT) {
+        if (now < voice_ignore_until)
+            return 0;
+        if (heard_recently(key, now)) {   /* (played from the host's message a moment ago) */
+            voice_dup++;
+            VOLOG("voice: client skips its own %s.%s(\"%s\"): played from the host's message", name, kind ? "PlaySound" : "ShowMsg", id);
+            return 1;
+        }
+        heard_set(key, now);
+        return 0;
+    }
+    /* host: at most 12 messages a second, the same line once a second */
+    static DWORD sec_at;
+    static int sec_n;
+    static struct { unsigned key; DWORD at; } last[16];
+    static int last_next;
+    if (now - sec_at >= 1000)
+        sec_at = now, sec_n = 0;
+    if (sec_n >= 12)
+        return 0;
+    for (int i = 0; i < 16; i++)
+        if (last[i].key == key && now - last[i].at < 1000)
+            return 0;
+    last[last_next].key = key;
+    last[last_next].at = now;
+    last_next = (last_next + 1) % 16;
+    unsigned char b[250];
+    int n = 0, nl = (int)strlen(name), il = (int)strlen(id);
+    const char *extra = kind ? var_str(argc, argv, 1) : var_str(argc, argv, 2);
+    int el = (int)strlen(extra);
+    float t = kind ? 0.f : var_float(argc, argv, 1);
+    if (nl > 80 || il > 80 || el > 40)
+        return 0;
+    b[n++] = PROTO;
+    b[n++] = (unsigned char)kind;
+    b[n++] = (unsigned char)nl;
+    memcpy(b + n, name, nl);
+    n += nl;
+    b[n++] = (unsigned char)il;
+    memcpy(b + n, id, il);
+    n += il;
+    memcpy(b + n, &t, 4);
+    n += 4;
+    b[n++] = (unsigned char)el;
+    memcpy(b + n, extra, el);
+    n += el;
+    sec_n++;
+    if (coopnet_send(-1, SUB_VOICE, b, n) > 0)
+        voice_sent++;
+    return 0;
+}
+
+static void TSCALL hk_showmsg(void *obj, int argc, Variant *argv, Variant *res, void *self)
+{
+    if (voice_call(obj, 0, argc, argv))
+        return;
+    cp_t_showmsg(obj, argc, argv, res, self);
+}
+
+static void TSCALL hk_playsnd(void *obj, int argc, Variant *argv, Variant *res, void *self)
+{
+    if (voice_call(obj, 1, argc, argv))
+        return;
+    cp_t_playsnd(obj, argc, argv, res, self);
+}
+
+/* (client) messages wait here for the script tick */
+#define VQ_MAX 16
+static struct { int kind; char name[84], id[84], extra[44]; float t; DWORD at; } vq[VQ_MAX];
+static volatile int vq_head, vq_count;
+
+static void voice_receive(const unsigned char *b, int len)
+{
+    int n = 1, kind;
+    char name[84], id[84], extra[44];
+    float t;
+    int l;
+    if (len < 4 || vq_count >= VQ_MAX)
+        return;
+    kind = b[n++] ? 1 : 0;
+    l = b[n++];
+    if (n + l + 1 > len || l >= (int)sizeof name)
+        return;
+    memcpy(name, b + n, l);
+    name[l] = 0;
+    n += l;
+    l = b[n++];
+    if (n + l + 5 > len || l >= (int)sizeof id)
+        return;
+    memcpy(id, b + n, l);
+    id[l] = 0;
+    n += l;
+    memcpy(&t, b + n, 4);
+    n += 4;
+    l = b[n++];
+    if (n + l > len || l >= (int)sizeof extra)
+        return;
+    memcpy(extra, b + n, l);
+    extra[l] = 0;
+    if (strchr(name, '"') || strchr(id, '"') || strchr(extra, '"') || strchr(id, '\\') || strchr(extra, '\\'))
+        return;
+    int slot = (vq_head + vq_count) % VQ_MAX;
+    vq[slot].kind = kind;
+    strcpy(vq[slot].name, name);
+    strcpy(vq[slot].id, id);
+    strcpy(vq[slot].extra, extra);
+    vq[slot].t = t;
+    vq[slot].at = GetTickCount();
+    vq_count++;
+}
+
+static int named_quiet(const char *name);
+static void voice_client_step(void)
+{
+    static DWORD polled;
+    DWORD now = GetTickCount();
+    if (!vq_count || now - polled < 250)
+        return;
+    polled = now;
+    int n = vq_count, keep = 0;
+    for (int i = 0; i < n; i++) {
+        int k = (vq_head + i) % VQ_MAX;
+        if (now - vq[k].at < 1200) {   /* (the client's own copy of the handler may still be coming) */
+            vq[(vq_head + keep++) % VQ_MAX] = vq[k];
+            continue;
+        }
+        unsigned key = voice_key(vq[k].name, vq[k].kind, vq[k].id);
+        const char *what = vq[k].kind ? "PlaySound" : "ShowMsg";
+        if (heard_recently(key, now)) {
+            voice_dup++;
+            VOLOG("voice: client heard %s.%s(\"%s\") itself, host's message skipped", vq[k].name, what, vq[k].id);
+        } else if (named_quiet(vq[k].name)) {
+            char ssl[300], res[120];
+            if (vq[k].kind)
+                snprintf(ssl, sizeof ssl, vq[k].extra[0] ? "$%s.PlaySound(\"%s\", \"%s\")" : "$%s.PlaySound(\"%s\")", vq[k].name,
+                         vq[k].id, vq[k].extra);
+            else if (vq[k].extra[0])
+                snprintf(ssl, sizeof ssl, "$%s.ShowMsg(\"%s\", %g, \"%s\")", vq[k].name, vq[k].id, (double)vq[k].t, vq[k].extra);
+            else
+                snprintf(ssl, sizeof ssl, "$%s.ShowMsg(\"%s\", %g)", vq[k].name, vq[k].id, (double)vq[k].t);
+            heard_set(key, now);
+            voice_ignore_until = now + 400;
+            ts_script_run(ssl, res, sizeof res);
+            voice_ignore_until = GetTickCount() + 50;
+            voice_played++;
+            VOLOG("voice: client plays %s.%s(\"%s\") from the host's message -> %s", vq[k].name, what, vq[k].id, res);
+        } else if (now - vq[k].at < 12000) {   /* (the actor has no name here yet: keep waiting) */
+            vq[(vq_head + keep++) % VQ_MAX] = vq[k];
+        } else {
+            voice_dropped++;
+            VOLOG("voice: client dropped %s.%s(\"%s\"): no such object here after 12 s", vq[k].name, what, vq[k].id);
+        }
+    }
+    vq_count = keep;
+}
+
+typedef struct { DWORD addr, seh; void *hook; int group; } Hook;   /* group 1 late join, 2 AI, 3 voice */
 static const Hook hooks[] = {
+    {0x647d40, 0xc7eba8, (void *)hk_showmsg, 3}, {0x6478e0, 0xc7ec28, (void *)hk_playsnd, 3},
     {0x438d40, 0xc67c78, (void *)hk_input, 1}, {0x438e90, 0xc67c48, (void *)hk_move, 1},
     {0x439040, 0xc79130, (void *)hk_tc, 1},    {0x43a140, 0xc67a38, (void *)hk_wpn, 1},
     {0x666d90, 0xc69418, (void *)hk_aim, 1},
@@ -1766,6 +2040,8 @@ void campaign_install(void)
     use_latejoin = !(ts_env("TS_CAMPAIGN_LATEJOIN", v, sizeof v) && v[0] == '0');
     use_ai = !(ts_env("TS_CAMPAIGN_AI", v, sizeof v) && v[0] == '0');
     use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
+    use_voice = !(ts_env("TS_CAMPAIGN_VOICE", v, sizeof v) && v[0] == '0');
+    voice_log = ts_env("TS_CAMPAIGN_VOICELOG", v, sizeof v) && v[0] == '1';
     use_vehsync = !(ts_env("TS_CAMPAIGN_VEHSYNC", v, sizeof v) && v[0] == '0');
     if (ts_env("TS_CAMPAIGN_RIDE_HEIGHT", v, sizeof v))
         ride_height = (float)atof(v);
@@ -1791,7 +2067,7 @@ void campaign_install(void)
     }
     for (int i = 0; i < N_HOOKS; i++) {
         const Hook *h = &hooks[i];
-        if ((h->group == 1 && !use_latejoin) || (h->group == 2 && !use_ai))
+        if ((h->group == 1 && !use_latejoin) || (h->group == 2 && !use_ai) || (h->group == 3 && !use_voice))
             continue;
         unsigned char want[7] = {0x6a, 0xff, 0x68}, rep[7];
         memcpy(want + 3, &h->seh, 4);
