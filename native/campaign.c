@@ -1924,7 +1924,7 @@ static void veh_step(DWORD now)
     veh_apply(now);
 }
 
-/* ---- dynamic actor digest (TS_CAMPAIGN_DIGEST, default on = log only; TS_CAMPAIGN_DIGEST_FIX=1 also puts the actors right) ----
+/* ---- dynamic actor digest (TS_CAMPAIGN_DIGEST, default on; TS_CAMPAIGN_DIGEST_FIX=0: log only) ----
  * Doors, lifts, machinery and other animated `dynamic` actors run from the replayed story events on every machine
  * and nothing checks that they still agree (only the rewind pushes clip and time). Every 4 s the host hashes the state
  * of every named dynamic actor that has a clip - clip index, running, cycle flag, and for a stopped clip its time to half a
@@ -1940,7 +1940,7 @@ static void veh_step(DWORD now)
 #define DYN_B 16
 typedef struct { unsigned hash; char *ent; int clip; unsigned char run, cyc; float t; } Dyn;
 static Dyn dyn[MAX_DYN];
-static int n_dyn, use_digest = 1, digest_fix;   /* (fix off by default: see the audit, 3d) */
+static int n_dyn, use_digest = 1, digest_fix = 1;
 static int dyn_miss[DYN_B], dyn_seq, dyn_rounds, dyn_requests, dyn_bad, dyn_fixed, dyn_details, dyn_sent;
 static unsigned dyn_host_bh[DYN_B], dyn_own_bh[DYN_B];
 static int dyn_pending;                      /* (client) a digest from the host waits for the next frame */
@@ -2179,8 +2179,11 @@ static void dyn_step(DWORD now)
             if (dyn_bad <= 200)
                 CLOG("campaign: digest: %s host clip %d %s%s t %.2f, here clip %d %s%s t %.2f%s", ent_name(d->ent), c,
                      run ? "runs" : "stopped", cyc ? " cycle" : "", (double)t, d->clip, d->run ? "runs" : "stopped",
-                     d->cyc ? " cycle" : "", (double)d->t, digest_fix ? ": set to the host's" : "");
-            if (digest_fix) {   /* (an actor is put right once a minute at most: some mismatches are not fixable by Start) */
+                     d->cyc ? " cycle" : "", (double)d->t, digest_fix && !run ? ": set to the host's" : "");
+            /* Only an actor the host has AT REST is put right (its clip, final time, stopped): one that still runs on the host
+             * differs by the phase of a timed machine every few seconds (live: trains, interceptor places), which is no
+             * divergence; an actor at most once a minute. */
+            if (digest_fix && !run) {
                 static struct { unsigned h; DWORD at; } fixed[64];
                 static int fixed_next;
                 DWORD tnow = GetTickCount();
@@ -2736,7 +2739,7 @@ void campaign_install(void)
     use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
     use_voice = !(ts_env("TS_CAMPAIGN_VOICE", v, sizeof v) && v[0] == '0');
     use_digest = !(ts_env("TS_CAMPAIGN_DIGEST", v, sizeof v) && v[0] == '0');
-    digest_fix = ts_env("TS_CAMPAIGN_DIGEST_FIX", v, sizeof v) && v[0] == '1';
+    digest_fix = !(ts_env("TS_CAMPAIGN_DIGEST_FIX", v, sizeof v) && v[0] == '0');
     use_locks = !(ts_env("TS_CAMPAIGN_LOCKS", v, sizeof v) && v[0] == '0');
     use_loadout = !(ts_env("TS_CAMPAIGN_LOADOUT", v, sizeof v) && v[0] == '0');
     use_spread = ts_env("TS_CAMPAIGN_SPREAD", v, sizeof v) && v[0] == '1';

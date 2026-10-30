@@ -814,7 +814,24 @@ level; "local" handler = every statement is presentation, the client's own trigg
 | zepride1_part01 | 8 | 20 | 13 | 3 | 0 |
 | zepride2_part01 | 64 | 2 | 16 | 0 | 0 |
 
-(The levels with many lines - 1, cityfinal, 11, 13, 8, 23 - are the ones where clients missed dialogue most.) `ShowMsg`/`PlaySound` lines
+Dynamic audit, bot run `campaign-bot-20261030-174636/-175442/-180204/-180438` (levels 1-3, 11-13, 20, 24, 40 s of idling after each client was
+in; `TS_CAMPAIGN_VOICELOG=1`; the bot's host skips to the exit, so only the lines of the first minute run). Calls = ShowMsg/PlaySound calls seen on
+the machine; "plays" = lines the client played from the host's messages (it had not run them itself), "heard" = messages skipped because its own copy of
+the handler had played the line, "dropped" = no such object after 12 s:
+
+| level | host calls | client calls | client plays from messages | heard itself | dropped | examples of lines the client now plays |
+|---|---|---|---|---|---|---|
+| 1 city_part01 | 4 | 3 | 0 | 1 | 0 | (nothing lost in the first minute) |
+| 2 city_part02 | 53 | 65 | 20 | 11 | 0 | the executions of the opening (`vo_city_2_pol4_beg_for_your_life`, `..._rbl4_stop_please`, `..._fight_back`) |
+| 3 city_part03 | 19 | 27 | 11 | 1 | 0 | `ai_square_rebel_1 vo_city_3_rbl4_now_never`, the loudspeakers `govorilo_1..4|speaker` (Krone's speech) |
+| 11 zepcrashsite_part03 | 5 | 6 | 0 | 1 | 0 | - |
+| 12 summeroutdoor_part01 | 6 | 7 | 0 | 2 | 0 | - |
+| 13 summeroutdoor_part02 | 4 | 3 | 1 | 0 | 0 | `Start_cine vo_gf_1_cooke_scared_for` |
+| 20 zep_factory_part2 | 4 | 5 | 2 | 0 | 0 | `Driver vo_zf_3_rbl2_ok_cover_me`, `Reb_1 vo_zf_3_cooke_get_back_here` |
+| 24 cityfinal_part01 | 16 | 20 | 8 | 0 | 0 | Cooke's speech `cooke_speech_actor_1/2 vo_city_final_cooke_*` |
+
+No client crash and no "Unhandled exception" in any of these runs. (The levels with many lines - 1, cityfinal, 11, 13, 8, 23 - are the ones where
+clients missed dialogue most; the rest of each level needs a play-through, a bot that only idles does not trigger the domains.) `ShowMsg`/`PlaySound` lines
 on other objects (domains' own `$snd*` ambience, the player) are not forwarded; ambience is each machine's own.
 
 ### Lock watchdog (message 78, `TS_CAMPAIGN_LOCKS=0` off, `TS_CAMPAIGN_LOCKWATCH=<s>`, default 12)
@@ -898,21 +915,27 @@ the next level of the session each machine gets its previous set (and ammunition
 meanwhile (levels 1, 2, 24 take the weapons away): live, levels 3 -> 4 and 4 -> 5: host and client `loadout carried over from the last level`, 240/30
 after the change instead of the start pistol. Weapons picked up in play (not a set number) are not carried: they are lost on a respawn, as before.
 
-### Dynamic actor digest (message 79, `TS_CAMPAIGN_DIGEST=0` off, `TS_CAMPAIGN_DIGEST_FIX=1` also puts actors right, `!cp dyn`)
+### Dynamic actor digest (message 79, `TS_CAMPAIGN_DIGEST=0` off, `TS_CAMPAIGN_DIGEST_FIX=0` log only, `!cp dyn`)
 
 Every 4 s (20 s after a level starts) the host hashes the state of every named `dynamic` actor with a clip - clip index, running, cycle flag, and for a
-stopped clip its time to half a second - into 16 buckets and sends the 16 hashes. A client scans its own actors; a bucket that differs two rounds
-in a row is asked for, the host answers with that bucket's entries, and the client logs each actor that differs ("campaign: digest: <name> host clip
-c runs/stopped t ..., here clip ...") and, with the fix switched on, calls the engine's own clip start (`0x6aaea0`, the end of the script's `Start`) with
-the host's clip, time and cycle flag (`Stop()` when the host's is stopped; an actor at most once a minute). Vehicles, players and AI are left out.
+stopped clip its time to half a second - into 16 buckets and sends the 16 hashes (70 bytes). A client scans its own actors; a bucket that differs two
+rounds in a row is asked for, the host answers with that bucket's entries, and the client logs each actor that differs ("campaign: digest: <name> host
+clip c runs/stopped t ..., here clip ...") and puts it into the host's state when the host's actor is AT REST: the engine's own clip start (`0x6aaea0`, the
+end of the script's `Start`) with the host's clip, final time and cycle flag, then `Stop()`; an actor at most once a minute. An actor that still runs
+on the host is only logged: timed machinery differs by seconds of phase all the time (below). Vehicles, players and AI are left out.
 
-Live (n100pair-20261030-1643*..1649*, levels 12 and 3): 58-62 actors per level are named dynamic actors with a clip. Level 12: two actors
-(`helicopt_place1/2`, the scripted helicopter places of the intro) differ for about 16 s (the host's clip still runs at 10 s of 13 while the client's
-had stopped: the client's local film timeline is ahead), then agree; 2 requests in 4 minutes. Level 3: the cyclic machinery
-(`Marshrut_A/B/C_LOKOMOTIV`, `interceptor_plc_01..03`: timed clips the scripts restart on each machine at its own moment) differs all the time:
-44 differences in 111 rounds, always a phase difference of seconds in a clip that runs on one side and has just ended on the other. So the digest is
-a reliable detector but "put right" would fight these local timelines every few seconds: the fix is OFF by default (the probe stays on and
-costs 70 bytes per 4 s). No door/lift state divergence was seen in these runs (the other actors agreed).
+Live (levels 12 and 3 on 2026-10-30 with the first version that put everything right: 58-62 named dynamic actors with a clip per level):
+level 12: `helicopt_place1/2` (the intro's helicopter places) differ for about 16 s, then agree; level 3: the cyclic machinery (`Marshrut_A/B/C_LOKOMOTIV`,
+`interceptor_plc_01..03`, timed clips the scripts restart on each machine at its own moment) differs all the time, 44 differences in 111 rounds, always
+a phase difference in a clip that runs on one side and has just ended on the other: putting those right every few seconds would only fight the local
+timelines, hence the "host at rest" rule.
+With the rule (levels 11 and 20, runs n100pair-20261030-181242 and -182859, no crash): real divergences were found and put right in the second round and
+stayed right: level 11 `bridge_train_actor` (host stopped at its start, t 0.00; the client's copy stopped at the END of its clip, t 12.00: the bridge train
+was in another place on the client) and `Station_gate_actor1` (0.00 vs 1.50); level 20 `Lift_actor_1` (the host's lift stopped at t 9.00, the client's copy
+still flagged as running at 9.00). The bot runs of the day (levels 1-3, 11-13, 20, 24, log only) also logged `escort_actor` on level 24 (host stopped at 0.00,
+client at the end 33.33: the escort cinematic had run only on the client), `sound_actor*` and `sound_anim_actor_grp_*` on level 2 (sound actors, phase) and
+the actors of the host that a client does not have as named dynamic actors (`actor <hash> ... is not here`: 2-3 per level, not identified).
+Whether a door state ever diverged is not shown by these runs (the doors agreed).
 
 ### Client-driven quad (levels 9, 12; message 76 now both ways)
 
