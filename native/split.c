@@ -809,7 +809,7 @@ static void TSCALL hook_fstart(void *r)
         if (!t0)
             t0 = now;
         else if (now - t0 >= 10000) {
-            if (nsplit)
+            if (nsplit || splitlog)
                 ts_log("split: %.1f frames/s, %.1f split frames/s (each view %.1f/s)", nall * 1000.0f / (now - t0),
                        nsplit * 1000.0f / (now - t0), nsplit * 500.0f / (now - t0));
             t0 = now, nall = nsplit = 0;
@@ -1894,13 +1894,63 @@ static void TSCALL hook_item_update(BYTE *item)
     /* (a server: the loop's network branch, items it has authority over (+0x2c bit 4) that are not of the kinds
      * 1-10 taken with the use key; a client never gives items) */
     int host_item = md == 2 && (*(DWORD *)(item + 0x2c) & 4) && !(kind >= 1 && kind <= 10);
-    if (stage < 3 || !p2 || !gm || !(md == 1 || (host_item && !host_items_off)) || !node || (*(DWORD *)(node + 4) & 3)
+    /* (a server's items of the kinds 1-10: the host's own player takes them through a network message to itself, the
+     * item loop's first branch, 0x4f5aa0: the item's check, the player's +0x2a4, then message 0x439 {item net id}) */
+    int use_item = md == 2 && kind >= 1 && kind <= 10 && !host_items_off;
+    if (stage < 3 || !p2 || !gm || !(md == 1 || (host_item && !host_items_off) || use_item) || !node || (*(DWORD *)(node + 4) & 3)
         || (*(DWORD *)(item + 0x270) & 2) || as2.depth || *(DWORD *)p2 != PLAYER_VTBL)
         return;
     void **vt = *(void ***)item;
+    if (use_item) {
+        if (((int (TSCALL *)(void *, void *))vt[0x16c / 4])(item, p2))
+            return;   /* (not in reach) */
+        if (*(float *)(item + 0xbc * 4) > 0.0f)
+            return;   /* (taken a moment ago: the item's own cool-down) */
+        BYTE **uh = p1_record_handle(), *uh_was = uh ? *uh : NULL;   /* (the item filter's player-table record, see above) */
+        if (uh)
+            *uh = p2;
+        p2_enter();
+        int c208 = ((int (TSCALL *)(void *, void *, int))vt[0x208 / 4])(item, p2, 1);
+        int c2a4 = c208 ? ((int (TSCALL *)(void *, void *))(*(void ***)p2)[0x2a4 / 4])(p2, item) : -1;
+        if (splitlog) {
+            static DWORD dbg_at;
+            if (GetTickCount() - dbg_at > 3000) {
+                dbg_at = GetTickCount();
+                BYTE *pn = *(BYTE **)(p2 + 0x230);
+                ts_log("split: use item %p (\"%.32s\", kind %d) in player 2's reach: +0x208 %d, player +0x2a4 %d, cool-down %.2f, handle %p,"
+                       " filter %d, +0x10c %d, +0x270 %08lx; item at %.2f %.2f %.2f, player 2 at %.2f %.2f %.2f", (void *)item,
+                       !IsBadReadPtr(*(char **)(node + 0x28), 1) ? *(char **)(node + 0x28) : "?", kind, c208, c2a4,
+                       *(float *)(item + 0xbc * 4), (void *)uh, ((int (TSCALL *)(void *, void *))vt[0x248 / 4])(item, p2) & 0xff,
+                       ((int (TSCALL *)(void *))vt[0x10c / 4])(item), *(DWORD *)(item + 0x270), ((float *)(node + 0x68))[0],
+                       ((float *)(node + 0x68))[1], ((float *)(node + 0x68))[2], pn ? ((float *)(pn + 0x68))[0] : 0.0f,
+                       pn ? ((float *)(pn + 0x68))[1] : 0.0f, pn ? ((float *)(pn + 0x68))[2] : 0.0f);
+            }
+        }
+        if (c208 && c2a4) {
+            unsigned char blk[16] = {0};
+            void *msgmgr = *(void **)0xfcab38;
+            __asm__ volatile("call *%1" : : "a"(blk), "r"((void *)0x43fb00) : "memory", "ecx", "edx");
+            *(DWORD *)(blk + 8) = *(DWORD *)(item + 6 * 4);
+            ((void (TSCALL *)(void *, void *, int, void *, int))(*(void ***)msgmgr)[0x3c / 4])(msgmgr, p2, 0x439, blk, 0x10000);
+            *(DWORD *)(item + 0xbc * 4) = *(DWORD *)0xd707ac;
+            ts_log("split: use item %p (kind %d) taken by player 2 through message 0x439 (net id %d)", (void *)item, kind,
+                   *(int *)(item + 6 * 4));
+        }
+        p2_leave();
+        if (uh)
+            *uh = uh_was;
+        return;
+    }
     if (((int (TSCALL *)(void *, void *))vt[0x16c / 4])(item, p2))
         return;   /* (not in reach) */
     BYTE **h = md == 2 ? p1_record_handle() : NULL, *h_was = h ? *h : NULL;
+    int c208_raw = -1, f248_raw = -1;   /* (tests: the same checks before the handle swap) */
+    if (splitlog && md == 2) {
+        p2_enter();
+        c208_raw = ((int (TSCALL *)(void *, void *, int))vt[0x208 / 4])(item, p2, 1);
+        f248_raw = ((int (TSCALL *)(void *, void *))vt[0x248 / 4])(item, p2) & 0xff;
+        p2_leave();
+    }
     if (h)
         *h = p2;
     if (splitlog && md == 2) {   /* (tests: which stage of a server's give refuses player 2) */
@@ -1911,8 +1961,8 @@ static void TSCALL hook_item_update(BYTE *item)
             int c208 = ((int (TSCALL *)(void *, void *, int))vt[0x208 / 4])(item, p2, 1);
             int f248 = ((int (TSCALL *)(void *, void *))vt[0x248 / 4])(item, p2) & 0xff;
             p2_leave();
-            ts_log("split: item %p kind %d debug: record handle %p (p1 %p, p2 %p), +0x208 check %d, filter +0x248 %d, p2 life %.1f", (void *)item,
-                   kind, (void *)h, (void *)PLAYER_B, (void *)p2, c208, f248, *(float *)(p2 + 0x234));
+            ts_log("split: item %p kind %d debug: record handle %p (p1 %p, p2 %p), +0x208 check %d, filter +0x248 %d (before the swap: %d, %d), p2 life %.1f",
+                   (void *)item, kind, (void *)h, (void *)PLAYER_B, (void *)p2, c208, f248, c208_raw, f248_raw, *(float *)(p2 + 0x234));
             BYTE *pn = *(BYTE **)(p2 + 0x230), *p1n = PLAYER_B ? *(BYTE **)(PLAYER_B + 0x230) : NULL;
             if (pn && !IsBadReadPtr(pn, 0x74) && node && !IsBadReadPtr(node, 0x74))
                 ts_log("split:   item at %.2f %.2f %.2f, player 2 node at %.2f %.2f %.2f (+4 %08lx), player 1 at %.2f %.2f %.2f; item +0x270 %08lx +0x2c %08lx, vt+0x10c %d",
@@ -2720,6 +2770,144 @@ static void p2_loadout(BYTE *p1)
     ts_log("split: player 2 gets player 1's weapons %d %d %d (it had %d %d %d): %s", a[0], a[1], a[2], b[0], b[1], b[2], out);
 }
 
+/* ---- player 2 follows what the level's scripts do to player 1: turret seats and the holster ----
+ * The level scripts name `$player` (player 1): a script's StartUse on a zeppelin turret seats player 1 only, and
+ * SelectHolster takes only player 1's weapon away (level 20: the vent). Both are natives of the player class
+ * (StartUse 0x438bd0, SelectHolster 0x439dc0, the usual script-native convention: thiscall object; argc, argv, result,
+ * self; ret 0x10), hooked here the way campaign.c hooks its natives:
+ *  - a turret seat taken by player 1 (ts2_zepride1_part01, ts2_zepride2_part01) gives player 2 the next free seat
+ *    after the clients' (campaign.c's seat table: client k takes seat k; a copy of its rows below), the gunner of that
+ *    seat is removed as for a client, and player 2 takes it 0.7 s later (`$player2.StartUse`);
+ *  - player 1's SelectHolster is repeated on player 2 (also when player 2 comes in later in that level). */
+typedef struct { void **type; unsigned data; } SVar;
+#define SP_TRAMP(sym, back, seh) \
+    __asm__(".text\n.globl " sym "\n" sym ":\n  pushl $-1\n  pushl $" seh "\n  pushl $" back "\n  ret\n")
+SP_TRAMP("sp_t_use", "0x438bd7", "0xc79160");
+SP_TRAMP("sp_t_holster", "0x439dc7", "0xc67a98");
+extern void TSCALL sp_t_use(void *, int, SVar *, SVar *, void *) __asm__("sp_t_use");
+extern void TSCALL sp_t_holster(void *, int, SVar *, SVar *, void *) __asm__("sp_t_holster");
+static void *(*sp_type_str)(void) = (void *)0x9c8ec0;
+static void *(*sp_type_bool)(void) = (void *)0x9c8d00;
+static void *(*sp_type_int)(void) = (void *)0x9c8c50;
+#define SP_LEVEL ((const char *)0xfcabc8)
+#define SEAT_PREFIX "Zeppelin|Zeppelin_cruiser_ACTOR|tur"
+static const struct { const char *level, *seat[3], *gunner[3]; } p2_seats[] = {
+    {"ts2_zepride1_part01", {SEAT_PREFIX "04", SEAT_PREFIX "03", SEAT_PREFIX "06"}, {"rebel_hmg1", "rebel_tur1", "rebel25"}},
+    {"ts2_zepride2_part01", {SEAT_PREFIX "04", SEAT_PREFIX "03", SEAT_PREFIX "02"}, {"rebel_hmg1", "rebel_tur1", "rebel_hmg2"}},
+};
+static int seat_want;               /* player 1 took a turret seat: player 2 follows */
+static DWORD seat_due;
+static char seat_level[64], seat_p1[96];
+static int hol_want, hol_sel, hol_anim;   /* player 1's last SelectHolster (1: not yet repeated on player 2) */
+static char hol_level[64];
+static int p2_follow_off;           /* TS_SPLIT_FOLLOW=0 */
+
+static BYTE *p1_now(void)
+{
+    return PLAYER_B != p2 ? PLAYER_B : (as2.depth ? as2.pb : NULL);
+}
+
+static int sv_bool(int argc, SVar *argv, int i, int def)
+{
+    if (argc <= i || !argv)
+        return def;
+    if (argv[i].type == sp_type_bool())
+        return (argv[i].data & 0xff) != 0;
+    if (argv[i].type == sp_type_int())
+        return argv[i].data != 0;
+    return def;
+}
+
+static void TSCALL hook_use(void *obj, int argc, SVar *argv, SVar *res, void *self)
+{
+    sp_t_use(obj, argc, argv, res, self);
+    if (p2_follow_off || !obj || (BYTE *)obj == p2 || (BYTE *)obj != p1_now() || argc < 1 || !argv || argv[0].type != sp_type_str()
+        || !argv[0].data)
+        return;
+    const char *nm = ((EStr *)argv[0].data)->s;
+    if (strncmp(nm, SEAT_PREFIX, sizeof SEAT_PREFIX - 1) != 0)
+        return;
+    seat_want = 1;
+    seat_due = GetTickCount() + 700;
+    snprintf(seat_level, sizeof seat_level, "%s", SP_LEVEL);
+    snprintf(seat_p1, sizeof seat_p1, "%s", nm);
+}
+
+static void TSCALL hook_holster(void *obj, int argc, SVar *argv, SVar *res, void *self)
+{
+    sp_t_holster(obj, argc, argv, res, self);
+    if (p2_follow_off || !obj || (BYTE *)obj == p2 || (BYTE *)obj != p1_now())
+        return;
+    hol_want = 1;
+    hol_sel = sv_bool(argc, argv, 0, 1);
+    hol_anim = sv_bool(argc, argv, 1, 1);
+    snprintf(hol_level, sizeof hol_level, "%s", SP_LEVEL);
+}
+
+static int install_follow_hooks(void)
+{
+    static const struct { DWORD addr, seh; void *hook; } h[2] = {{0x438bd0, 0xc79160, (void *)hook_use},
+                                                                  {0x439dc0, 0xc67a98, (void *)hook_holster}};
+    int n = 0;
+    for (int i = 0; i < 2; i++) {
+        unsigned char want[7] = {0x6a, 0xff, 0x68}, rep[7];
+        memcpy(want + 3, &h[i].seh, 4);
+        memset(rep, 0x90, sizeof rep);
+        rep[0] = 0xe9;
+        *(DWORD *)(rep + 1) = (DWORD)h[i].hook - (h[i].addr + 5);
+        n += ts_patch_bytes(h[i].addr, want, rep, 7);
+    }
+    return n;
+}
+
+/* the clients of a server (players in the game's list other than this machine's) */
+static int clients_in_game(void)
+{
+    BYTE *gm = *(BYTE **)0xfcab34, *slots = gm ? *(BYTE **)(gm + 0x28) : NULL;
+    int n = 0;
+    if (!gm || *(int *)(gm + 0x3c) != 2)
+        return 0;
+    for (int i = 0; slots && i < *(int *)(gm + 0x2c) && i < 32; i++)
+        n += *(int *)(slots + i * 0xa4) != 0 && *(BYTE **)(slots + i * 0xa4 + 4) != NULL;
+    return n;
+}
+
+/* main thread, script tick, while player 2 exists on the machine that runs it */
+static void p2_follow_step(void)
+{
+    if (!p2 || p2_follow_off || as2.depth)
+        return;
+    char ssl[160], out[96];
+    if (hol_want && !strcmp(hol_level, SP_LEVEL)) {
+        hol_want = 0;
+        snprintf(ssl, sizeof ssl, "$player2.SelectHolster(%d, %d)", hol_sel, hol_anim);
+        ts_script_run(ssl, out, sizeof out);
+        ts_log("split: player 1's SelectHolster(%d, %d) repeated on player 2: %s", hol_sel, hol_anim, out);
+    } else if (hol_want && strcmp(hol_level, SP_LEVEL))
+        hol_want = 0;   /* (another level: not this level's story) */
+    if (seat_want && (int)(GetTickCount() - seat_due) >= 0) {
+        seat_want = 0;
+        int k = clients_in_game();
+        for (unsigned i = 0; i < sizeof p2_seats / sizeof p2_seats[0]; i++) {
+            if (!strstr(seat_level, p2_seats[i].level))
+                continue;
+            if (k > 2 || !p2_seats[i].seat[k]) {
+                ts_log("split: player 1 took %s; no turret seat left for player 2 (%d clients)", seat_p1, k);
+                return;
+            }
+            snprintf(ssl, sizeof ssl, "$%s.Die(\"REMOVE\")", p2_seats[i].gunner[k]);
+            ts_script_run(ssl, out, sizeof out);
+            snprintf(ssl, sizeof ssl, "$player2.StartUse(\"%s\")", p2_seats[i].seat[k]);
+            p2_enter();
+            ts_script_run(ssl, out, sizeof out);
+            p2_leave();
+            ts_log("split: player 1 took %s: player 2 takes %s (gunner %s removed, %d clients): %s", seat_p1, p2_seats[i].seat[k],
+                   p2_seats[i].gunner[k], k, out);
+            return;
+        }
+    }
+}
+
 /* Tests (TS_SPLIT_ITEMTEST=list,<s> or <name>,<s>): <s> seconds after player 2 came in, "list" logs the named
  * objects within 30 m of player 1 (script name table, entity node position); a name moves player 2 onto that
  * placed object (a pick-up of the level), to see who gets what. Each player's ammunition and life are logged
@@ -2740,7 +2928,31 @@ static BYTE *named_entity(const char *name)
 }
 
 static int item_next, item_step;
-static int near_idx[8], n_near, near_at;
+static int near_idx[32], n_near, near_at;
+static float item_away;   /* TS_SPLIT_ITEMAWAY=<m>: "nearitems" skips pick-ups within <m> of any other player (their take is then not theirs) */
+
+/* Is a pick-up spot within item_away metres (horizontally) of a player other than player 2 (player 1, the players of the
+ * network list)? */
+static int near_other_player(const float *q)
+{
+    if (item_away <= 0)
+        return 0;
+    BYTE *gm = *(BYTE **)0xfcab34, *slots = gm ? *(BYTE **)(gm + 0x28) : NULL;
+    BYTE *who[34];
+    int n = 0;
+    who[n++] = PLAYER_B != p2 ? PLAYER_B : NULL;
+    for (int i = 0; slots && i < *(int *)(gm + 0x2c) && i < 32; i++)
+        who[n++] = *(BYTE **)(slots + i * 0xa4 + 4);
+    for (int i = 0; i < n; i++) {
+        BYTE *pl = who[i], *nd = pl && pl != p2 && !IsBadReadPtr(pl, 0x234) ? *(BYTE **)(pl + 0x230) : NULL;
+        if (!nd || IsBadReadPtr(nd, 0x74))
+            continue;
+        float dx = ((float *)(nd + 0x68))[0] - q[0], dz = ((float *)(nd + 0x68))[2] - q[2];
+        if (dx * dx + dz * dz < item_away * item_away)
+            return 1;
+    }
+    return 0;
+}
 
 /* The next of the nearest recorded pick-up nodes (still existing: geometry unchanged) onto which player 2 goes. */
 static int near_move(void)
@@ -2752,6 +2964,11 @@ static int near_move(void)
             continue;
         float pos[3], dir[3] = {-0.89f, -0.45f, 0};
         memcpy(pos, n + 0x68, 12);
+        if (near_other_player(pos)) {
+            ts_log("split: item test: %s at %.2f %.2f %.2f skipped (another player within %.1f m)", items_seen[k].name, pos[0], pos[1], pos[2],
+                   item_away);
+            continue;
+        }
         pos[1] += 0.3f;
         put_player(p2, pos, dir);
         ts_log("split: item test: player 2 put on %s (node %p) at %.2f %.2f %.2f", items_seen[k].name, (void *)n, pos[0], pos[1],
@@ -2878,6 +3095,8 @@ static void item_test(BYTE *p1)
             return;
         }
         if (strcmp(what, "nearitems") == 0 && pp) {
+            char aw[16];
+            item_away = ts_env("TS_SPLIT_ITEMAWAY", aw, sizeof aw) ? (float)atof(aw) : 0.0f;
             /* (the world's scene nodes (world [0xfcacdc] +0x2ad0, 0xa8c nodes of 0x238 bytes, template at +0x1d0,
              * its name at +0x30): the pick-ups among them recorded too) */
             BYTE *w = *(BYTE **)0xfcacdc, *base = w ? *(BYTE **)(w + 0x2ad0) : NULL;
@@ -2914,7 +3133,7 @@ static void item_test(BYTE *p1)
                 ts_log("split: item test: pick-up %s at %.2f %.2f %.2f (%.1f m)", items_seen[k].name, q[0], q[1], q[2], sqrtf(d[k]));
             }
             n_near = 0;
-            while (n_near < 8 && n_near < alive) {
+            while (n_near < 32 && n_near < alive) {
                 int best = -1;
                 for (int k = 0; k < n_items_seen; k++)
                     if (d[k] < 1e29f && (best < 0 || d[k] < d[best]))
@@ -3526,6 +3745,8 @@ static void split_tick(float dt)
         }
     }
     item_test(PLAYER_B != p2 ? PLAYER_B : NULL);
+    if (!client_split)
+        p2_follow_step();
     {   /* (tests, TS_SPLIT_DROPAT=<s>: player 2 removed <s> seconds after it came in) */
         static int dropat = -1;
         char dv[16];
@@ -3736,6 +3957,9 @@ void split_install(void)
     copy_mode1 = ts_env("TS_SPLIT_COPYMODE", v, sizeof v) && v[0] == '1';
     copy_free = ts_env("TS_SPLIT_COPYFREE", v, sizeof v) && v[0] == '1';
     host_items_off = ts_env("TS_SPLIT_HOSTITEMS", v, sizeof v) && v[0] == '0';
+    p2_follow_off = ts_env("TS_SPLIT_FOLLOW", v, sizeof v) && v[0] == '0';
+    if (!p2_follow_off && (stage >= 3 || !forced) && install_follow_hooks() != 2)
+        ts_log("split: script native hooks not all set (player 2 does not follow player 1's turret seat or holster)");
     if (splitlog && *(DWORD *)(0xd74c28 + 0x13c) == 0x42fa90)
         patch_slot(0xd74c28, 0x13c / 4, (void *)hook_mp_update, (void **)&real_mp_update);
     install_name_hook();   /* (also without split screen: player 1 with a pad) */
