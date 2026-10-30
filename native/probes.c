@@ -23,7 +23,7 @@
  *    `!pr trace <self|player|net:<id>|<script name>> <frames>` logs the next frames (<= 600) of one body:
  *    "pt: <label> f<n> t<ms> x y z" (10 frames a line): for comparing a client's drawn place with the host's.
  * 2. Foot height against the floor (`!pr feet`, and each report with TS_PROBES_FEET=1): the engine's own floor ray
- *    (the one the player placement uses, filter 0x100100) under every sampled body, from two start heights:
+ *    (the one the player placement uses, filter 0x100100) under every sampled body, from three start heights:
  *      fl: <kind> <label> y <entity y> d18 <y - floor, ray from 1.8 m above> d05 <y - floor, ray from 0.5 m above> d00 <ray from the foot point>
  *    The entity position is the foot point. Which ray to read depends on the body (live check 2026-10-30, N100 pair): PLAYERS (self,
  *    player): d00 (0.000 standing on the ground; d05 is exactly -0.500 because that ray starts inside the player's own capsule and
