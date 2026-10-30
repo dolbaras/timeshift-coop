@@ -69,7 +69,7 @@ Not finished / known limits
   time values, coordinates and the logs of both machines, not by watching the screens: the results are
   in the numbers, but how it looks in play has had little human testing.
 - Only the PC version of the game with patch 1.2 is supported. A Steam copy (version 1.0) works after
-  it is brought to 1.2 with a community update package that you download yourself (see Requirements);
+  it is brought to 1.2 with the community-made 1.2 update package that you supply yourself (see Requirements);
   that path was tested on a simulated Steam folder and with the package's files, not on a real Steam
   installation.
 - Joining over the Internet (through OpenSpy and a forwarded port) is untested; LAN and a virtual
@@ -80,22 +80,23 @@ Not finished / known limits
 Requirements
 - Your own copy of TimeShift with patch 1.2 (the main menu shows "Ver 1.02"). The mod is made for the
   code of the 1.2 bin\TimeShift.exe (SHA-256
-  689c63da36cd5902edcad2abe1111d4697a92b12c4e17fe0659b856752641be4). The installer also accepts the
-  community's pre-patched build of it (the "CPU fix" exe) and the exe of the community's Steam
-  update: they carry the same code, and the mod does its own start-up fixes in memory, so those
-  exes are not needed. An exe of another version is refused, changing nothing, and the installer
-  says which exe it found (its SHA-256).
-- Steam edition: Steam never received the 1.2 update, its game is version 1.0. The installer
-  recognises a Steam folder (steamapps\common\TimeShift) whose exe is not 1.2 and asks for the community
-  package "TimeShift Update 1.2 (Steam)" (a zip of about 11.7 MB). It is on PCGamingWiki (community
-  files, "TimeShift Update 1.2 (Steam)"), on ModDB (TimeShift -> Downloads -> "Timeshift Steam Update
-  1.2") and was first published as a Steam guide of the same name. The mod neither contains nor
-  downloads it: download it yourself, then pick the zip (or the folder you extracted it to) in the
-  installer's window; it also looks in your Downloads folder. The installer checks the package, keeps
-  every file it replaces in <game>\coop-backup\steam10 and puts them back when you uninstall (the
-  game is version 1.0 again). The package is third-party and unofficial: it replaces bin\TimeShift.exe,
-  bin\steamwars.ini and the patch archives in preload\paks. Steam's "Verify integrity of game files"
-  undoes it; run the installer again then. The game starts through Steam or through the mod's shortcut.
+  689c63da36cd5902edcad2abe1111d4697a92b12c4e17fe0659b856752641be4). The installer also accepts
+  other builds of the same 1.2 code (for example community-made ones with a CPU fix): the mod does its
+  own start-up fixes in memory, so such an exe is not needed. An exe of another version is refused,
+  changing nothing, and the installer says which exe it found (its SHA-256).
+- Steam edition (read this before you install): the Steam copy is patch 1.0, and Steam never
+  received the 1.2 update the mod needs. The installer recognises such a copy and, before it changes
+  anything, shows a warning and asks you to tick a box (in quiet mode: the switch -AcceptSteamUpdate).
+  Installing then REPLACES bin\TimeShift.exe, bin\steamwars.ini and the data archives
+  preload\paks\patch.s3darc, patch_ati.s3darc, patch_nv.s3darc and patch_en_us.s3darc with the files
+  of the 1.2 update package for the Steam edition (community-made, a zip of about 11.7 MB) that YOU
+  supply: you pick the zip, or the folder you extracted it to, in the installer's window (it also looks in
+  your Downloads folder). The installer shows the package's TimeShift.exe SHA-256 and the list of files
+  before you agree. The mod's own archive does not contain the package or any game file, and the
+  mod does not download it. Your originals are backed up in <game>\coop-backup\steam10, and "Uninstall
+  Co-op.bat" puts them back exactly (the game is patch 1.0 again; the final message says so). The
+  package is third-party and unofficial. Steam's "Verify integrity of game files" also undoes it:
+  run the installer again then. The game starts through Steam or through the mod's shortcut.
 - Windows 10 or 11.
 - Every player needs the same version of the mod.
 - A second XInput gamepad for split screen.

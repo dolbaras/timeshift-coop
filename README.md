@@ -39,10 +39,13 @@ the game with the "TimeShift Co-op" shortcut (it updates the mod by itself). Det
 ## Requirements
 
 - TimeShift **patch 1.2** (the mod is made for the code of the 1.2 `bin\TimeShift.exe`; the community's pre-patched
-  build of it is accepted too). **Steam** copies are version 1.0 (Steam never got the update): the installer asks for the
-  community package "TimeShift Update 1.2 (Steam)" that you download yourself (PCGamingWiki, ModDB), checks it, keeps every
-  file it replaces and puts them back on uninstall. That path was tested on a simulated Steam folder and with the
-  package's files, not on a real Steam installation. An exe of another version is refused, changing nothing.
+  build of it is accepted too). **Steam** copies are patch 1.0 (Steam never got the update): the installer warns first and
+  needs your explicit consent (a tick; `-AcceptSteamUpdate` in quiet mode), then REPLACES `bin\TimeShift.exe`,
+  `bin\steamwars.ini` and the four patch archives with the files of the 1.2 update package for the Steam edition
+  (community-made) that **you supply**; it shows the package's exe SHA-256 and the file list first, backs up every
+  original in `coop-backup\steam10` and the uninstall restores them exactly. The mod's repository and releases contain
+  no game files and no such package, and the mod downloads nothing for this. Tested on a simulated Steam folder and with
+  the package's files, not on a real Steam installation. An exe of another version is refused, changing nothing.
 - Windows 10/11. No Python or other tools: the installer brings what it needs.
 - Languages: the installer and the shortcut's launcher follow Windows' language (English, Russian, German, French, Spanish,
   Italian); the game's menus have the game's nine languages.
@@ -102,10 +105,14 @@ License: MIT (see `LICENSE`). TimeShift is a trademark of its owners; this proje
 ## Требования
 
 - TimeShift **с патчем 1.2** (мод сделан для кода `bin\TimeShift.exe` версии 1.2; готовая сборка сообщества на его
-  основе тоже принимается). Копии **Steam** - версии 1.0 (обновления в Steam так и не было): установщик просит пакет
-  сообщества «TimeShift Update 1.2 (Steam)», который вы скачиваете сами (PCGamingWiki, ModDB), проверяет его,
-  сохраняет каждый заменяемый файл и возвращает их при удалении. Этот путь проверен на имитации папки Steam и на
-  файлах самого пакета, но не на настоящей установке Steam. Exe другой версии отклоняется, ничего не меняя.
+  основе тоже принимается). Копии **Steam** - патч 1.0 (обновления в Steam так и не было): установщик сначала
+  предупреждает и требует вашего явного согласия (галочка; в тихом режиме `-AcceptSteamUpdate`), затем ЗАМЕНЯЕТ
+  `bin\TimeShift.exe`, `bin\steamwars.ini` и четыре архива патча файлами пакета обновления 1.2 для издания Steam
+  (сделан сообществом), который **вы указываете сами**; заранее показывает SHA-256 exe из пакета и список файлов,
+  сохраняет каждый оригинал в `coop-backup\steam10`, а удаление возвращает их в точности. В репозитории и
+  выпусках мода нет ни файлов игры, ни такого пакета, и мод для этого ничего не скачивает. Проверено на имитации
+  папки Steam и на файлах самого пакета, но не на настоящей установке Steam. Exe другой версии отклоняется,
+  ничего не меняя.
 - Windows 10/11. Python и другие программы не нужны: установщик несёт всё нужное с собой.
 - Языки: установщик и запуск по ярлыку следуют языку Windows (английский, русский, немецкий, французский,
   испанский, итальянский); меню игры - на девяти языках игры.

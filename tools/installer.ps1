@@ -21,32 +21,32 @@
 # install, -NoShortcut keeps the shortcuts as they are (only those already made are refreshed).
 # -ShortcutDir puts new shortcuts in that folder instead (tests; several folders split by ';').
 # -GameProcess: the process name that counts as "the game runs" (tests only; default TimeShift).
-# -SteamUpdate: the 1.2 update package the player downloaded for a Steam copy (zip or folder); used only when the
-# game's exe is not the patch 1.2 code (see notes\plan-0.1.1-steam.md). The window asks for it by itself.
+# -SteamUpdate: the 1.2 update package the player supplies for a Steam copy (zip or folder); used only when the
+# game's exe is not the patch 1.2 code. The files it replaces (the exe, the ini and the patch archives) are named first; the window asks
+# for a tick, the quiet mode needs -AcceptSteamUpdate, else it refuses with the same words (see notes\plan-0.1.1-steam.md).
 # Usage: coop-installer.ps1 [-Game <folder>] [-Uninstall] [-Quiet] [-Lang en|ru|de|fr|es|it]
-#                           [-AutoClose] [-NoShortcut] [-ShortcutDir <folder>[;<folder>]] [-SteamUpdate <zip|folder>]
+#                           [-AutoClose] [-NoShortcut] [-ShortcutDir <folder>[;<folder>]] [-SteamUpdate <zip|folder> [-AcceptSteamUpdate]]
 param([string] $Game = "", [switch] $Uninstall, [switch] $Quiet, [string] $Lang = "",
       [switch] $AutoClose, [switch] $NoShortcut, [string] $ShortcutDir = "", [string] $GameProcess = "TimeShift",
-      [string] $SteamUpdate = "")
+      [string] $SteamUpdate = "", [switch] $AcceptSteamUpdate)
 $ErrorActionPreference = "Stop"
 # The first act: "Install Co-op.bat" waits for this file to know that PowerShell really started the installer.
 if (-not $Quiet) { try { [IO.File]::WriteAllText((Join-Path ([IO.Path]::GetTempPath()) "timeshift-coop-installer-started.flag"), "1") } catch { } }
 $here = $PSScriptRoot
 $payload = Join-Path $here "files"
 $script:TITLE = "TimeShift Co-op"
-# The exe the mod is made for: TimeShift patch 1.2 (retail, as patched by the 1.2 update).
+# The exe the mod is made for: TimeShift patch 1.2 (the build the mod was developed on).
 $script:EXE_SHA = "689C63DA36CD5902EDCAD2ABE1111D4697A92B12C4E17FE0659B856752641BE4"
 # The same exe with the large-address-aware flag set (PE header Characteristics 0x20: a 32-bit game gets up to 4 GB of
 # address space on 64-bit Windows instead of 2 GB; the mod's own memory and a long session add up). The installer makes
 # it from the original (kept in coop-backup, put back on uninstall) and records this hash in coop\install.txt (exe=).
 $script:EXE_SHA_LAA = "DE1A0AEB4A52350ABCF8D0717E9BD715BCF57713CD0A65B16B6269A9A24FB01C"
-# The community's "pre-patched" 1.2 exe (Steam guide "[FIX] CPU and Startup loading crash", PCGamingWiki "Fix for Startup
-# Crash with > 8 Thread CPU"): the 1.2 code with the CPU fix in code caves. It differs from the exe above in 162 bytes only
+# A community-made "pre-patched" 1.2 exe (the "CPU fix" build): the 1.2 code with the CPU fix in code caves. It differs from the exe above in 162 bytes only
 # (header fields, 13 call sites, the driver check's jump, the zero padding at the end of .text), so every byte check of the
 # mod's hooks passes on it. Accepted with a notice.
 $script:EXE_SHA_COMMUNITY = "49BCCA23D3D7872FBB578183B77472B64ECD8E3F8D68BFCCCB1AF6F04D4D8ED6"
-# The exe inside the community's "TimeShift [STEAM] Update 1.2" package (zip of 11 716 283 bytes, ModDB MD5 a89d09be...): the
-# retail code again, 8 bytes of header (the last section's name) apart.
+# The exe inside the community-made 1.2 update package for the Steam edition: the same 1.2 code, 8 bytes of header (the last
+# section's name) apart.
 $script:EXE_SHA_STEAMPKG = "B337D72E2BAA5B049C128CDD3377A49B4BCA41917D3138D99CC40757B66FA9D0"
 # Any other exe is accepted when its code is the 1.2 code: SHA-256 of the file with the bytes zeroed that those community
 # builds and our own large-address-aware step change (checksum, characteristics, .text size, the last section's name, the
@@ -88,8 +88,8 @@ $script:TEXTS = @{
         "large_address_aware" = "Large address aware flag set in bin\TimeShift.exe (the original is kept in coop-backup)"
         "already_large_address_aware" = "bin\TimeShift.exe is already large address aware"
         "exe_wrong" = "This mod is made for TimeShift with patch 1.2 (bin\TimeShift.exe with SHA-256 689c63da...52641be4, or the community's pre-patched build of it). The exe in this folder is another version (SHA-256 {0}).`nInstall the official patch 1.2 for your copy of the game, then run this installer again. If the main menu of your game already shows 'Ver 1.02', please report this SHA-256 on the mod's GitHub page (Issues). Nothing was changed."
-        "exe_steam" = "This is a Steam copy that is still version 1.0 (exe SHA-256 {0}); the mod needs version 1.2, which Steam never received.`nDownload the community package 'TimeShift Update 1.2 (Steam)' (PCGamingWiki, ModDB or speedrun.com: README-COOP.txt names the pages) and give it to this installer (the zip or its extracted folder). Nothing was changed."
-        "steam_need" = "This looks like a Steam copy: Steam never got the update to 1.2 that the mod needs. Download the community package 'TimeShift Update 1.2 (Steam)' once (PCGamingWiki, ModDB or speedrun.com: README-COOP.txt lists the pages) and choose it below. Only the files in the package are replaced; every original is kept in coop-backup and put back by the uninstall."
+        "exe_steam" = "This is a Steam copy at patch 1.0 (exe SHA-256 {0}); the mod needs patch 1.2, which Steam never received.`nSupply the 1.2 update package for the Steam edition (community-made) with -SteamUpdate <zip or folder> and agree to the replacement with -AcceptSteamUpdate (the window asks by itself). Nothing was changed."
+        "steam_need" = "Your Steam copy is patch 1.0; the mod needs patch 1.2. Installing will REPLACE {0} with the files of the 1.2 update package for the Steam edition (community-made) that YOU supply below (a zip or a folder). Your originals are backed up in coop-backup\steam10 and Uninstall puts them back exactly."
         "found_steam_old" = "TimeShift found (Steam edition), but it is version 1.0, not patch 1.2."
         "steam_pick" = "Update 1.2 package for Steam (zip or folder)"
         "steam_pick_dir" = "Select the folder the package was extracted to"
@@ -175,6 +175,10 @@ $script:TEXTS = @{
         "removed" = "Removed: "
         "shortcut" = "Shortcut: "
         "shortcut_desc" = "TimeShift with co-op: installs a newer version of the mod first, if there is one"
+        "steam_accept" = "I understand: TimeShift.exe and the data archives listed above are replaced by the package's files (originals are kept, Uninstall restores them)"
+        "steam_need_accept" = "This Steam copy (patch 1.0) would get {0} REPLACED by the files of the package {1} (TimeShift.exe SHA-256 {2}). Originals are backed up in coop-backup\steam10 and Uninstall restores them exactly. Run again with -AcceptSteamUpdate to agree. Nothing was changed."
+        "steam_pkg_exe" = "The package's TimeShift.exe: SHA-256 {0}"
+        "removed_steam" = "Your Steam copy is back as it was (patch 1.0): TimeShift.exe, steamwars.ini and the data archives were put back exactly from coop-backup\steam10."
     }
     ru = @{
         "not_installed" = "Кооп-мод не установлен в`n{0}"
@@ -191,8 +195,8 @@ $script:TEXTS = @{
         "large_address_aware" = "В bin\TimeShift.exe включён флаг large address aware (оригинал сохранён в coop-backup)"
         "already_large_address_aware" = "bin\TimeShift.exe уже large address aware"
         "exe_wrong" = "Мод сделан для TimeShift с патчем 1.2 (bin\TimeShift.exe с SHA-256 689c63da...52641be4 или готовая сборка сообщества на его основе). В этой папке другая версия exe (SHA-256 {0}).`nУстановите официальный патч 1.2 для своей копии игры и запустите установщик снова. Если в главном меню игры уже написано «Ver 1.02», сообщите этот SHA-256 на странице мода на GitHub (Issues). Ничего не изменено."
-        "exe_steam" = "Это копия из Steam, она всё ещё версии 1.0 (SHA-256 exe {0}); моду нужна версия 1.2, которую Steam так и не получил.`nСкачайте пакет сообщества «TimeShift Update 1.2 (Steam)» (PCGamingWiki, ModDB или speedrun.com: страницы названы в README-COOP-ru.txt) и укажите его установщику (zip или распакованную папку). Ничего не изменено."
-        "steam_need" = "Похоже на копию из Steam: обновление до 1.2, нужное моду, в Steam так и не вышло. Один раз скачайте пакет сообщества «TimeShift Update 1.2 (Steam)» (PCGamingWiki, ModDB или speedrun.com: страницы в README-COOP-ru.txt) и выберите его ниже. Заменяются только файлы из пакета; каждый оригинал сохраняется в coop-backup и возвращается при удалении."
+        "exe_steam" = "Это копия Steam с патчем 1.0 (SHA-256 exe {0}); моду нужен патч 1.2, которого в Steam не было.`nУкажите пакет обновления 1.2 для издания Steam (сделан сообществом) через -SteamUpdate <zip или папка> и согласитесь с заменой через -AcceptSteamUpdate (окно спросит само). Ничего не изменено."
+        "steam_need" = "Ваша копия Steam - патч 1.0, а моду нужен патч 1.2. Установка ЗАМЕНИТ {0} файлами пакета обновления 1.2 для издания Steam (сделан сообществом), который ВЫ укажете ниже (zip или папка). Оригиналы сохраняются в coop-backup\steam10, а удаление возвращает их в точности."
         "found_steam_old" = "TimeShift найдена (издание Steam), но это версия 1.0, а не патч 1.2."
         "steam_pick" = "Пакет обновления 1.2 для Steam (zip или папка)"
         "steam_pick_dir" = "Выберите папку, куда распакован пакет"
@@ -278,6 +282,10 @@ $script:TEXTS = @{
         "removed" = "Удалён: "
         "shortcut" = "Ярлык: "
         "shortcut_desc" = "TimeShift с кооперативом: сначала ставит новую версию мода, если она вышла"
+        "steam_accept" = "Я понимаю: TimeShift.exe и перечисленные выше архивы данных заменяются файлами пакета (оригиналы сохраняются, удаление вернёт их)"
+        "steam_need_accept" = "В этой копии Steam (патч 1.0) {0} будут ЗАМЕНЕНЫ файлами пакета {1} (SHA-256 TimeShift.exe: {2}). Оригиналы сохраняются в coop-backup\steam10, удаление возвращает их в точности. Чтобы согласиться, запустите снова с -AcceptSteamUpdate. Ничего не изменено."
+        "steam_pkg_exe" = "TimeShift.exe пакета: SHA-256 {0}"
+        "removed_steam" = "Ваша копия Steam снова такая, как была (патч 1.0): TimeShift.exe, steamwars.ini и архивы данных возвращены точно из coop-backup\steam10."
     }
     de = @{
         "not_installed" = "Der Koop-Mod ist nicht installiert in`n{0}"
@@ -294,8 +302,8 @@ $script:TEXTS = @{
         "large_address_aware" = "Das Flag Large Address Aware wurde in bin\TimeShift.exe gesetzt (das Original liegt in coop-backup)"
         "already_large_address_aware" = "bin\TimeShift.exe ist bereits Large Address Aware"
         "exe_wrong" = "Dieser Mod ist für TimeShift mit Patch 1.2 gemacht (bin\TimeShift.exe mit SHA-256 689c63da...52641be4 oder die vorgepatchte Version der Community). Die exe in diesem Ordner ist eine andere Version (SHA-256 {0}).`nInstalliere den offiziellen Patch 1.2 für dein Spiel und starte dieses Installationsprogramm erneut. Zeigt das Hauptmenü deines Spiels schon 'Ver 1.02', melde diesen SHA-256 bitte auf der GitHub-Seite des Mods (Issues). Nichts wurde geändert."
-        "exe_steam" = "Das ist eine Steam-Kopie in Version 1.0 (exe SHA-256 {0}); der Mod braucht Version 1.2, die Steam nie bekommen hat.`nLade das Community-Paket 'TimeShift Update 1.2 (Steam)' herunter (PCGamingWiki, ModDB oder speedrun.com: README-COOP.txt nennt die Seiten) und gib es diesem Installationsprogramm (die Zip-Datei oder den entpackten Ordner). Nichts wurde geändert."
-        "steam_need" = "Das sieht nach einer Steam-Kopie aus: Das Update auf 1.2, das der Mod braucht, hat Steam nie bekommen. Lade einmal das Community-Paket 'TimeShift Update 1.2 (Steam)' herunter (PCGamingWiki, ModDB oder speedrun.com: README-COOP.txt nennt die Seiten) und wähle es unten aus. Es werden nur die Dateien des Pakets ersetzt; jedes Original bleibt in coop-backup und kommt bei der Deinstallation zurück."
+        "exe_steam" = "Das ist eine Steam-Kopie mit Patch 1.0 (exe SHA-256 {0}); der Mod braucht Patch 1.2, den Steam nie bekommen hat.`nGib das 1.2-Update-Paket für die Steam-Ausgabe (von der Community gemacht) mit -SteamUpdate <Zip oder Ordner> an und stimme dem Ersetzen mit -AcceptSteamUpdate zu (das Fenster fragt selbst). Nichts wurde geändert."
+        "steam_need" = "Deine Steam-Kopie ist Patch 1.0; der Mod braucht Patch 1.2. Die Installation ERSETZT {0} durch die Dateien des 1.2-Update-Pakets für die Steam-Ausgabe (von der Community gemacht), das DU unten angibst (Zip oder Ordner). Die Originale werden in coop-backup\steam10 gesichert, und die Deinstallation stellt sie genau wieder her."
         "found_steam_old" = "TimeShift gefunden (Steam-Ausgabe), aber in Version 1.0, nicht Patch 1.2."
         "steam_pick" = "Update-1.2-Paket für Steam (Zip oder Ordner)"
         "steam_pick_dir" = "Wähle den Ordner, in den das Paket entpackt wurde"
@@ -381,6 +389,10 @@ $script:TEXTS = @{
         "removed" = "Entfernt: "
         "shortcut" = "Verknüpfung: "
         "shortcut_desc" = "TimeShift mit Koop: installiert vorher eine neuere Version des Mods, falls es eine gibt"
+        "steam_accept" = "Ich verstehe: TimeShift.exe und die oben genannten Datenarchive werden durch die Dateien des Pakets ersetzt (Originale bleiben erhalten, die Deinstallation stellt sie wieder her)"
+        "steam_need_accept" = "In dieser Steam-Kopie (Patch 1.0) würde {0} durch die Dateien des Pakets {1} ERSETZT (SHA-256 der TimeShift.exe: {2}). Die Originale werden in coop-backup\steam10 gesichert, die Deinstallation stellt sie genau wieder her. Zum Zustimmen mit -AcceptSteamUpdate erneut starten. Nichts wurde geändert."
+        "steam_pkg_exe" = "TimeShift.exe des Pakets: SHA-256 {0}"
+        "removed_steam" = "Deine Steam-Kopie ist wieder wie vorher (Patch 1.0): TimeShift.exe, steamwars.ini und die Datenarchive wurden genau aus coop-backup\steam10 zurückgelegt."
     }
     fr = @{
         "not_installed" = "Le mod coopératif n'est pas installé dans`n{0}"
@@ -397,8 +409,8 @@ $script:TEXTS = @{
         "large_address_aware" = "Indicateur Large Address Aware activé dans bin\TimeShift.exe (l'original est conservé dans coop-backup)"
         "already_large_address_aware" = "bin\TimeShift.exe est déjà Large Address Aware"
         "exe_wrong" = "Ce mod est fait pour TimeShift avec le patch 1.2 (bin\TimeShift.exe de SHA-256 689c63da...52641be4, ou la version pré-patchée de la communauté). L'exe de ce dossier est une autre version (SHA-256 {0}).`nInstallez le patch officiel 1.2 pour votre jeu, puis relancez cet installateur. Si le menu principal de votre jeu affiche déjà 'Ver 1.02', signalez ce SHA-256 sur la page GitHub du mod (Issues). Rien n'a été modifié."
-        "exe_steam" = "C'est une copie Steam encore en version 1.0 (exe SHA-256 {0}) ; le mod exige la version 1.2, que Steam n'a jamais reçue.`nTéléchargez le paquet de la communauté 'TimeShift Update 1.2 (Steam)' (PCGamingWiki, ModDB ou speedrun.com : README-COOP.txt nomme les pages) et donnez-le à cet installateur (le zip ou son dossier extrait). Rien n'a été modifié."
-        "steam_need" = "Cela ressemble à une copie Steam : Steam n'a jamais reçu la mise à jour 1.2 dont le mod a besoin. Téléchargez une fois le paquet de la communauté 'TimeShift Update 1.2 (Steam)' (PCGamingWiki, ModDB ou speedrun.com : README-COOP.txt nomme les pages) et choisissez-le ci-dessous. Seuls les fichiers du paquet sont remplacés ; chaque original est conservé dans coop-backup et remis en place à la désinstallation."
+        "exe_steam" = "C'est une copie Steam au patch 1.0 (exe SHA-256 {0}) ; le mod exige le patch 1.2, que Steam n'a jamais reçu.`nIndiquez le paquet de mise à jour 1.2 pour l'édition Steam (fait par la communauté) avec -SteamUpdate <zip ou dossier> et acceptez le remplacement avec -AcceptSteamUpdate (la fenêtre le demande elle-même). Rien n'a été modifié."
+        "steam_need" = "Votre copie Steam est au patch 1.0 ; le mod exige le patch 1.2. L'installation REMPLACERA {0} par les fichiers du paquet de mise à jour 1.2 pour l'édition Steam (fait par la communauté) que VOUS indiquez ci-dessous (zip ou dossier). Vos originaux sont sauvegardés dans coop-backup\steam10 et la désinstallation les remet exactement en place."
         "found_steam_old" = "TimeShift trouvé (édition Steam), mais en version 1.0, pas en patch 1.2."
         "steam_pick" = "Paquet de mise à jour 1.2 pour Steam (zip ou dossier)"
         "steam_pick_dir" = "Choisissez le dossier où le paquet a été extrait"
@@ -484,6 +496,10 @@ $script:TEXTS = @{
         "removed" = "Supprimé : "
         "shortcut" = "Raccourci : "
         "shortcut_desc" = "TimeShift avec coop : installe d'abord une version plus récente du mod, s'il y en a une"
+        "steam_accept" = "Je comprends : TimeShift.exe et les archives de données listées ci-dessus sont remplacés par les fichiers du paquet (originaux conservés, la désinstallation les remet)"
+        "steam_need_accept" = "Dans cette copie Steam (patch 1.0), {0} seraient REMPLACÉS par les fichiers du paquet {1} (SHA-256 de TimeShift.exe : {2}). Les originaux sont sauvegardés dans coop-backup\steam10 et la désinstallation les remet exactement en place. Pour accepter, relancez avec -AcceptSteamUpdate. Rien n'a été modifié."
+        "steam_pkg_exe" = "TimeShift.exe du paquet : SHA-256 {0}"
+        "removed_steam" = "Votre copie Steam est revenue comme avant (patch 1.0) : TimeShift.exe, steamwars.ini et les archives de données ont été remis exactement depuis coop-backup\steam10."
     }
     es = @{
         "not_installed" = "El mod cooperativo no está instalado en`n{0}"
@@ -500,8 +516,8 @@ $script:TEXTS = @{
         "large_address_aware" = "Se activó el indicador Large Address Aware en bin\TimeShift.exe (el original se conserva en coop-backup)"
         "already_large_address_aware" = "bin\TimeShift.exe ya es Large Address Aware"
         "exe_wrong" = "Este mod está hecho para TimeShift con el parche 1.2 (bin\TimeShift.exe con SHA-256 689c63da...52641be4, o la versión ya parcheada de la comunidad). El exe de esta carpeta es otra versión (SHA-256 {0}).`nInstala el parche oficial 1.2 para tu juego y vuelve a ejecutar este instalador. Si el menú principal de tu juego ya muestra 'Ver 1.02', informa de este SHA-256 en la página de GitHub del mod (Issues). No se cambió nada."
-        "exe_steam" = "Es una copia de Steam que sigue en la versión 1.0 (exe SHA-256 {0}); el mod necesita la versión 1.2, que Steam nunca recibió.`nDescarga el paquete de la comunidad 'TimeShift Update 1.2 (Steam)' (PCGamingWiki, ModDB o speedrun.com: README-COOP.txt nombra las páginas) y dáselo a este instalador (el zip o su carpeta extraída). No se cambió nada."
-        "steam_need" = "Parece una copia de Steam: Steam nunca recibió la actualización a 1.2 que el mod necesita. Descarga una vez el paquete de la comunidad 'TimeShift Update 1.2 (Steam)' (PCGamingWiki, ModDB o speedrun.com: README-COOP.txt nombra las páginas) y elígelo abajo. Solo se reemplazan los archivos del paquete; cada original se conserva en coop-backup y se devuelve al desinstalar."
+        "exe_steam" = "Es una copia de Steam con el parche 1.0 (exe SHA-256 {0}); el mod necesita el parche 1.2, que Steam nunca recibió.`nIndica el paquete de actualización 1.2 para la edición de Steam (hecho por la comunidad) con -SteamUpdate <zip o carpeta> y acepta el reemplazo con -AcceptSteamUpdate (la ventana lo pregunta sola). No se cambió nada."
+        "steam_need" = "Tu copia de Steam es el parche 1.0; el mod necesita el parche 1.2. La instalación REEMPLAZARÁ {0} por los archivos del paquete de actualización 1.2 para la edición de Steam (hecho por la comunidad) que TÚ indiques abajo (zip o carpeta). Los originales se guardan en coop-backup\steam10 y la desinstalación los devuelve exactamente."
         "found_steam_old" = "TimeShift encontrado (edición Steam), pero es la versión 1.0, no el parche 1.2."
         "steam_pick" = "Paquete de actualización 1.2 para Steam (zip o carpeta)"
         "steam_pick_dir" = "Elige la carpeta donde se extrajo el paquete"
@@ -587,6 +603,10 @@ $script:TEXTS = @{
         "removed" = "Eliminado: "
         "shortcut" = "Acceso directo: "
         "shortcut_desc" = "TimeShift con coop: instala antes una versión más nueva del mod, si la hay"
+        "steam_accept" = "Entiendo: TimeShift.exe y los archivos de datos indicados arriba se reemplazan por los del paquete (los originales se conservan, la desinstalación los devuelve)"
+        "steam_need_accept" = "En esta copia de Steam (parche 1.0), {0} serían REEMPLAZADOS por los archivos del paquete {1} (SHA-256 de TimeShift.exe: {2}). Los originales se guardan en coop-backup\steam10 y la desinstalación los devuelve exactamente. Para aceptar, ejecuta de nuevo con -AcceptSteamUpdate. No se cambió nada."
+        "steam_pkg_exe" = "TimeShift.exe del paquete: SHA-256 {0}"
+        "removed_steam" = "Tu copia de Steam vuelve a estar como antes (parche 1.0): TimeShift.exe, steamwars.ini y los archivos de datos se devolvieron exactamente desde coop-backup\steam10."
     }
     it = @{
         "not_installed" = "La mod cooperativa non è installata in`n{0}"
@@ -603,8 +623,8 @@ $script:TEXTS = @{
         "large_address_aware" = "Flag Large Address Aware attivato in bin\TimeShift.exe (l'originale è conservato in coop-backup)"
         "already_large_address_aware" = "bin\TimeShift.exe è già Large Address Aware"
         "exe_wrong" = "Questa mod è fatta per TimeShift con la patch 1.2 (bin\TimeShift.exe con SHA-256 689c63da...52641be4, o la versione già patchata della comunità). L'exe in questa cartella è un'altra versione (SHA-256 {0}).`nInstalla la patch ufficiale 1.2 per il tuo gioco e riavvia questo programma di installazione. Se il menu principale del gioco mostra già 'Ver 1.02', segnala questo SHA-256 sulla pagina GitHub della mod (Issues). Non è stato modificato nulla."
-        "exe_steam" = "Questa è una copia Steam ancora alla versione 1.0 (exe SHA-256 {0}); la mod richiede la versione 1.2, che Steam non ha mai ricevuto.`nScarica il pacchetto della comunità 'TimeShift Update 1.2 (Steam)' (PCGamingWiki, ModDB o speedrun.com: README-COOP.txt indica le pagine) e consegnalo a questo programma (lo zip o la cartella estratta). Non è stato modificato nulla."
-        "steam_need" = "Sembra una copia Steam: Steam non ha mai ricevuto l'aggiornamento a 1.2 di cui la mod ha bisogno. Scarica una volta il pacchetto della comunità 'TimeShift Update 1.2 (Steam)' (PCGamingWiki, ModDB o speedrun.com: README-COOP.txt indica le pagine) e sceglilo qui sotto. Vengono sostituiti solo i file del pacchetto; ogni originale resta in coop-backup e viene rimesso a posto alla disinstallazione."
+        "exe_steam" = "Questa è una copia Steam alla patch 1.0 (exe SHA-256 {0}); la mod richiede la patch 1.2, che Steam non ha mai ricevuto.`nIndica il pacchetto di aggiornamento 1.2 per l'edizione Steam (fatto dalla comunità) con -SteamUpdate <zip o cartella> e accetta la sostituzione con -AcceptSteamUpdate (la finestra lo chiede da sola). Non è stato modificato nulla."
+        "steam_need" = "La tua copia Steam è alla patch 1.0; la mod richiede la patch 1.2. L'installazione SOSTITUIRÀ {0} con i file del pacchetto di aggiornamento 1.2 per l'edizione Steam (fatto dalla comunità) che TU indichi qui sotto (zip o cartella). Gli originali vengono salvati in coop-backup\steam10 e la disinstallazione li rimette esattamente a posto."
         "found_steam_old" = "TimeShift trovato (edizione Steam), ma è la versione 1.0, non la patch 1.2."
         "steam_pick" = "Pacchetto di aggiornamento 1.2 per Steam (zip o cartella)"
         "steam_pick_dir" = "Scegli la cartella in cui è stato estratto il pacchetto"
@@ -690,6 +710,10 @@ $script:TEXTS = @{
         "removed" = "Rimosso: "
         "shortcut" = "Collegamento: "
         "shortcut_desc" = "TimeShift con coop: prima installa una versione più recente della mod, se c'è"
+        "steam_accept" = "Capisco: TimeShift.exe e gli archivi di dati elencati sopra vengono sostituiti dai file del pacchetto (gli originali restano, la disinstallazione li ripristina)"
+        "steam_need_accept" = "In questa copia Steam (patch 1.0), {0} verrebbero SOSTITUITI dai file del pacchetto {1} (SHA-256 di TimeShift.exe: {2}). Gli originali vengono salvati in coop-backup\steam10 e la disinstallazione li rimette esattamente a posto. Per accettare, riavvia con -AcceptSteamUpdate. Non è stato modificato nulla."
+        "steam_pkg_exe" = "TimeShift.exe del pacchetto: SHA-256 {0}"
+        "removed_steam" = "La tua copia Steam è tornata com'era (patch 1.0): TimeShift.exe, steamwars.ini e gli archivi di dati sono stati rimessi esattamente da coop-backup\steam10."
     }
 }
 # Windows' own language when there is a translation (Russian also for Ukrainian, Belarusian and
@@ -822,7 +846,7 @@ function Sha256-Bytes([byte[]] $b) {
     [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)) -replace "-", ""
 }
 
-# What an exe is: ok (the patch 1.2 code), kind retail / community / variant, whether the large-address-aware flag is set,
+# What an exe is: ok (the patch 1.2 code), kind base / community / variant, whether the large-address-aware flag is set,
 # and its SHA-256. Only the file's bytes are looked at; an exe that is not 1.2 code (the Steam edition's 1.0 build, a
 # protected exe, another region) is not ok.
 function Exe-Info-File($path) {
@@ -838,7 +862,7 @@ function Exe-Info-File($path) {
     # the same file with the flag cleared: the known exes (they are recognised by their own hashes, flag set or not)
     $plain = $r.sha
     if ($r.laa) { $b[$pe + 22] = [byte]($b[$pe + 22] -band 0xDF); $plain = Sha256-Bytes $b; $b[$pe + 22] = [byte]($b[$pe + 22] -bor 0x20) }
-    if ($plain -eq $script:EXE_SHA) { $r.ok = $true; $r.kind = "retail"; return $r }
+    if ($plain -eq $script:EXE_SHA) { $r.ok = $true; $r.kind = "base"; return $r }
     if ($plain -eq $script:EXE_SHA_COMMUNITY) { $r.ok = $true; $r.kind = "community"; return $r }
     if ($plain -eq $script:EXE_SHA_STEAMPKG) { $r.ok = $true; $r.kind = "update"; return $r }
     # other builds of the same code: the changeable bytes zeroed
@@ -1036,7 +1060,7 @@ function Write-Steam($g, $s) {
 # Opens a package (zip file or folder): its game files by path relative to the game folder, or an error.
 # The game folder is found by bin\TimeShift.exe: whatever folders lie above it in the package are dropped.
 function Open-Package($path) {
-    $r = @{ ok = $false; why = ""; gfiles = @(); skipped = 0; zip = $null; dir = $null; exe = $null; known = $false }
+    $r = @{ ok = $false; why = ""; gfiles = @(); skipped = 0; zip = $null; dir = $null; exe = $null; known = $false; exesha = "" }
     $path = "$path".Trim().Trim('"')
     if (-not $path -or -not (Test-Path -LiteralPath $path)) { $r.why = L "pkg_nothing"; return $r }
     $all = New-Object System.Collections.Generic.List[object]
@@ -1092,6 +1116,7 @@ function Open-Package($path) {
         $info = Exe-Info-File $tmp
     } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
     if (-not $info.ok) { Close-Package $r; $r.why = (L "pkg_exe_other" $($info.sha.ToLower())); return $r }
+    $r.exesha = $info.sha.ToLower()
     if (-not ($r.gfiles | Where-Object { $_.rel -ieq "preload\paks\patch.s3darc" })) { Close-Package $r; $r.why = (L "pkg_nopaks" "patch.s3darc"); return $r }
     # the known package: every one of its files by SHA-256 (path, then content)
     $hit = 0
@@ -1108,6 +1133,9 @@ function Open-Package($path) {
     $r.ok = $true
     $r
 }
+# The files a package brings, for the consent text ("a, b, c").
+$script:STEAM_DEFAULT_NAMES = "bin\TimeShift.exe, bin\steamwars.ini, preload\paks\patch.s3darc, patch_ati.s3darc, patch_nv.s3darc, patch_en_us.s3darc"
+function Package-Names($r) { (@($r.gfiles | ForEach-Object { $_.rel }) -join ", ") }
 function Close-Package($r) { if ($r.zip) { try { $r.zip.Dispose() } catch { }; $r.zip = $null } }
 
 # Finds a package by itself: a zip in the Downloads folder or next to the installer that holds bin\TimeShift.exe and the
@@ -1239,7 +1267,7 @@ function Do-Uninstall($g) {
     Remove-Item -LiteralPath (Join-Path $g "coop-backup") -Recurse -Force -ErrorAction SilentlyContinue
     Ui-Step "clean" "done"
     Ui-Progress 100 ""
-    @{ removed = $m.version }
+    @{ removed = $m.version; steam = $(if ($steamRec.replaced.Count -or $steamRec.added.Count) { $n } else { 0 }) }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1492,6 +1520,7 @@ function Run-Elevated($g, [switch] $Remove) {
     $a += @("-Lang", $script:uiLang)
     $pk = if ($script:pkgPath) { $script:pkgPath } else { $SteamUpdate }
     if ($pk) { $a += @("-SteamUpdate", (Quote-Arg $pk)) }
+    if ($AcceptSteamUpdate -or $script:steamAccepted) { $a += "-AcceptSteamUpdate" }
     try {
         $p = Start-Process powershell -Verb RunAs -ArgumentList $a -Wait -PassThru
         return $p.ExitCode
@@ -1547,6 +1576,15 @@ function Install-From($g, $payload) {
         Ui-Progress 2 $pkgPath
         $pkg = Open-Package $pkgPath
         if (-not $pkg.ok) { throw (L "pkg_bad" $pkg.why) }
+        # the player's consent first: the window's tick, or -AcceptSteamUpdate; the same words either way
+        $names = Package-Names $pkg
+        if (-not ($AcceptSteamUpdate -or $script:steamAccepted)) {
+            $why = L "steam_need_accept" $names $pkgPath $pkg.exesha
+            Close-Package $pkg
+            throw $why
+        }
+        Ui-Log (L "steam_need" $names)
+        Ui-Log (L "steam_pkg_exe" $pkg.exesha)
         $ranSteam = @{ replaced = @(); added = @() }
         try {
             if ($pkg.skipped) { Ui-Log (L "pkg_skipped" $pkg.skipped) }
@@ -1737,9 +1775,10 @@ if ($Quiet) {
         if ($g) { if (-not (Test-Game $g)) { throw (L "not_a_folder" $g) }; $g = (Resolve-Path -LiteralPath $g).Path.TrimEnd('\') }
         else { $g = @(Find-Games)[0]; if (-not $g) { throw (L "not_found") } }
         if ($Uninstall) {
-            $null = Do-Uninstall $g
+            $u = Do-Uninstall $g
             Save-Log ""
             Write-Host (L "removed_done")
+            if ($u.steam) { Write-Host (L "removed_steam") }
         } else {
             $r = Do-Install $g
             Save-Log $g
@@ -1800,7 +1839,7 @@ $form.SuspendLayout()
 $form.AutoScaleDimensions = New-Object Drawing.SizeF(96, 96)
 $form.AutoScaleMode = "Dpi"
 $form.Text = "$($script:TITLE) $version"
-$form.ClientSize = New-Object Drawing.Size(660, 500)
+$form.ClientSize = New-Object Drawing.Size(660, 560)
 $form.FormBorderStyle = "FixedSingle"; $form.MaximizeBox = $false
 $form.StartPosition = "CenterScreen"
 $form.BackColor = $C.bg; $form.ForeColor = $C.text
@@ -1824,7 +1863,7 @@ $lbSub = New-Label $hdr "" 28 58 600 24 (Font 10) ([Drawing.Color]::FromArgb(190
 
 # --- page 1: the folder and what will be done
 $pSetup = New-Object Windows.Forms.Panel
-$pSetup.Location = New-Object Drawing.Point(0, 96); $pSetup.Size = New-Object Drawing.Size(660, 404)
+$pSetup.Location = New-Object Drawing.Point(0, 96); $pSetup.Size = New-Object Drawing.Size(660, 464)
 $form.Controls.Add($pSetup)
 $lbFolder = New-Label $pSetup "" 28 22 400 22 (Font 10 "Bold") $C.text
 $tbGame = New-Object Windows.Forms.TextBox
@@ -1832,20 +1871,26 @@ $tbGame.Location = New-Object Drawing.Point(28, 48); $tbGame.Size = New-Object D
 $tbGame.BackColor = $C.panel; $tbGame.ForeColor = $C.text; $tbGame.BorderStyle = "FixedSingle"; $tbGame.Font = Font 10.5
 $pSetup.Controls.Add($tbGame)
 $btBrowse = New-Button $pSetup (L "browse") 512 45 120 $false
-$lbInfo = New-Label $pSetup "" 28 96 604 220 (Font 10.5) $C.text
-$btRemove = New-Button $pSetup (L "remove_co_op") 28 340 150 $false
-$btCancel = New-Button $pSetup (L "cancel") 372 340 120 $false
-$btGo = New-Button $pSetup (L "install") 502 340 130 $true
+$lbInfo = New-Label $pSetup "" 28 96 604 280 (Font 10.5) $C.text
+$btRemove = New-Button $pSetup (L "remove_co_op") 28 412 150 $false
+$btCancel = New-Button $pSetup (L "cancel") 372 412 120 $false
+$btGo = New-Button $pSetup (L "install") 502 412 130 $true
 # A Steam copy (patch 1.0): the 1.2 update package the player downloaded (zip or folder).
-$lbPkg = New-Label $pSetup "" 28 232 604 22 (Font 10 "Bold") $C.text
+$lbPkg = New-Label $pSetup "" 28 244 604 22 (Font 10 "Bold") $C.text
 $tbPkg = New-Object Windows.Forms.TextBox
-$tbPkg.Location = New-Object Drawing.Point(28, 258); $tbPkg.Size = New-Object Drawing.Size(366, 28)
+$tbPkg.Location = New-Object Drawing.Point(28, 270); $tbPkg.Size = New-Object Drawing.Size(366, 28)
 $tbPkg.BackColor = $C.panel; $tbPkg.ForeColor = $C.text; $tbPkg.BorderStyle = "FixedSingle"; $tbPkg.Font = Font 10.5
 $pSetup.Controls.Add($tbPkg)
-$btPkg = New-Button $pSetup (L "browse_zip") 402 255 110 $false
-$btPkgDir = New-Button $pSetup (L "browse_dir") 520 255 112 $false
-$lbPkgState = New-Label $pSetup "" 28 296 604 36 (Font 9.5) $C.dim
-foreach ($ctl in $lbPkg, $tbPkg, $btPkg, $btPkgDir, $lbPkgState) { $ctl.Visible = $false }
+$btPkg = New-Button $pSetup (L "browse_zip") 402 267 110 $false
+$btPkgDir = New-Button $pSetup (L "browse_dir") 520 267 112 $false
+$lbPkgState = New-Label $pSetup "" 28 304 604 62 (Font 9) $C.dim
+# the player's explicit consent (the Steam copy's exe and data archives are replaced)
+$cbSteam = New-Object Windows.Forms.CheckBox
+$cbSteam.Location = New-Object Drawing.Point(28, 368); $cbSteam.Size = New-Object Drawing.Size(604, 36)
+$cbSteam.Font = Font 9.5; $cbSteam.ForeColor = $C.warn; $cbSteam.BackColor = [Drawing.Color]::Transparent
+$cbSteam.FlatStyle = "Flat"; $cbSteam.UseMnemonic = $false
+$pSetup.Controls.Add($cbSteam)
+foreach ($ctl in $lbPkg, $tbPkg, $btPkg, $btPkgDir, $lbPkgState, $cbSteam) { $ctl.Visible = $false }
 
 # --- page 2: the steps and the progress
 $pWork = New-Object Windows.Forms.Panel
@@ -1947,10 +1992,12 @@ function Update-Setup {
         $ei = Exe-Info $g
         $steamMode = (-not $ei.ok) -and (Is-Steam $g)
         if ($steamMode) {
+            $ok = Check-Package
             $lines += ([string][char]0x2716 + "  " + (L "found_steam_old"))
             $lines += ""
-            $lines += (L "steam_need")
-            $ok = Check-Package
+            $lines += (L "steam_need" $script:pkgNames)
+            $cbSteam.Text = L "steam_accept"
+            $ok = $ok -and $cbSteam.Checked
         } elseif (-not $ei.ok) {
             $ok = $false
             $lines += ([string][char]0x2716 + "  " + (L "found_other"))
@@ -1977,8 +2024,9 @@ function Update-Setup {
             if ($others.Count) { $lines += ""; $lines += (L "other_games" ($others -join "; ")) }
         }
     }
-    foreach ($ctl in $lbPkg, $tbPkg, $btPkg, $btPkgDir, $lbPkgState) { $ctl.Visible = $steamMode }
-    $lbInfo.Height = $(if ($steamMode) { 132 } else { 220 })
+    foreach ($ctl in $lbPkg, $tbPkg, $btPkg, $btPkgDir, $lbPkgState, $cbSteam) { $ctl.Visible = $steamMode }
+    $lbInfo.Height = $(if ($steamMode) { 150 } else { 280 })
+    $lbInfo.Font = $(if ($steamMode) { Font 9.5 } else { Font 10.5 })
     if ($steamMode) { $btGo.Text = L "install_steam" }
     $lbInfo.Text = $lines -join "`n"
     $lbInfo.ForeColor = $(if ($ok) { $C.text } else { $C.warn })
@@ -1999,6 +2047,7 @@ function Check-Package {
     }
     $p = $tbPkg.Text.Trim().Trim('"')
     $script:pkgPath = ""
+    $script:pkgNames = $script:STEAM_DEFAULT_NAMES; $script:pkgSha = ""
     if (-not $p) { $lbPkgState.ForeColor = $C.dim; $lbPkgState.Text = L "steam_pkg_none"; return $false }
     $key = $p + "|" + $(if (Test-Path -LiteralPath $p) { (Get-Item -LiteralPath $p).LastWriteTimeUtc.Ticks } else { "-" })
     if ($key -ne $script:pkgChecked) {
@@ -2006,10 +2055,13 @@ function Check-Package {
         $r = Open-Package $p
         Close-Package $r
         $script:pkgOkCache = $r.ok
-        $script:pkgMsg = if ($r.ok) { (L "steam_pkg_ok" $r.gfiles.Count) + " " + $(if ($r.known) { L "steam_pkg_known" } else { L "steam_pkg_unknown" }) + $(if ($p -eq $script:pkgFoundPath) { "  " + (L "steam_pkg_found") } else { "" }) } else { L "pkg_bad" $r.why }
+        $script:pkgNamesCache = if ($r.ok) { Package-Names $r } else { $script:STEAM_DEFAULT_NAMES }
+        $script:pkgShaCache = if ($r.ok) { $r.exesha } else { "" }
+        $script:pkgMsg = if ($r.ok) { (L "steam_pkg_ok" $r.gfiles.Count) + " " + $(if ($r.known) { L "steam_pkg_known" } else { L "steam_pkg_unknown" }) + $(if ($p -eq $script:pkgFoundPath) { "  " + (L "steam_pkg_found") } else { "" }) + "`n" + (L "steam_pkg_exe" $r.exesha) } else { L "pkg_bad" $r.why }
     }
     $lbPkgState.ForeColor = $(if ($script:pkgOkCache) { $C.ok } else { $C.warn })
     $lbPkgState.Text = $script:pkgMsg
+    $script:pkgNames = $script:pkgNamesCache; $script:pkgSha = $script:pkgShaCache
     if ($script:pkgOkCache) { $script:pkgPath = $p }
     $script:pkgOkCache
 }
@@ -2074,6 +2126,7 @@ function Elevated-Instead($g, [switch] $Remove) {
 }
 
 function Start-Install($g) {
+    if ($cbSteam.Visible -and $cbSteam.Checked) { $script:steamAccepted = $true }
     $g = (Resolve-Path -LiteralPath $g).Path.TrimEnd('\')
     if (Elevated-Instead $g) { return }
     $script:target = $g
@@ -2120,10 +2173,10 @@ function Start-Uninstall($g) {
         @("restore", (L "st_restore")),
         @("clean", (L "st_clean")))
     try {
-        $null = Do-Uninstall $g
+        $u = Do-Uninstall $g
         $script:exitCode = 0
         Save-Log ""
-        Show-Result $true (L "removed_title") (L "removed_text")
+        Show-Result $true (L "removed_title") ((L "removed_text") + $(if ($u.steam) { "`n`n" + (L "removed_steam") } else { "" }))
         $btReadme.Visible = $false
         if ($AutoClose) { Close-Soon }
     } catch {
@@ -2136,6 +2189,7 @@ function Start-Uninstall($g) {
 
 $tbGame.Add_TextChanged({ Update-Setup })
 $tbPkg.Add_TextChanged({ if (-not $script:settingPkg) { Update-Setup } })
+$cbSteam.Add_CheckedChanged({ Update-Setup })
 $btPkg.Add_Click({
     $dlg = New-Object Windows.Forms.OpenFileDialog
     $dlg.Title = L "steam_pick"

@@ -20,8 +20,8 @@ body:
     attributes:
       label: Game edition
       options:
-        - Retail / digital copy with patch 1.2 (main menu says Ver 1.02)
-        - Steam, brought to 1.2 with the community update package
+        - Copy with patch 1.2 (main menu says Ver 1.02)
+        - Steam, brought to 1.2 with a 1.2 update package supplied by me
         - GOG
         - Community pre-patched exe
         - Other / not sure

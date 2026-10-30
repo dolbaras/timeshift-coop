@@ -1,6 +1,6 @@
 /*
- * Start-up fixes for today's PCs, the same three changes as the community's "pre-patched" 1.2 exe
- * (Steam guide "[FIX] CPU and Startup loading crash", 2019), made in memory instead of in the exe:
+ * Start-up fixes for today's PCs, the same three changes as community-made "pre-patched" 1.2 exes,
+ * made in memory instead of in the exe:
  *
  * 1. More than 8 logical processors crash the engine at start (its per-thread tables hold 8: on a
  *    12-thread CPU the start crashed at 0x946499 reading a NULL entry of such a table). GetSystemInfo
