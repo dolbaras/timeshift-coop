@@ -23,11 +23,13 @@
  *    `!pr trace <self|player|net:<id>|<script name>> <frames>` logs the next frames (<= 600) of one body:
  *    "pt: <label> f<n> t<ms> x y z" (10 frames a line): for comparing a client's drawn place with the host's.
  * 2. Foot height against the floor (`!pr feet`, and each report with TS_PROBES_FEET=1): the engine's own floor ray
- *    (the one the player placement uses, filter 0x100100, from 1.8 m above the entity) under every sampled body:
- *      fl: <kind> <label> y <entity y> floor <ray y> delta <y - floor> | self delta <this machine's player>
- *    A body that stands on the ground has the same delta on both machines (a player's own delta is what the engine adds
- *    for the stance: compare with the local player's); a delta that differs by more than ~10 cm between the machines
- *    is a body sunk in or floating over the floor. Moving platforms are not hit by this ray (no floor: "none").
+ *    (the one the player placement uses, filter 0x100100) under every sampled body, from two start heights:
+ *      fl: <kind> <label> y <entity y> d18 <y - floor, ray from 1.8 m above> d05 <y - floor, ray from 0.5 m above> d00 <ray from the foot point>
+ *    The entity position is the foot point. Which ray to read depends on the body (live check 2026-10-30, N100 pair): PLAYERS (self,
+ *    player): d00 (0.000 standing on the ground; d05 is exactly -0.500 because that ray starts inside the player's own capsule and
+ *    d18 hits something 1.4 m above); AI soldiers: d05 or d18 (they stand 0-3 cm below the ray's floor on both machines, so d00
+ *    starts under the floor and reads positive or "none"). A body that stands on the ground has the same value on both machines;
+ *    one that differs by more than ~5 cm is sunk in or floating. d18 also hits ceilings in low rooms. Moving platforms are not hit.
  * 3. Two-body collision (`!pr pairs`, always collected while on): for every pair of sampled bodies that came within
  *    3 m horizontally (and 1.5 m vertically): the smallest horizontal centre distance since the last reset and the
  *    frames under `!pr bumpr <m>` (default 0.5 m, about a body's width). Two solid bodies walked into each other stay
@@ -307,7 +309,7 @@ static void collect(double t)
 
 /* ---- the floor ray ---- */
 typedef int (TSCALL *ray_t)(void *world, float *pos, float maxdist, float *out, float up, float outoff, void *filter, void *hit, int zero);
-static int floor_under(char *ent, float *y_out)
+static int floor_under(char *ent, float up, float *y_out)
 {
     float *p = ent_posp(ent);
     if (!p || !WORLD_OBJ)
@@ -316,33 +318,52 @@ static int floor_under(char *ent, float *y_out)
     DWORD filter[8] = {RAY_FILTER_VT, 2, 0x100100, 0, 0, 0, (DWORD) * (void **)(ent + E_NODE), 0};
     unsigned char hit[128];
     memset(hit, 0, sizeof hit);
-    int ok = ((ray_t)RAY_FN)(WORLD_OBJ, pos, 2000000.0f, out, 1.8f, 0.0f, filter, hit, 0) & 0xff;
+    int ok = ((ray_t)RAY_FN)(WORLD_OBJ, pos, 2000000.0f, out, up, 0.0f, filter, hit, 0) & 0xff;
     if (ok)
         *y_out = out[1];
     return ok;
 }
 
+/* "<y> d18 <y - floor from 1.8 m above> d05 <... 0.5 m above> d00 <... from the entity's own height>": a body that stands on the ground has one of the two near 0
+ * (d18 is the engine's own start height; it can hit a ceiling in a low room, d05 can start inside a player's own capsule and then reads
+ * -0.5 exactly, d00 starts at the foot point: take the one near 0) */
+static int feet_one(char *out, int size, char *ent, const char *who)
+{
+    float *p = ent_posp(ent), f18, f05, f00;
+    if (!p)
+        return 0;
+    int a = floor_under(ent, 1.8f, &f18), b = floor_under(ent, 0.5f, &f05), c = floor_under(ent, 0.0f, &f00);
+    int n = snprintf(out, size, "%s y %.3f", who, p[1]);
+    if (a)
+        n += snprintf(out + n, size - n, " d18 %.3f", p[1] - f18);
+    else
+        n += snprintf(out + n, size - n, " d18 none");
+    if (b)
+        n += snprintf(out + n, size - n, " d05 %.3f", p[1] - f05);
+    else
+        n += snprintf(out + n, size - n, " d05 none");
+    if (c)
+        n += snprintf(out + n, size - n, " d00 %.3f", p[1] - f00);
+    else
+        n += snprintf(out + n, size - n, " d00 none");
+    return n;
+}
+
 static int feet_lines(char *out, int size)
 {
     int n = 0;
-    float sy = 0, sfloor = 0;
     char *self = PLAYER;
-    int sok = self && ent_posp(self) && floor_under(self, &sfloor);
-    if (sok)
-        sy = ent_posp(self)[1];
-    if (sok)
-        n += snprintf(out + n, size - n, "self y %.3f floor %.3f delta %.3f", sy, sfloor, sy - sfloor);
+    if (self && ent_posp(self))
+        n += feet_one(out + n, size - n, self, "self");
     else
-        n += snprintf(out + n, size - n, "self: no floor");
-    for (int i = 0; i < n_bodies && n < size - 120; i++) {
+        n += snprintf(out + n, size - n, "self: none");
+    for (int i = 0; i < n_bodies && n < size - 160; i++) {
         Body *b = &bodies[i];
-        float f, *p = ent_posp(b->ent);
-        if (b->kind == K_SELF || !p)
+        char who[64];
+        if (b->kind == K_SELF || !ent_posp(b->ent))
             continue;
-        if (floor_under(b->ent, &f))
-            n += snprintf(out + n, size - n, "; %s %s y %.3f floor %.3f delta %.3f", kind_name[b->kind], b->label, p[1], f, p[1] - f);
-        else
-            n += snprintf(out + n, size - n, "; %s %s y %.3f floor none", kind_name[b->kind], b->label, p[1]);
+        snprintf(who, sizeof who, "; %s %s", kind_name[b->kind], b->label);
+        n += feet_one(out + n, size - n, b->ent, who);
     }
     return n;
 }
@@ -480,11 +501,16 @@ static void probes_frame(float dt)
         if (feet_in_report) {
             static char f[2048];
             feet_lines(f, sizeof f);
-            for (char *s = f; *s; s++)
-                if (*s == ';')
-                    *s = '\n';
-            char buf[2200];
-            snprintf(buf, sizeof buf, "fl: %s", f);
+            char buf[2400] = "fl: ";
+            int bn = 4;
+            for (char *s = f; *s && bn < (int)sizeof buf - 8; s++) {
+                if (*s == ';') {
+                    memcpy(buf + bn, "\nfl:", 4);
+                    bn += 4;
+                } else
+                    buf[bn++] = *s;
+            }
+            buf[bn] = 0;
             log_lines(buf);
         }
     }
