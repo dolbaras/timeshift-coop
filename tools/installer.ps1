@@ -2241,4 +2241,6 @@ $form.Add_Shown({
 })
 
 [Windows.Forms.Application]::Run($form)
+# (the .bat files wait for the start flag; a run that came from the launcher has no .bat to clear it)
+if ($AutoClose) { Remove-Item -LiteralPath (Join-Path ([IO.Path]::GetTempPath()) "timeshift-coop-installer-started.flag") -Force -ErrorAction SilentlyContinue }
 exit $script:exitCode
