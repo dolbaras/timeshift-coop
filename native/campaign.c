@@ -35,6 +35,10 @@
  *                            three DisableTC modes, 64 SetupWeapon); only what the level's scripts set on the host
  *   73 server -> one client  {u8 1, u8 len, seat}          take this seat ($player.StartUse)
  *   74 server -> one client  {u8 1, u8 on, u8 place, u8 len, vehicle}   ride on / get off this vehicle
+ *   75 server -> clients     the ridden vehicle's place;  76 vehicle transforms (both ways, the host relays a client's)
+ *   77 server -> clients     an actor's ShowMsg / PlaySound line started (voice, see below)
+ *   78 server -> clients     the host's player's DisableMove / DisableInput (lock watchdog)
+ *   79 both ways             dynamic actor digest: bucket hashes, request, details
  * Client actions run in the script tick (frame), not in the network pump.
  *
  * More rules (round 2, also not yet run):
@@ -50,6 +54,12 @@
  *   that state (message 72, 3, 10 and 25 s after; the loadout only the first time).
  * - AI targets (host): SetAim/SetTarget("player") of AI, turrets and the boss name the nearest player instead of the
  *   host; remote players get a script name for that (coop_player<slot>).
+ *
+ * 0.1.1 (docs/campaign-audit.md section 3d): voice lines of actors the host creates, lock watchdog, client-driven quads (the player's
+ * own record of its vehicle at +0x37c), loadout carry-over / respawn restore, digest of the dynamic actors, AI "nearest" skips the dead,
+ * campaign_regroup() and campaign_gate_waiting() for the in-game menu (coopsession.c), spread teleports (off). Switches:
+ * TS_CAMPAIGN_VOICE / _VOICELOG, _LOCKS, _LOCKWATCH=<s>, _LOADOUT, _DIGEST, _DIGEST_FIX=1, _SPREAD=1. Lab commands: !cp life, loadout,
+ * wpn, pused, rd, vslot, dyn, vehs.
  *
  * Test console (TS_CONSOLE): "!cp state", "!cp regroup" (host: every client to the host; client: itself to the
  * host), "!cp gather <domain>" (host: the clients that are not inside, into it), "!cp rules".

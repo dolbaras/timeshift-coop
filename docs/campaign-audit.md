@@ -758,12 +758,12 @@ Remaining gameplay gaps (the list for the next round):
 2. Route-driven AI vehicles (helicopters, interceptors, bikes, the armoured car) do not move on clients (no motion
    data; a client's own `StartRoute` on them crashed). Riders follow the host's position (armoured car, truck); others
    are scenery on clients. Fix: mirror their transforms like the ride position (sub 75) - M.
-3. Quads: clients drive unsynced local copies - ride-along or a synced vehicle transform as in 2.
+3. Quads: clients drive unsynced local copies - **fixed in 0.1.1** (section 3d: the client's quad is streamed to the host and the other clients).
 4. Natural exits that are boxes above the floor need the host's player to fall/jump into them (fine in play).
 5. Level 16: cyclic machinery (`fire_kill_actor`, presses `PRESS6`, `FL*`) sends ~760 story replays in 2 minutes:
    classify their animation-frame handlers as local - S.
 6. Clients miss the dialogue lines of actors the host has just created (`Intro_Cooke`, `Intro_rebel_1` on 8; the
-   name arrives after the replay) - delay replays naming not-yet-named objects a little longer, S.
+   name arrives after the replay) - **fixed in 0.1.1** (section 3d: message 77, the host tells the clients each ShowMsg/PlaySound line as it starts).
 7. A replay waiting for an object that the client has destroyed (`s3d_refLocator480`, 23) logs an engine error every
    frame for 5 s - stop waiting when the object is known to be gone, S.
 8. Unverified: the trap check at the end of a real playback, seat-once on 23, force fields of 5/16/17/19/21 (14 proven),
@@ -861,6 +861,16 @@ statements of `credits.ui` `JobOnFinish`, which `OnButtonPressed("Continue")` an
 client left behind by a host that went first gets the stock box "server shut down" with OK (seen when the level-change test dropped a client). Pass
 (by the handler, not by the click).
 
+### AI "nearest player" skips the dead, regroup (live, level 14, run n100pair-20261030-172507 and the one before)
+
+`$ceilgun1.SetTarget("player", 1)` on the host with the client 1 m from the gun and the host 28 m away: `ceilgun1 targets coop_player1 (nearest
+player) instead of the host`; with the client dead (`FailMission`, life 0.0 read on the host's copy of its body) the same call leaves the target as the
+script wrote it (the host's player, no log line); after the client's respawn (about 15 s) and a move back next to the gun it targets the client again. A
+dead player is also never pulled by a gather/regroup (it respawns at the checkpoint and is pulled in when it is back).
+`campaign_regroup()` (exported for the in-game entry of chunk E): `!cp regroup` on the host brought the client from 28 m away to 0.7 m beside its
+player ("1 client(s) sent to the host", client at the host's floor height), on the client it moved itself the same way. `campaign_gate_waiting()`
+(exported for the "waiting for N player(s)" hint) reads the same count the "waits for N player(s)" log line prints (live since 0.1.0 on level 7).
+
 ### Lifes and loadout of respawned and level-changed clients (table test, level 2 -> 3)
 
 `!cp loadout` on both machines (slots, primary weapon ammunition, life, time energy):
@@ -877,6 +887,48 @@ change both get the level's start loadout (single player carries the weapons thr
 level's own loadout for everybody). The host's view of a dead client reads life 0 on the client's body (`player_alive` uses it). Note for Continue
 (coopsave.c, chunk D): the three "slots" at player +0x3a8 stay `1 0 0` whatever `SetupWeapon` sets (the weapon types live elsewhere: lab
 `!cp wpn` prints the raw weapon records), so a recorded `slots=1 0 0` restores the campaign pistol with the ammunition of the real primary.
+What the numbers are: `SetupWeapon(a, b, c)` selects a weapon SET by number (each number gives another set object: live a=1 128/16, 2 40/10, 3 120/20,
+4 240/30, 5 16/4, 6 24/4, 7 120/8, 8 360/45, 9 150/0); the set is not readable back from the player, only the primary's record (+8 ammunition, +0xc
+magazine).
+
+Fix (campaign.c, `TS_CAMPAIGN_LOADOUT=0` off): every machine remembers the last `SetupWeapon` numbers the scripts ran on its player (hooked) and samples
+the primary's ammunition every 2 s on foot. (1) A client that respawns gets its set and ammunition back 1.5 s after it is alive again (live, level
+3: `SetupWeapon(4,0,0)`, client killed: `campaign: loadout after the respawn: weapon set 4 0 0`, client 240/30 again; before: 128/16). (2) At the start of
+the next level of the session each machine gets its previous set (and ammunition) back 12 s into the level, unless the level's own scripts set a loadout
+meanwhile (levels 1, 2, 24 take the weapons away): live, levels 3 -> 4 and 4 -> 5: host and client `loadout carried over from the last level`, 240/30
+after the change instead of the start pistol. Weapons picked up in play (not a set number) are not carried: they are lost on a respawn, as before.
+
+### Dynamic actor digest (message 79, `TS_CAMPAIGN_DIGEST=0` off, `TS_CAMPAIGN_DIGEST_FIX=1` also puts actors right, `!cp dyn`)
+
+Every 4 s (20 s after a level starts) the host hashes the state of every named `dynamic` actor with a clip - clip index, running, cycle flag, and for a
+stopped clip its time to half a second - into 16 buckets and sends the 16 hashes. A client scans its own actors; a bucket that differs two rounds
+in a row is asked for, the host answers with that bucket's entries, and the client logs each actor that differs ("campaign: digest: <name> host clip
+c runs/stopped t ..., here clip ...") and, with the fix switched on, calls the engine's own clip start (`0x6aaea0`, the end of the script's `Start`) with
+the host's clip, time and cycle flag (`Stop()` when the host's is stopped; an actor at most once a minute). Vehicles, players and AI are left out.
+
+Live (n100pair-20261030-1643*..1649*, levels 12 and 3): 58-62 actors per level are named dynamic actors with a clip. Level 12: two actors
+(`helicopt_place1/2`, the scripted helicopter places of the intro) differ for about 16 s (the host's clip still runs at 10 s of 13 while the client's
+had stopped: the client's local film timeline is ahead), then agree; 2 requests in 4 minutes. Level 3: the cyclic machinery
+(`Marshrut_A/B/C_LOKOMOTIV`, `interceptor_plc_01..03`: timed clips the scripts restart on each machine at its own moment) differs all the time:
+44 differences in 111 rounds, always a phase difference of seconds in a clip that runs on one side and has just ended on the other. So the digest is
+a reliable detector but "put right" would fight these local timelines every few seconds: the fix is OFF by default (the probe stays on and
+costs 70 bytes per 4 s). No door/lift state divergence was seen in these runs (the other actors agreed).
+
+### Client-driven quad (levels 9, 12; message 76 now both ways)
+
+The stream existed (host -> clients, 10 Hz, and a client's own vehicle -> host) but never carried a client's quad because it looked for the driver in the
+vehicle's `+0x9c0` field, which is not a user pointer (live values 0, 1, 0x3c, 0x40, floats). The player's own record is what InBike() asks: vtable
+`+0x23c` ("uses something") and the object at `*(player + 0x37c)` (the quad's entity after `StartUse`; also the quad the level attached with
+`$start_bike.AttachPlayer()`). With that (`veh_is_mine`):
+- the client's driven quad is "mine" on the client: it sends the transform 10 Hz while it moves; live (level 12, `empty_bike1`): `StartUse("empty_bike1")`,
+  W held (action 0x59 BIKE_FORW, `lab\n100_key.ps1 -Code 0x11 -Action 89`): the quad drove 26 m on the client and the host's copy of it followed
+  (`!cp vehs` on the host: `empty_bike1 recv (18.4 2.4 93.9)` while the client's was at 3.8) - the first time a client's quad is seen on the host;
+- the host skips the engine's node sync (`0x571ad0`, which put every moved copy back to its start place each frame) for a vehicle a client drives,
+  keeps the last stream data when the driver gets off (the quad stays where it was left) and relays the stream to the other clients;
+- the scanners stay host-only (rule HOST), so a client's quad is not counted by them (the host's own copy of the quad it follows is a `vhc_bike`
+  in the scanner zone, which the stock check counts).
+Both players start level 12 attached to their own `start_bike` (the level script does it on every machine), so there each machine drives its own
+copy and neither is applied to the other (the other player is seen as the usual remote body).
 
 ### Pickups per level (count of placed objects by class name in the scene files; enemies' drops come on top)
 
@@ -919,7 +971,7 @@ Generic tests (run once, on the level named):
 | T-C6 KILL host | 21 | `$dom_RIP_cine_start.Unlock()`; host `!ss goto dom_RIP_cine_start` | the host dies once, respawns; the client sees no cinematic |
 | T-C7 regroup | any | client walks/teleports far away; host `!cp regroup`; then client `!cp regroup` | client next to the host each time, standing on the floor |
 | T-C8 off | 7 | without `TS_CAMPAIGN` | `!cp state` says off; the lift leaves with the first player (storysync behaviour) |
-| T-B buttons/pickups (G6) | 10, 11, 2 | client uses `train_button` (10), `prison_button` (11), picks `magnet_mine_item` (11), mans `final_room_turret_hmg` (2) | host log `storysync: sent train_button.OnPushed` etc.; if the host never runs it: G6 forwarding is needed |
+| T-B buttons/pickups (G6) | 10, 11, 2 | client uses `train_button` (10), `prison_button` (11), picks `magnet_mine_item` (11), mans `final_room_turret_hmg` (2) | host log `storysync: sent train_button.OnPushed` etc.; if the host never runs it: G6 forwarding is needed. **Result 2026-10-30 (3d): `prison_button` (11) and the gun `final_room_turret_hmg` (2) used by a client DO run on the host and replay on the client: no forwarding needed; `train_button` was locked (no hint); `magnet_mine_item` not reached.** |
 | T-R reverse (G1) | 5, 14 | try the shaft (`Shaft_coll_actor`) and the fan shaft with slow/stop only | confirms which levels are blocked without reversal |
 | T-V vehicles (G2, D6) | 8, 19, 9 | watch the client during the zeppelin intro, the armoured-car start and the truck ride; try a client on a quad and on a free zeppelin turret | does the client's body ride a moving vehicle; can `player_mp` drive or man it |
 | T-A AI (G7) | 3, 14, 24 | client in the open near `Metro_Tank`, `ceilgun*`, the boss | they fire at the host only (expected today) |
