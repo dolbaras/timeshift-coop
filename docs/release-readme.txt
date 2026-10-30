@@ -184,7 +184,7 @@ Troubleshooting and reports
 - The installer stops: its log is <game>\coop\install-log.txt, or
   %TEMP%\timeshift-coop-install.log when it stopped before changing anything.
 - The game: the mod's log is bin\ts_coop.log; the logs of the four runs before it are
-  ts_coop.log.1 ... ts_coop.log.4 (a run that never left the main menu is not kept).
+  ts_coop.1.log ... ts_coop.4.log (a run that never left the main menu is not kept).
 - To report a problem: open the mod's GitHub page -> Issues -> New issue (a form asks for the version,
   the game edition, what happened and what you did) and attach the zip that
   <game>\coop\Collect logs.bat makes on your desktop: the logs, the install record, hashes, and the

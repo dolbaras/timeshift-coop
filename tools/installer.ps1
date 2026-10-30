@@ -1206,7 +1206,7 @@ function Do-Uninstall($g) {
         Ui-Log (L "ini_back" $back)
     }
     # (+ the log the mod's DLL writes next to the exe)
-    $all = @($m.files + $m.built + "bin\ts_coop.log" + (1..9 | ForEach-Object { "bin\ts_coop.log.$_" }))
+    $all = @($m.files + $m.built + "bin\ts_coop.log" + (1..9 | ForEach-Object { "bin\ts_coop.$_.log" }))
     $i = 0
     foreach ($rel in $all) {
         $i++
