@@ -138,6 +138,9 @@ void compat_install(void)
     }
     static const unsigned char je[2] = {0x74, 0x0d}, jmp[2] = {0xeb, 0x0d};
     int drv = !no_drv && ts_patch_bytes(DRIVER_CHECK_JE, je, jmp, 2);
+    /* the community's pre-patched exe has this jump (and the CPU fix in code caves behind the same IAT calls: our hooks
+     * on top change nothing) in place already: every other byte of it is the 1.2 code, so every other site matches */
+    int pre = !drv && !no_drv && memcmp((const void *)DRIVER_CHECK_JE, jmp, 2) == 0;
     static const unsigned char jae[2] = {0x73, 0x23}, jmp2[2] = {0xeb, 0x23};
     int vmem = !no_drv && ts_patch_bytes(VIDMEM_CHECK_JAE, jae, jmp2, 2);
     static const unsigned char fmt_start[5] = {0x8b, 0x4c, 0x24, 0x04, 0x8d};   /* mov ecx,[esp+4]; lea */
@@ -147,6 +150,6 @@ void compat_install(void)
         ts_log("compat: engine message formatter not found (other exe)");
     ts_log("compat: %lu processors reported as at most %d (%s), driver check %s, video memory check %s",
            si.dwNumberOfProcessors, MAX_CPUS, real_GetSystemInfo && real_GetProcessAffinityMask ? "hooked" : "NOT hooked",
-           drv ? "passed" : no_drv ? "off (TS_NOCOMPAT)" : "not patched (other exe)",
+           drv ? "passed" : pre ? "passed (already in the exe: community pre-patched build)" : no_drv ? "off (TS_NOCOMPAT)" : "not patched (other exe)",
            vmem ? "skipped" : no_drv ? "kept (TS_NOCOMPAT)" : "not patched (other exe)");
 }
