@@ -96,6 +96,7 @@
 #define DOM_MAX 0xd4
 #define NODE_DIR 0x58
 #define PLAYER_PLACE 0x210                   /* player vtable: place (pos, dir, 1) */
+#define PLAYER_USED 0x23c                    /* player vtable: "uses something" (what InBike() asks first); the object is *(player+0x37c) */
 #define GAME_FLAGS (*(volatile unsigned *)0xfcace8)
 #define FLAG_LEVEL_RUNNING 0x80000000u       /* (host: cleared by the map change, set when the level runs) */
 #define SLOT_INGAME 1                        /* (slot flag: the client runs the level, coopnet.c) */
@@ -451,6 +452,7 @@ static void voice_client_step(void);
 static void locks_receive(const unsigned char *b, int len);
 static void lock_step(DWORD now);
 static void spread_step(DWORD now);
+static void loadout_step(DWORD now);
 static void on_message(int peer, unsigned short sub, const unsigned char *b, int len)
 {
     if (sub == SUB_VEH && enabled && len >= 2 && b[0] == PROTO && (role() == MODE_CLIENT || role() == MODE_SERVER)) {
@@ -605,6 +607,7 @@ static void client_frame(void)
     voice_client_step();
     lock_step(GetTickCount());
     spread_step(GetTickCount());
+    loadout_step(GetTickCount());
 }
 
 /* ---- seats and rides of the host's story events (storysync.c calls campaign_story_event on the host) ---- */
@@ -884,12 +887,34 @@ static void TSCALL hk_tc(void *obj, int argc, Variant *argv, Variant *res, void 
     cp_t_tc(obj, argc, argv, res, self);
 }
 
+/* This machine's player's loadout as far as it is known (TS_CAMPAIGN_LOADOUT=0 off): the last SetupWeapon(a, b, c) the scripts
+ * ran on it (a weapon SET chosen by number: live, each number gives another set object) and the ammunition of the primary
+ * weapon, sampled every 2 s on foot. A client that respawns (the stock multiplayer respawn hands out the start weapon: live,
+ * 240/30 -> 128/16) gets its set and ammunition back 1.5 s after it is alive again; at the start of the next level of the session
+ * the set and ammunition of the previous one come back 12 s into it unless the level's own scripts set a loadout meanwhile (levels
+ * 1, 2, 24 take the weapons away at their start). Weapons picked up in play are not part of a set number: they are lost on a
+ * respawn as before. */
+static int use_loadout = 1;
+static struct {
+    int have_wpn, wpn[3], level_set, have_ammo, mag, was_alive, died, apply_kind;
+    float total;
+    DWORD snap_at, apply_at;
+    char level[0x110];
+} lo;
+
 static void TSCALL hk_wpn(void *obj, int argc, Variant *argv, Variant *res, void *self)
 {
     if (recording(obj) && argc >= 3 && argv) {
         for (int i = 0; i < 3; i++)
             hst.wpn[i] = argv[i].type == type_int() ? (int)argv[i].data : 0;
         hst.mask |= 64;
+    }
+    if (use_loadout && obj && obj == (void *)PLAYER && role() && argc >= 3 && argv) {
+        for (int i = 0; i < 3; i++)
+            lo.wpn[i] = argv[i].type == type_int() ? (int)argv[i].data : 0;
+        lo.have_wpn = 1;
+        lo.level_set = 1;
+        lo.have_ammo = 0;   /* (a new set: the old ammunition is not its) */
     }
     cp_t_wpn(obj, argc, argv, res, self);
 }
@@ -1379,6 +1404,59 @@ int campaign_regroup(void)
     return -1;
 }
 
+static void loadout_step(DWORD now)
+{
+    char *pl = PLAYER;
+    if (!use_loadout || !role() || !pl)
+        return;
+    int alive = player_alive(pl);
+    void **vt = IsBadReadPtr(pl, 4) ? NULL : *(void ***)pl;
+    int on_foot = vt && ((int (TSCALL *)(void *))vt[PLAYER_USED / 4])(pl) == 0;
+    if (strcmp(lo.level, LEVEL_NAME) != 0) {   /* a new level in the session (or the first one) */
+        int first = !lo.level[0];
+        snprintf(lo.level, sizeof lo.level, "%s", LEVEL_NAME);
+        lo.level_set = 0;
+        lo.was_alive = 0;
+        lo.died = 0;
+        if (!first && lo.have_wpn) {
+            lo.apply_at = now + 12000;
+            lo.apply_kind = 1;
+        } else
+            lo.apply_at = 0;
+    }
+    if (lo.was_alive && !alive)
+        lo.died = 1;
+    if (!lo.was_alive && alive && lo.died && lo.have_wpn) {   /* respawned */
+        lo.died = 0;
+        lo.apply_at = now + 1500;
+        lo.apply_kind = 2;
+    }
+    lo.was_alive = alive;
+    if (alive && on_foot && now - lo.snap_at >= 2000 && !lo.apply_at) {
+        lo.snap_at = now;
+        float t;
+        int m;
+        if (lo.have_wpn && split_ammo_get((unsigned char *)pl, &t, &m) && t > 0.f) {
+            lo.total = t;
+            lo.mag = m;
+            lo.have_ammo = 1;
+        }
+    }
+    if (lo.apply_at && (int)(now - lo.apply_at) >= 0) {
+        int kind = lo.apply_kind;
+        lo.apply_at = 0;
+        if (!alive || !on_foot || (kind == 1 && lo.level_set))
+            return;
+        char ssl[100], res[100];
+        snprintf(ssl, sizeof ssl, "$player.SetupWeapon(%d, %d, %d)", lo.wpn[0], lo.wpn[1], lo.wpn[2]);
+        ts_script_run(ssl, res, sizeof res);
+        lo.level_set = 0;   /* (that was ours, not the level's) */
+        int ok = lo.have_ammo && split_ammo_set((unsigned char *)pl, lo.total, lo.mag);
+        CLOG("campaign: loadout %s: weapon set %d %d %d%s (%.0f/%d)", kind == 2 ? "after the respawn" : "carried over from the last level",
+             lo.wpn[0], lo.wpn[1], lo.wpn[2], ok ? " with its ammunition" : "", lo.have_ammo ? (double)lo.total : -1.0, lo.mag);
+    }
+}
+
 typedef struct { DWORD addr, seh; void *hook; int group; } Hook;   /* group 1 late join / lock watchdog, 2 AI, 3 voice, 4 spread teleports */
 static const Hook hooks[] = {
     {0x647d40, 0xc7eba8, (void *)hk_showmsg, 3}, {0x6478e0, 0xc7ec28, (void *)hk_playsnd, 3},
@@ -1560,19 +1638,19 @@ int campaign_replay_wait(const char *obj, const char *ev)
 #define VEH_METHOD_SLOT 0x78
 #define VEH_METHOD 0x51c160
 #define VEH_USER 0x9c0
-#define PLAYER_USED 0x23c                    /* player vtable: the object the player uses / is attached to (what InBike() asks) */
-/* The vehicle this machine's player is on: the player's own answer (InBike(): vtable +0x23c; a quad attached by the level
- * script, `$start_bike.AttachPlayer()`, has no user in +0x9c0), or the vehicle that names the player as its user. */
+/* The vehicle this machine's player is on: the player's own record of what it uses, `*(player + 0x37c)` (live: it holds the
+ * entity of the quad after StartUse, and InBike() = vtable +0x23c "uses something" + a class test on that object); a quad the level
+ * script attached (`$start_bike.AttachPlayer()`) is the same. The vehicle's own +0x9c0 is NOT a user pointer (live values 0, 1,
+ * 0x3c, 0x40, floats), the first version of the stream looked there and never saw a driver. */
 static int veh_is_mine(char *ent)
 {
     char *pl = PLAYER;
-    if (!pl || !ent)
+    if (!pl || !ent || IsBadReadPtr(pl + 0x380, 4))
         return 0;
-    if (*(char **)(ent + VEH_USER) == pl)
-        return 1;
-    void **vt = IsBadReadPtr(pl, 4) ? NULL : *(void ***)pl;
-    return vt && ((char *(TSCALL *)(void *))vt[PLAYER_USED / 4])(pl) == ent;
+    void **vt = *(void ***)pl;
+    return *(char **)(pl + 0x37c) == ent && vt && ((int (TSCALL *)(void *))vt[PLAYER_USED / 4])(pl) != 0;
 }
+
 static int is_vehicle(char *o)
 {
     void **vt = o && !IsBadReadPtr(o, VEH_USER + 4) ? *(void ***)o : NULL;
@@ -1585,6 +1663,7 @@ static int is_vehicle(char *o)
 typedef struct {
     unsigned hash;
     char *ent;
+    char *last_ent;                          /* the entity of the previous scan (another one = the level restarted: forget the data) */
     float sent[12];                          /* what this machine sent last */
     DWORD sent_at, still_since;
     int final_due;
@@ -1648,8 +1727,14 @@ static void veh_scan(void)
                         vehs[k].still_since = GetTickCount();
                         n_veh++;
                     }
-                    if (k < n_veh)
+                    if (k < n_veh) {
+                        if (vehs[k].last_ent && vehs[k].last_ent != o)
+                            vehs[k].have = 0;
+                        vehs[k].last_ent = o;
                         vehs[k].ent = o;
+                        if (role() && veh_is_mine(o))
+                            vehs[k].have = 0;   /* (this machine's physics rules it now: the others' older data is stale) */
+                    }
                 }
             }
             char *next = *(char **)(o + 8);
@@ -1663,8 +1748,9 @@ static int veh_mine(Veh *v, DWORD now)
         return 0;
     if (role() == MODE_CLIENT)
         return veh_is_mine(v->ent);
-    return veh_is_mine(v->ent) || !v->have || now - v->b_at > 1000;   /* (host: unless a
-                                                                                    * client drives it) */
+    (void)now;
+    return veh_is_mine(v->ent) || !v->have;   /* (host: unless a client drives it, or drove it: its last place stays, the data
+                                               * never expires - the engine's node sync would put the quad back to the start) */
 }
 
 static void veh_out(const unsigned char *msg, int n)
@@ -1758,7 +1844,7 @@ static void veh_apply(DWORD now)
 {
     for (int k = 0; k < n_veh; k++) {
         Veh *v = &vehs[k];
-        if (!v->have || !v->ent || veh_mine(v, now) || now - v->b_at > 3000)
+        if (!v->have || !v->ent || veh_mine(v, now))
             continue;
         float span = (float)(v->b_at - v->a_at), t = span > 1.f ? (float)(now - v->b_at) / span : 1.f, m[12];
         t = t < 0.f ? 0.f : t > 1.f ? 1.f : t;   /* (100 ms behind: from a to b over the gap between them) */
@@ -1786,11 +1872,11 @@ static int use_syncskip = 1;
 __attribute__((used)) int cp_sync_skip(void *ctl)
 {
     DWORD now = GetTickCount();
-    if (!use_syncskip || !use_vehsync || !enabled || role() != MODE_CLIENT || !ctl || IsBadReadPtr(ctl, 8))
-        return 0;
+    if (!use_syncskip || !use_vehsync || !enabled || !role() || !ctl || IsBadReadPtr(ctl, 8))
+        return 0;   /* (a client: the host's vehicles; the host: the vehicle a client drives, `veh_mine` is false there) */
     char *ent = *(char **)((char *)ctl + 4);
     for (int k = 0; k < n_veh; k++)
-        if (vehs[k].ent == ent && vehs[k].have && now - vehs[k].b_at < 3000 && !veh_mine(&vehs[k], now))
+        if (vehs[k].ent == ent && vehs[k].have && !veh_mine(&vehs[k], now))
             return 1;
     return 0;
 }
@@ -1828,7 +1914,7 @@ static void veh_step(DWORD now)
     veh_apply(now);
 }
 
-/* ---- dynamic actor digest (TS_CAMPAIGN_DIGEST, default on; TS_CAMPAIGN_DIGEST_FIX=0: log only) ----
+/* ---- dynamic actor digest (TS_CAMPAIGN_DIGEST, default on = log only; TS_CAMPAIGN_DIGEST_FIX=1 also puts the actors right) ----
  * Doors, lifts, machinery and other animated `dynamic` actors run from the replayed story events on every machine
  * and nothing checks that they still agree (only the rewind pushes clip and time). Every 4 s the host hashes the state
  * of every named dynamic actor that has a clip - clip index, running, cycle flag, and for a stopped clip its time to half a
@@ -1844,7 +1930,7 @@ static void veh_step(DWORD now)
 #define DYN_B 16
 typedef struct { unsigned hash; char *ent; int clip; unsigned char run, cyc; float t; } Dyn;
 static Dyn dyn[MAX_DYN];
-static int n_dyn, use_digest = 1, digest_fix = 1;
+static int n_dyn, use_digest = 1, digest_fix;   /* (fix off by default: see the audit, 3d) */
 static int dyn_miss[DYN_B], dyn_seq, dyn_rounds, dyn_requests, dyn_bad, dyn_fixed, dyn_details, dyn_sent;
 static unsigned dyn_host_bh[DYN_B], dyn_own_bh[DYN_B];
 static int dyn_pending;                      /* (client) a digest from the host waits for the next frame */
@@ -2084,7 +2170,21 @@ static void dyn_step(DWORD now)
                 CLOG("campaign: digest: %s host clip %d %s%s t %.2f, here clip %d %s%s t %.2f%s", ent_name(d->ent), c,
                      run ? "runs" : "stopped", cyc ? " cycle" : "", (double)t, d->clip, d->run ? "runs" : "stopped",
                      d->cyc ? " cycle" : "", (double)d->t, digest_fix ? ": set to the host's" : "");
-            if (digest_fix) {
+            if (digest_fix) {   /* (an actor is put right once a minute at most: some mismatches are not fixable by Start) */
+                static struct { unsigned h; DWORD at; } fixed[64];
+                static int fixed_next;
+                DWORD tnow = GetTickCount();
+                int k;
+                for (k = 0; k < 64 && fixed[k].h != d->hash; k++)
+                    ;
+                if (k < 64 && tnow - fixed[k].at < 60000)
+                    continue;
+                if (k == 64) {
+                    k = fixed_next;
+                    fixed_next = (fixed_next + 1) % 64;
+                }
+                fixed[k].h = d->hash;
+                fixed[k].at = tnow;
                 dyn_set_state(d->ent, c, t, cyc, run);
                 dyn_fixed++;
             }
@@ -2111,6 +2211,7 @@ static void frame(float dt)
     }
     veh_step(now);
     dyn_step(now);
+    loadout_step(now);
     locks_send(now);
     if (use_latejoin)
         latejoin_step(now);
@@ -2328,6 +2429,30 @@ int campaign_console(const char *text, char *out, int size)
                           *(int *)(ent + 0x3ac), *(int *)(ent + 0x3b0), (double)*(float *)(ent + 0x234));
         }
         return 1;
+    }
+    if (!strcmp(cmd, "rd")) {   /* "!cp rd <player|object> <hex offset> [count]": dwords at base+offset (lab; player = $player) */
+        unsigned o = 0, cnt = 8;
+        char *base = !strcmp(a1, "player") ? PLAYER : find_ent(a1);
+        sscanf(text + 3, "%*s %*s %x %u", &o, &cnt);
+        if (!base || cnt > 32 || IsBadReadPtr(base + o, cnt * 4))
+            return snprintf(out, size, "%s: not readable", a1), 1;
+        int n = snprintf(out, size, "%s %p +%x:", a1, (void *)base, o);
+        for (unsigned i = 0; i < cnt && n < size - 14; i++)
+            n += snprintf(out + n, size - n, " %x", *(unsigned *)(base + o + i * 4));
+        return 1;
+    }
+    if (!strcmp(cmd, "pused")) {   /* "!cp pused [object]": what the player's vtable +0x23c answers (InBike's test), next to an object's entity (lab) */
+        char *pl = PLAYER;
+        if (!pl || IsBadReadPtr(pl, 4))
+            return snprintf(out, size, "no player"), 1;
+        void *u = ((void *(TSCALL *)(void *))(*(void ***)pl)[PLAYER_USED / 4])(pl);
+        char *e = a1[0] ? find_ent(a1) : NULL;
+        float up[3] = {0, 0, 0};
+        if (u && !IsBadReadPtr(u, ENT_NODE + 4))
+            ent_pos(u, up);
+        return snprintf(out, size, "player %p uses %p (vt %p, at %.1f %.1f %.1f, name '%s'); %s %p", (void *)pl, u,
+                        u && !IsBadReadPtr(u, 4) ? *(void **)u : NULL, up[0], up[1], up[2], u && !IsBadReadPtr(u, ENT_INST + 4) ? ent_name(u) : "?",
+                        a1, (void *)e), 1;
     }
     if (!strcmp(cmd, "wpn")) {   /* "!cp wpn": the raw weapon records 0..3 of this machine's player (lab: where the weapon types live) */
         char *pl = PLAYER;
@@ -2601,8 +2726,9 @@ void campaign_install(void)
     use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
     use_voice = !(ts_env("TS_CAMPAIGN_VOICE", v, sizeof v) && v[0] == '0');
     use_digest = !(ts_env("TS_CAMPAIGN_DIGEST", v, sizeof v) && v[0] == '0');
-    digest_fix = !(ts_env("TS_CAMPAIGN_DIGEST_FIX", v, sizeof v) && v[0] == '0');
+    digest_fix = ts_env("TS_CAMPAIGN_DIGEST_FIX", v, sizeof v) && v[0] == '1';
     use_locks = !(ts_env("TS_CAMPAIGN_LOCKS", v, sizeof v) && v[0] == '0');
+    use_loadout = !(ts_env("TS_CAMPAIGN_LOADOUT", v, sizeof v) && v[0] == '0');
     use_spread = ts_env("TS_CAMPAIGN_SPREAD", v, sizeof v) && v[0] == '1';
     if (ts_env("TS_CAMPAIGN_LOCKWATCH", v, sizeof v) && atoi(v) > 0)
         lock_after = atoi(v);
