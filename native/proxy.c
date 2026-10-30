@@ -5,7 +5,8 @@
  * the mod's hooks: start-up fixes for today's PCs (compat.c), test-mode window handling
  * (testmode.c), gamepad support (gamepad.c) and a crash log. The exe on disk is never modified.
  *
- *   TS_LOG=<file>     the mod's log (default: ts_coop.log next to the exe)
+ *   TS_LOG=<file>     the mod's log (default: ts_coop.log next to the exe, rotated at start: ts_coop.1..4.log;
+ *                     a set TS_LOG is appended to and never rotated)
  */
 #include <windows.h>
 #include <stdarg.h>
@@ -273,6 +274,39 @@ static void WINAPI hook_FatalAppExitA(UINT action, LPCSTR msg)
     real_FatalAppExitA(action, msg);
 }
 
+/* Log rotation at start (default log only; with TS_LOG set, as the lab does, nothing is touched): keep five logs,
+ * ts_coop.log (this run) and ts_coop.1.log .. ts_coop.4.log (older runs, newest first). A previous log under
+ * 4096 bytes (a start that never left the menu) is deleted instead of rotated, so menu-only starts do not push
+ * real sessions out. A file another running copy holds open cannot be moved: then this run appends to it. */
+#define TS_LOG_KEEP 5
+#define TS_LOG_MIN_BYTES 4096
+static void log_rotate(const char *path)
+{
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &a))
+        return;                                  /* no previous log */
+    if (a.nFileSizeHigh == 0 && a.nFileSizeLow < TS_LOG_MIN_BYTES) {
+        DeleteFileA(path);
+        return;
+    }
+    size_t len = strlen(path);
+    if (len < 5 || len + 4 >= MAX_PATH)
+        return;
+    char stem[MAX_PATH], from[MAX_PATH], to[MAX_PATH];
+    memcpy(stem, path, len - 4);                 /* without ".log" */
+    stem[len - 4] = 0;
+    snprintf(to, sizeof to, "%s.%d.log", stem, TS_LOG_KEEP - 1);
+    DeleteFileA(to);
+    for (int i = TS_LOG_KEEP - 2; i >= 0; i--) {
+        if (i == 0)
+            snprintf(from, sizeof from, "%s", path);
+        else
+            snprintf(from, sizeof from, "%s.%d.log", stem, i);
+        snprintf(to, sizeof to, "%s.%d.log", stem, i + 1);
+        MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING);
+    }
+}
+
 static void load_real_dinput8(void)
 {
     char path[MAX_PATH];
@@ -294,9 +328,10 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         if (!ts_env("TS_LOG", log_path, MAX_PATH)) {
             DWORD n = GetModuleFileNameA(NULL, log_path, MAX_PATH);
             char *slash = strrchr(log_path, '\\');
-            if (n && slash && slash - log_path + 13 < MAX_PATH)
+            if (n && slash && slash - log_path + 13 < MAX_PATH) {
                 strcpy(slash + 1, "ts_coop.log");
-            else
+                log_rotate(log_path);
+            } else
                 log_path[0] = 0;
         }
         ts_log("TimeShift co-op proxy %s loaded", TS_VERSION);
