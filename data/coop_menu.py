@@ -252,6 +252,61 @@ def build(ctx):
         ('''   override OnButtonPressed("CreateGame")''', restore + '''   override OnButtonPressed("CreateGame")'''),
     ])
 
+    # ---- the pause menu of a network game: "Regroup" in a co-op session (a stranded player's way out) ----
+    # Regroup takes the Quit row's place (170) and Quit moves one row down, in a co-op session only: a second Quit button
+    # (QuitToMenuCoop) is shown instead of the first, so the stock multiplayer menu keeps its rows. The button sets the UI
+    # string CoopRegroup; native/coopsession.c polls it and calls campaign.c's regroup (host: every living client to the
+    # host's player; client: itself to the host's player) and shows a hint line.
+    ctx.edit("CacheBlock/ps/ingamemulti.ui", [
+        ('''            name        = QuitToMenu
+            posX        = center, 100%
+            posY        = 170, 30
+            text        = UI_BTN_QUIT_TO_MAIN
+         }
+''', '''            name        = QuitToMenu
+            posX        = center, 100%
+            posY        = 170, 30
+            text        = UI_BTN_QUIT_TO_MAIN
+         }
+         {
+            type        = button
+            name        = Regroup
+            posX        = center, 100%
+            posY        = 170, 30
+            text        = COOP_BTN_REGROUP
+         }
+         {
+            type        = button
+            name        = QuitToMenuCoop
+            posX        = center, 100%
+            posY        = 210, 30
+            text        = UI_BTN_QUIT_TO_MAIN
+         }
+'''),
+        ('''ssl = <<<
+   override OnButtonPressed("ResumeGame")''', '''ssl = <<<
+   // co-op mod: Regroup and the lower Quit button exist in a co-op session only
+   override OnInit
+      if $ui.GetStr("CoopSession") != ""
+         Element("QuitToMenu").Show(false)
+      else
+         Element("Regroup").Show(false)
+         Element("QuitToMenuCoop").Show(false)
+      end
+   end
+
+   override OnButtonPressed("Regroup")
+      $ui.SetStr("CoopRegroup", "1")
+      $ui.CloseMenu()
+   end
+
+   override OnButtonPressed("QuitToMenuCoop")
+      InitQuitConfirm($ui.ShowFrame("Confirmation"))
+   end
+
+   override OnButtonPressed("ResumeGame")'''),
+    ])
+
     # ---- the stock server set-up, driven by CoopStage ----
     ctx.edit("CacheBlock/ps/creategame.ui", [
         ('''   override OnButtonPressed("Back")''', '''   // co-op mod: the co-op menu's server set-up runs this frame's "Next" by itself (CoopStage)

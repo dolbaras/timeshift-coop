@@ -37,6 +37,8 @@
  *                        u8 max players, u8 len, version[len]
  *   41 client -> server  u8 proto, u8 result (0 = same version, 1 = other version), u8 len, version[len]
  *   42 client -> server  u8 proto, u8 0: "send me 40" (a client that runs the level and has no session info yet)
+ *   43 server -> client  u8 proto, u8 missing: players are missing at a gate where the host's player waits (every 3 s
+ *                        while it lasts); each machine shows its hint line (COOP_HINT_GATE_*)
  * The server sends 40 once when a client's slot is joined and ready (the client may still be loading the level)
  * and answers every 42; a client asks every 3 s (20 times at most) from the moment its player exists. Blind
  * repeats to a loading client lost the connection in a test.
@@ -83,6 +85,7 @@
 #define SUB_SESSION 40
 #define SUB_ACK 41
 #define SUB_ASK 42                           /* client -> server: "send me the session info" (u8 proto, u8 0) */
+#define SUB_GATE 43                          /* server -> client: u8 proto, u8 missing (a gate waits for players) */
 #define SUB_LAST 49
 #define PROTO 1
 #define ASK_MS 3000                          /* client: ask again every 3 s until the info arrives */
@@ -110,6 +113,16 @@ static int client_reask, reask_seq;          /* (after a level change in the ses
 /* server: one record per client id */
 static struct { int id, sends, acked, warned; DWORD at; } peers[MAX_PEERS];
 static int n_peers;
+
+/* campaign.c: the in-game Regroup (host: every living client to its player; client: itself to the host's player;
+ * -1 = not in a co-op campaign session), and the number of players missing at a gate where the host's player waits
+ * (0 = none; a weak default here until campaign.c has it). Declared here: only chunk F edits ts.h. */
+extern int campaign_regroup(void);
+__attribute__((weak)) int campaign_gate_waiting(void) { return 0; }
+
+/* client: the host's "a gate waits" message (written in the net pump, shown in the script tick) */
+static volatile LONG gate_seq, gate_missing;
+static LONG gate_handled;
 
 static LONG n_logged;
 #define CLOG(...) do { if (InterlockedIncrement(&n_logged) <= 400) ts_log(__VA_ARGS__); } while (0)
@@ -288,6 +301,9 @@ static void on_message(int peer, unsigned short sub, const unsigned char *d, int
                 send_session(i, peer, k == n_peers || peers[k].sends == 2);
                 break;
             }
+    } else if (sub == SUB_GATE && game_mode() == MODE_CLIENT && len >= 2) {
+        InterlockedExchange(&gate_missing, d[1]);
+        InterlockedIncrement(&gate_seq);
     } else if (sub == SUB_ACK && game_mode() != MODE_CLIENT && len >= 3) {
         char ver[VER_MAX + 1];
         int vl = d[2] <= len - 3 ? d[2] : len - 3;
@@ -321,6 +337,66 @@ static void check_data_version(void)
     ssl_str("return $ui.GetStr(\"CoopDataVersion\")", d, sizeof d);
     if (strcmp(d, TS_VERSION) != 0)
         CLOG("coopsession: WARNING: the mod's data is version \"%s\", this DLL %s (reinstall the mod)", d, TS_VERSION);
+}
+
+/* A line on the HUD (the game's own gameplay hint), text id of the mod's strings with the arguments after commas. */
+static void show_hint(const char *id)
+{
+    char ssl[160], out[64];
+    snprintf(ssl, sizeof ssl, "$ui.ShowGamePlayHint(\"%s\")", id);
+    ts_script_run(ssl, out, sizeof out);
+}
+
+/* The pause menu's Regroup button (data: ingamemulti.ui) sets the UI string CoopRegroup; polled 5 times a second. */
+static DWORD regroup_polled, regroup_last;
+
+static void regroup_tick(DWORD now)
+{
+    if (now - regroup_polled < 200)
+        return;
+    regroup_polled = now;
+    char v[16], out[64];
+    ssl_str("return $ui.GetStr(\"CoopRegroup\")", v, sizeof v);
+    if (v[0] != '1')
+        return;
+    ts_script_run("$ui.SetStr(\"CoopRegroup\", \"\")", out, sizeof out);
+    if (regroup_last && now - regroup_last < 3000)
+        return;   /* (a double click) */
+    regroup_last = now;
+    int n = campaign_regroup();
+    char id[48];
+    if (n < 0)
+        snprintf(id, sizeof id, "COOP_MSG_REGROUP_NONE");
+    else if (game_mode() == MODE_CLIENT)
+        snprintf(id, sizeof id, n > 0 ? "COOP_MSG_REGROUP_CLIENT" : "COOP_MSG_REGROUP_NONE");
+    else
+        snprintf(id, sizeof id, n > 0 ? "COOP_MSG_REGROUP_HOST,%d" : "COOP_MSG_REGROUP_NONE", n);
+    CLOG("coopsession: regroup pressed (%s): %d moved", game_mode() == MODE_CLIENT ? "client" : "host", n);
+    show_hint(id);
+}
+
+/* host: while a gate waits for players, every machine is told (the hint is the game's HUD line) */
+static DWORD gate_polled, gate_sent;
+
+static void gate_tick(DWORD now)
+{
+    if (now - gate_polled < 250)
+        return;
+    gate_polled = now;
+    int m = campaign_gate_waiting();
+    if (m <= 0 || (gate_sent && now - gate_sent < 3000))
+        return;
+    gate_sent = now;
+    char id[48];
+    snprintf(id, sizeof id, "COOP_HINT_GATE_HOST,%d", m);
+    show_hint(id);
+    unsigned char b[2] = {PROTO, (unsigned char)(m > 255 ? 255 : m)};
+    for (int i = 0; i < slot_count(); i++) {
+        char *s = slot_at(i);
+        if (!s || *(int *)s == 0 || (*(int *)(s + 8) & (SLOT_JOINED | SLOT_READY)) != (SLOT_JOINED | SLOT_READY))
+            continue;
+        coopnet_send(i, SUB_GATE, b, 2);
+    }
 }
 
 static void host_session_start(void)
@@ -384,6 +460,13 @@ static void server_tick(void)
 static void client_tick(void)
 {
     char out[256], ssl[300];
+    if (gate_seq != gate_handled) {
+        gate_handled = gate_seq;
+        if (gate_missing > 0) {
+            snprintf(ssl, sizeof ssl, "COOP_HINT_GATE_CLIENT,%ld", (long)gate_missing);
+            show_hint(ssl);
+        }
+    }
     if (client_reask && session_seq != reask_seq)
         client_reask = 0;   /* (the host answered: handled below like any session message) */
     if ((!got_session || client_reask) && *(void **)0x1095b30 && client_asks < MAX_ASKS
@@ -470,10 +553,13 @@ static void frame(float dt)
             n_peers = 0;
         }
     }
-    if (role == MODE_SERVER || role == MODE_DEDICATED)
+    if (role == MODE_SERVER || role == MODE_DEDICATED) {
         server_tick();
-    else if (role == MODE_CLIENT)
+        gate_tick(GetTickCount());
+    } else if (role == MODE_CLIENT)
         client_tick();
+    if (role)
+        regroup_tick(GetTickCount());
 }
 
 void coopsession_install(void)
