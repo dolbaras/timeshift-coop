@@ -162,6 +162,7 @@ typedef struct {
     const Rule *r;
     int consulted;                           /* storysync asked for this domain's verdict in this level */
     DWORD wait_since;                        /* (ALL) the host inside, somebody missing, since */
+    int missing;                             /* (ALL) clients missing while the host waits (0 = not waiting), 4 Hz */
     DWORD killed_at[16];                     /* (KILL) per slot: last kill sent (0 = the host's player) */
     unsigned char in_dom[16];                /* (KILL) per slot: inside since the last kill (a dead body stays inside;
                                                 killing it again restarted its respawn wait, seen live) */
@@ -1347,6 +1348,19 @@ static void spread_step(DWORD now)
     CLOG("campaign: after a teleport this player stood on the one in slot %d: moved to place %d around it", other, ring);
 }
 
+/* (host) clients still missing at a lift/train gate the host's player waits at right now; 0 = no gate waited at, on a
+ * client, outside a co-op campaign session (chunk E shows "waiting for N player(s)" from it) */
+int campaign_gate_waiting(void)
+{
+    int n = 0;
+    if (role() != MODE_SERVER)
+        return 0;
+    for (int k = 0; k < n_act; k++)
+        if (act[k].r->rule == R_ALL && act[k].missing > n)
+            n = act[k].missing;
+    return n;
+}
+
 /* The in-game "regroup" (E's menu entry / key calls this): the host brings every client (alive) to its player, a client
  * brings itself to the host's player. Returns the number of players moved, -1 = not in a co-op session of this module. */
 int campaign_regroup(void)
@@ -2117,19 +2131,20 @@ static void frame(float dt)
                 coopnet_send(i, SUB_KILL, &b, 1);
                 CLOG("campaign: client in slot %d inside %s: killed", i, a->r->domain);
             }
-        } else if (a->r->rule == R_ALL && gather_after > 0) {
+        } else if (a->r->rule == R_ALL) {
             int missing = 0;
             unsigned st = *(unsigned *)(dom + DOM_STATE);
             /* (an "act once" domain that has fired never enters again: the engine's test at 0x6c2e59) */
             char *desc = *(char **)(dom + DOM_DESC);
             int spent = desc && (*(unsigned char *)(desc + DESC_ACT_ONCE) & 1) && (st & 2);
             int waiting = !locked && !spent && !(st & 1) && inside(dom, PLAYER) && !clients_inside(dom, &missing);
+            a->missing = waiting ? missing : 0;
             if (!waiting)
                 a->wait_since = 0;
             else if (!a->wait_since) {
                 a->wait_since = now;
                 VLOG("campaign: %s waits for %d player(s)", a->r->domain, missing);
-            } else if (now - a->wait_since >= (DWORD)gather_after * 1000) {
+            } else if (gather_after > 0 && now - a->wait_since >= (DWORD)gather_after * 1000) {
                 a->wait_since = now;   /* (again after the same delay if somebody is still missing) */
                 gather(dom);
             }
