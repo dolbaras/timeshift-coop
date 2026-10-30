@@ -118,6 +118,8 @@ static void (TSCALL *node_pos)(void *, float *) = (void *)0x94c8e0;
 #define SUB_RIDE 74                          /* ride on this vehicle (on/off) */
 #define SUB_VEH 76                           /* vehicle transforms (either way, see veh_step) */
 #define SUB_VOICE 77                         /* server -> clients: an actor's ShowMsg / PlaySound line started */
+#define SUB_LOCKS 78                         /* server -> clients: the host's player's DisableMove / DisableInput (watchdog) */
+#define SUB_DIGEST 79                        /* dynamic actor digest (both ways, see dyn_message) */
 #define SUB_LAST 79
 #define PROTO 1
 
@@ -126,6 +128,7 @@ static int enabled, use_rules = 1, use_kill = 1, verbose;
 static int gather_after = 20;                /* s; 0 = no automatic gather */
 static int use_seats = 1, use_setspeed = 1, use_latejoin = 1, use_ai = 1, use_routes = 1;
 static float ride_height = 2.2f;             /* m above the ridden vehicle's origin */
+static int lock_after = 12;                  /* s: a lock the host's player does not have is cleared after this long */
 static LONG n_logged;
 #define CLOG(...) do { if (InterlockedIncrement(&n_logged) <= 1000) ts_log(__VA_ARGS__); } while (0)
 #define VLOG(...) do { if (verbose) CLOG(__VA_ARGS__); } while (0)
@@ -223,6 +226,12 @@ static int ent_pos(char *ent, float *pos)
 static int inside(char *dom, char *ent)
 {
     return ent && (dom_is_belong(dom, ent) & 0xff);
+}
+
+/* a player's life (+0x234, 100 at full; the same field the split screen and Continue read); dead = 0 or less */
+static int player_alive(char *ent)
+{
+    return ent && !IsBadReadPtr(ent + 0x234, 4) && *(float *)(ent + 0x234) > 0.f;
 }
 
 /* A named level object's entity, or NULL (the reference is released at once: valid for this tick). */
@@ -375,6 +384,8 @@ static int gather(char *dom)
             continue;
         if (dom && ent && inside(dom, ent))
             continue;
+        if (ent && !player_alive(ent))   /* (a dead client respawns at the checkpoint: it is pulled in when it is back) */
+            continue;
         send_gather(i, n + 1, pos, dom ? mn : NULL, dom ? mx : NULL);
         n++;
     }
@@ -432,20 +443,31 @@ static int ride_place;
 static int ride_rel;                         /* (client) 1 = keep the place relative to the vehicle taken at the start */
 static float ride_off[3];                    /* (client) that place in the vehicle's frame (right, up, forward) */
 
-static void veh_receive(const unsigned char *b, int len);
+static void veh_receive(int peer, const unsigned char *b, int len);
+static void dyn_message(int peer, const unsigned char *b, int len);
 static void voice_receive(const unsigned char *b, int len);
 static void voice_client_step(void);
+static void locks_receive(const unsigned char *b, int len);
+static void lock_step(DWORD now);
+static void spread_step(DWORD now);
 static void on_message(int peer, unsigned short sub, const unsigned char *b, int len)
 {
-    (void)peer;
     if (sub == SUB_VEH && enabled && len >= 2 && b[0] == PROTO && (role() == MODE_CLIENT || role() == MODE_SERVER)) {
-        veh_receive(b, len);
+        veh_receive(peer, b, len);
+        return;
+    }
+    if (sub == SUB_DIGEST && enabled && len >= 2 && b[0] == PROTO && (role() == MODE_CLIENT || role() == MODE_SERVER)) {
+        dyn_message(peer, b, len);
         return;
     }
     if (role() != MODE_CLIENT || len < 1 || b[0] != PROTO)
         return;
     if (sub == SUB_VOICE) {
         voice_receive(b, len);
+        return;
+    }
+    if (sub == SUB_LOCKS) {
+        locks_receive(b, len);
         return;
     }
     if (sub == SUB_GATHER && len >= 15) {
@@ -580,6 +602,8 @@ static void client_frame(void)
     if (ride_vehicle[0])
         ride_step();
     voice_client_step();
+    lock_step(GetTickCount());
+    spread_step(GetTickCount());
 }
 
 /* ---- seats and rides of the host's story events (storysync.c calls campaign_story_event on the host) ---- */
@@ -804,10 +828,20 @@ static int recording(void *obj)
     return use_latejoin && obj && obj == (void *)PLAYER && role() == MODE_SERVER;
 }
 
+/* (client) what the scripts (the host's replays included) last set on this machine's own player, for the lock watchdog */
+static int use_locks = 1, use_spread = 1;
+static struct { int move, input; DWORD move_at, input_at; } mine;
+static int tracking_client(void *obj)
+{
+    return use_locks && obj && obj == (void *)PLAYER && role() == MODE_CLIENT;
+}
+
 static void TSCALL hk_input(void *obj, int argc, Variant *argv, Variant *res, void *self)
 {
     if (recording(obj))
         hst.input = arg_bool(argc, argv, 0, 1), hst.mask |= 2;
+    else if (tracking_client(obj))
+        mine.input = arg_bool(argc, argv, 0, 1), mine.input_at = GetTickCount();
     cp_t_input(obj, argc, argv, res, self);
 }
 
@@ -815,7 +849,20 @@ static void TSCALL hk_move(void *obj, int argc, Variant *argv, Variant *res, voi
 {
     if (recording(obj))
         hst.move = arg_bool(argc, argv, 0, 1), hst.mask |= 1;
+    else if (tracking_client(obj))
+        mine.move = arg_bool(argc, argv, 0, 1), mine.move_at = GetTickCount();
     cp_t_move(obj, argc, argv, res, self);
+}
+
+/* a teleport of this machine's player (a replayed Transport): afterwards, when it stands on another player, it steps aside */
+TRAMP("cp_t_transport", "0x438a47", "0xc79190");
+extern void TSCALL cp_t_transport(void *, int, Variant *, Variant *, void *) __asm__("cp_t_transport");
+static DWORD spread_at;
+static void TSCALL hk_transport(void *obj, int argc, Variant *argv, Variant *res, void *self)
+{
+    cp_t_transport(obj, argc, argv, res, self);
+    if (use_spread && obj && obj == (void *)PLAYER && role() == MODE_CLIENT)
+        spread_at = GetTickCount() + 400;
 }
 
 static void TSCALL hk_aim(void *obj, int argc, Variant *argv, Variant *res, void *self)
@@ -887,19 +934,24 @@ static int swap_player_arg(void *obj, int argc, Variant *argv, String *saved, St
         || _stricmp(((String)argv[0].data)->s, "player") != 0)
         return 0;
     float me[3], p[3];
-    if (!ent_pos(obj, me) || !ent_pos(PLAYER, p))
+    if (!ent_pos(obj, me))
         return 0;
-    float best = (p[0] - me[0]) * (p[0] - me[0]) + (p[1] - me[1]) * (p[1] - me[1]) + (p[2] - me[2]) * (p[2] - me[2]);
+    /* the nearest LIVING player (the host's own counts as "player"); nobody alive: the call stays as the script wrote it */
+    float best = 3.4e38f;
     int best_slot = -1;
     char *best_ent = NULL;
+    if (player_alive(PLAYER) && ent_pos(PLAYER, p))
+        best = (p[0] - me[0]) * (p[0] - me[0]) + (p[1] - me[1]) * (p[1] - me[1]) + (p[2] - me[2]) * (p[2] - me[2]);
     for (int i = 0; slot_at(i); i++) {
         char *s = slot_at(i), *ent = *(char **)(s + 4);
-        if (*(int *)s == 0 || !slot_joined(s) || !ent_pos(ent, p))
+        if (*(int *)s == 0 || !slot_joined(s) || !player_alive(ent) || !ent_pos(ent, p))
             continue;
         float d = (p[0] - me[0]) * (p[0] - me[0]) + (p[1] - me[1]) * (p[1] - me[1]) + (p[2] - me[2]) * (p[2] - me[2]);
         if (d < best)
             best = d, best_slot = i, best_ent = ent;
     }
+    if (best_slot < 0)
+        return 0;   /* (the host's player is the nearest living one, or nobody lives: "player" stays) */
     char name[48];
     if (best_slot < 0 || !name_remote(best_slot, best_ent, name, sizeof name))
         return 0;
@@ -1191,9 +1243,132 @@ static void voice_client_step(void)
     vq_count = keep;
 }
 
-typedef struct { DWORD addr, seh; void *hook; int group; } Hook;   /* group 1 late join, 2 AI, 3 voice */
+/* ---- lock watchdog (client) ----
+ * A DisableMove / DisableInput a replayed story event put on this machine's player stays until the matching release
+ * arrives; a release the client missed (a replay dropped, a late join, a level restarted under it) left the player stuck
+ * for good. The host tells the clients once a second what its own player's scripts last set (message 78: move, input);
+ * a client whose own player holds a lock the host's player does not hold for `lock_after` seconds releases it itself
+ * (and again every `lock_after` seconds while the difference stays: the lock may be a counter). TS_CAMPAIGN_LOCKS=0 off,
+ * TS_CAMPAIGN_LOCKWATCH=<s> the delay (default 12). */
+static struct { int move, input; DWORD at; } host_locks;
+
+static void locks_receive(const unsigned char *b, int len)
+{
+    if (len < 3)
+        return;
+    host_locks.move = b[1];
+    host_locks.input = b[2];
+    host_locks.at = GetTickCount();
+}
+
+static void locks_send(DWORD now)   /* (host, 1 Hz) */
+{
+    static DWORD last;
+    if (!use_locks || now - last < 1000)
+        return;
+    last = now;
+    unsigned char b[4] = {PROTO, (unsigned char)hst.move, (unsigned char)hst.input, 0};
+    coopnet_send(-1, SUB_LOCKS, b, sizeof b);
+}
+
+static int lock_released;
+static void lock_step(DWORD now)
+{
+    static DWORD since_move, since_input;
+    if (!use_locks || !PLAYER || !host_locks.at || now - host_locks.at > 4000) {
+        since_move = since_input = 0;
+        return;
+    }
+    char res[120];
+    if (mine.move && !host_locks.move) {
+        if (!since_move)
+            since_move = now;
+        else if (now - since_move >= (DWORD)lock_after * 1000) {
+            since_move = now;
+            ts_script_run("$player.DisableMove(0)", res, sizeof res);
+            lock_released++;
+            CLOG("campaign: lock watchdog: movement locked for %d s, the host's player is free: released (%s)", lock_after, res);
+        }
+    } else
+        since_move = 0;
+    if (mine.input && !host_locks.input) {
+        if (!since_input)
+            since_input = now;
+        else if (now - since_input >= (DWORD)lock_after * 1000) {
+            since_input = now;
+            ts_script_run("$player.DisableInput(0)", res, sizeof res);
+            lock_released++;
+            CLOG("campaign: lock watchdog: input locked for %d s, the host's player is free: released (%s)", lock_after, res);
+        }
+    } else
+        since_input = 0;
+}
+
+/* ---- spread teleports (client) ----
+ * A replayed Transport puts every player on the same locator; a client that finds itself on another player's body
+ * 0.4 s after its own teleport steps to its own place around that player (0.7 m ring, as the gather does; ring = its
+ * number among the joined clients). */
+#define NET_CLIENT_OBJ (*(char **)0xfcab38)
+static int spread_count;
+static void spread_step(DWORD now)
+{
+    if (!spread_at || (int)(now - spread_at) < 0)
+        return;
+    spread_at = 0;
+    char *pl = PLAYER, *gm = GAME_MODE_OBJ, *nc = NET_CLIENT_OBJ;
+    float me[3], ap[3];
+    if (!pl || !gm || !nc || !ent_pos(pl, me))
+        return;
+    int myid = *(int *)(nc + 0x2c), ring = 0, k = 0, other = -1;
+    for (int i = 0; slot_at(i); i++) {
+        char *s = slot_at(i);
+        if (*(int *)s == 0 || !*(char **)(s + 4))   /* (a client sees no "joined" flags in the slots: players with a body count) */
+            continue;
+        k++;
+        if (*(int *)s == myid)
+            ring = k;
+    }
+    for (int i = 0; slot_at(i); i++) {
+        char *s = slot_at(i), *ent = *(char **)(s + 4);
+        float q[3];
+        if (!ent || ent == pl || *(int *)s == myid || !ent_pos(ent, q))
+            continue;
+        if ((q[0] - me[0]) * (q[0] - me[0]) + (q[2] - me[2]) * (q[2] - me[2]) < 0.45f * 0.45f && fabsf(q[1] - me[1]) < 2.0f) {
+            memcpy(ap, q, sizeof ap);
+            other = i;
+            break;
+        }
+    }
+    if (other < 0 || ring < 1)
+        return;
+    ap[1] -= 0.3f;   /* (place_local lifts by 0.3 m) */
+    place_local(ap, ring, NULL, NULL);
+    spread_count++;
+    CLOG("campaign: after a teleport this player stood on the one in slot %d: moved to place %d around it", other, ring);
+}
+
+/* The in-game "regroup" (E's menu entry / key calls this): the host brings every client (alive) to its player, a client
+ * brings itself to the host's player. Returns the number of players moved, -1 = not in a co-op session of this module. */
+int campaign_regroup(void)
+{
+    int r = role();
+    if (r == MODE_SERVER)
+        return gather(NULL);
+    if (r == MODE_CLIENT) {
+        char *s = slot_at(0);
+        float pos[3];
+        if (!s || *(int *)s != 0 || !ent_pos(*(char **)(s + 4), pos))
+            return 0;
+        place_local(pos, 1, NULL, NULL);
+        return 1;
+    }
+    return -1;
+}
+
+typedef struct { DWORD addr, seh; void *hook; int group; } Hook;   /* group 1 late join / lock watchdog, 2 AI, 3 voice, 4 spread teleports */
 static const Hook hooks[] = {
     {0x647d40, 0xc7eba8, (void *)hk_showmsg, 3}, {0x6478e0, 0xc7ec28, (void *)hk_playsnd, 3},
+    {0x438a40, 0xc79190, (void *)hk_transport, 4},
     {0x438d40, 0xc67c78, (void *)hk_input, 1}, {0x438e90, 0xc67c48, (void *)hk_move, 1},
     {0x439040, 0xc79130, (void *)hk_tc, 1},    {0x43a140, 0xc67a38, (void *)hk_wpn, 1},
     {0x666d90, 0xc69418, (void *)hk_aim, 1},
@@ -1512,9 +1687,17 @@ static void veh_send(DWORD now)
     }
 }
 
-static void veh_receive(const unsigned char *b, int len)
+static void veh_receive(int peer, const unsigned char *b, int len)
 {
     DWORD now = GetTickCount();
+    if (role() == MODE_SERVER) {   /* (a vehicle a client drives: the other clients get it from the host) */
+        for (int i = 0; slot_at(i); i++) {
+            char *s = slot_at(i);
+            if (*(int *)s == 0 || *(int *)s == peer || !slot_joined(s))
+                continue;
+            coopnet_send(i, SUB_VEH, b, len);
+        }
+    }
     veh_msgs_in++;
     if (veh_msgs_in <= 5 || (veh_msgs_in % 200) == 0)
         CLOG("campaign: vehicle message %d in: %d vehicle(s), %d byte(s)", veh_msgs_in, b[1], len);
@@ -1618,6 +1801,263 @@ static void veh_step(DWORD now)
     veh_apply(now);
 }
 
+/* ---- dynamic actor digest (TS_CAMPAIGN_DIGEST, default on; TS_CAMPAIGN_DIGEST_FIX=0: log only) ----
+ * Doors, lifts, machinery and other animated `dynamic` actors run from the replayed story events on every machine
+ * and nothing checks that they still agree (only the rewind pushes clip and time). Every 4 s the host hashes the state
+ * of every named dynamic actor that has a clip - clip index, running, cycle flag, and for a stopped clip its time to half a
+ * second - into 16 buckets (by name hash) and sends the 16 hashes (message 79 type 0). A client scans its own actors, and
+ * a bucket that differs in two rounds in a row (a clip that ends a moment apart is not a difference) is asked for
+ * (type 1); the host answers with the bucket's entries (type 2: name hash, clip, flags, time); the client logs every
+ * actor that differs ("digest: <name> host clip c ...") and puts it into the host's state: Start(clip index, time, cycle)
+ * (the engine's 0x6aaea0 with esi = the entity: what the script's Start ends in) and Stop() when the host's clip is
+ * stopped. Vehicles (their own stream), players and AI are left out. `!cp dyn` shows the counters. */
+#define DYN_VSLOT 0x204
+#define DYN_START 0x6a9fb0
+#define MAX_DYN 2000
+#define DYN_B 16
+typedef struct { unsigned hash; char *ent; int clip; unsigned char run, cyc; float t; } Dyn;
+static Dyn dyn[MAX_DYN];
+static int n_dyn, use_digest = 1, digest_fix = 1;
+static int dyn_miss[DYN_B], dyn_seq, dyn_rounds, dyn_requests, dyn_bad, dyn_fixed, dyn_details, dyn_sent;
+static unsigned dyn_host_bh[DYN_B], dyn_own_bh[DYN_B];
+static int dyn_pending;                      /* (client) a digest from the host waits for the next frame */
+static unsigned char dyn_det_buf[8][250];    /* (client) detail messages that arrived (processed in the frame) */
+static int dyn_det_len[8], dyn_det_n;
+static int dyn_req_bucket[DYN_B], dyn_req_peer[DYN_B], dyn_req_n;   /* (host) requests waiting for the frame */
+static DWORD dyn_ready_at, dyn_next_at;
+static int (TSCALL *dyn_node_clip)(void *) = (void *)0x951660;
+static float (TSCALL *dyn_node_time)(void *) = (void *)0x951500;
+static const DWORD fn_anim_start = 0x6aaea0;
+
+static unsigned dyn_state(const Dyn *d)
+{
+    unsigned t = d->run ? 0u : (unsigned)(int)(d->t * 2.f + 0.5f) & 0x3fff;   /* (a running clip: its time differs by the lag) */
+    return ((unsigned)d->clip & 0xffff) | ((unsigned)d->run << 16) | ((unsigned)d->cyc << 17) | (t << 18);
+}
+
+static unsigned dyn_mix(const Dyn *d)
+{
+    unsigned h = d->hash * 2654435761u;
+    h ^= dyn_state(d) * 40503u + 12345u;
+    return h * 2246822519u + (h >> 13);
+}
+
+static void dyn_scan(void)
+{
+    n_dyn = 0;
+    char *b = ENT_BUCKETS;
+    int nb = ENT_NBUCKETS;
+    for (int i = 0; b && i < nb; i++)
+        for (char *o = *(char **)(b + i * 12); o; ) {
+            void **vt = !IsBadReadPtr(o, 0x284) ? *(void ***)o : NULL;
+            if (vt && n_dyn < MAX_DYN && !IsBadReadPtr(vt, DYN_VSLOT + 4) && vt[DYN_VSLOT / 4] == (void *)DYN_START && !is_vehicle(o)) {
+                void *inst = *(void **)(o + ENT_INST);
+                String nm = inst && !((DWORD)inst & 3) && !IsBadReadPtr(inst, INST_NAME + 4) ? *(String *)((char *)inst + INST_NAME) : NULL;
+                char *node = *(char **)(o + ENT_NODE);
+                if (nm && !IsBadReadPtr(nm, 8) && !IsBadStringPtrA(nm->s, 200) && nm->s[0] && node && !IsBadReadPtr(node, 0x88)) {
+                    int clip = dyn_node_clip(node);
+                    if (clip >= 0) {
+                        Dyn *d = &dyn[n_dyn++];
+                        unsigned fl = *(unsigned *)(o + 0x280);
+                        d->hash = name_hash(nm->s);
+                        d->ent = o;
+                        d->clip = clip;
+                        d->run = (fl & 1) != 0;
+                        d->cyc = (fl & 0x10) != 0;
+                        d->t = dyn_node_time(node);
+                    }
+                }
+            }
+            char *next = *(char **)(o + 8);
+            o = next ? next - 4 : NULL;
+        }
+}
+
+static void dyn_buckets(unsigned *bh, int *cnt)
+{
+    memset(bh, 0, DYN_B * sizeof *bh);
+    if (cnt)
+        memset(cnt, 0, DYN_B * sizeof *cnt);
+    for (int i = 0; i < n_dyn; i++) {
+        int k = (int)((dyn[i].hash >> 4) % DYN_B);
+        bh[k] += dyn_mix(&dyn[i]);
+        if (cnt)
+            cnt[k]++;
+    }
+}
+
+static void dyn_set_state(char *ent, int clip, float t, int cyc, int run)
+{
+    char *e = ent;
+    unsigned tb;
+    memcpy(&tb, &t, 4);
+    __asm__ volatile("pushl %[c]\n\tpushl %[t]\n\tpushl %[i]\n\tcall *%[fn]"
+                     : "+S"(e)
+                     : [c] "m"(cyc), [t] "m"(tb), [i] "m"(clip), [fn] "m"(fn_anim_start)
+                     : "eax", "ecx", "edx", "memory", "cc", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7");
+    if (!run) {
+        char ssl[160], res[100];
+        snprintf(ssl, sizeof ssl, "$%s.Stop()", ent_name(ent));
+        ts_script_run(ssl, res, sizeof res);
+    }
+}
+
+/* message 79: {u8 1, u8 type, ...}
+ *   0 host -> clients {u8 seq, u8 16, 16 x u32 bucket hash}
+ *   1 client -> host  {u8 bucket}
+ *   2 host -> client  {u8 bucket, u8 n, n x {u32 name hash, u16 clip, u8 flags (1 runs, 2 cycle), f32 time}} (n <= 18) */
+static void dyn_message(int peer, const unsigned char *b, int len)
+{
+    int r = role();
+    if (!use_digest)
+        return;
+    if (b[1] == 0 && r == MODE_CLIENT && len >= 4 + DYN_B * 4) {
+        memcpy(dyn_host_bh, b + 4, DYN_B * 4);
+        dyn_pending = 1;
+    } else if (b[1] == 1 && r == MODE_SERVER && len >= 3 && b[2] < DYN_B && dyn_req_n < DYN_B) {
+        dyn_req_bucket[dyn_req_n] = b[2];
+        dyn_req_peer[dyn_req_n++] = peer;
+    } else if (b[1] == 2 && r == MODE_CLIENT && len >= 4 && dyn_det_n < 8) {
+        memcpy(dyn_det_buf[dyn_det_n], b, len < 250 ? len : 250);
+        dyn_det_len[dyn_det_n++] = len < 250 ? len : 250;
+    }
+}
+
+static void dyn_send_detail(int peer, int bucket)
+{
+    int slot = -1;
+    for (int i = 0; slot_at(i); i++)
+        if (*(int *)slot_at(i) == peer)
+            slot = i;
+    if (slot < 0)
+        return;
+    unsigned char m[250];
+    int n = 0, cnt = 0;
+    for (int i = 0; i < n_dyn; i++) {
+        if ((int)((dyn[i].hash >> 4) % DYN_B) != bucket)
+            continue;
+        if (!n) {
+            m[0] = PROTO, m[1] = 2, m[2] = (unsigned char)bucket, m[3] = 0;
+            n = 4;
+        }
+        unsigned short c = (unsigned short)dyn[i].clip;
+        unsigned char fl = (unsigned char)(dyn[i].run | (dyn[i].cyc << 1));
+        memcpy(m + n, &dyn[i].hash, 4);
+        memcpy(m + n + 4, &c, 2);
+        m[n + 6] = fl;
+        memcpy(m + n + 7, &dyn[i].t, 4);
+        n += 11;
+        cnt++;
+        if (cnt == 18) {
+            m[3] = (unsigned char)cnt;
+            coopnet_send(slot, SUB_DIGEST, m, n);
+            dyn_sent++;
+            n = 0;
+            cnt = 0;
+        }
+    }
+    if (cnt) {
+        m[3] = (unsigned char)cnt;
+        coopnet_send(slot, SUB_DIGEST, m, n);
+        dyn_sent++;
+    }
+}
+
+static void dyn_step(DWORD now)
+{
+    static int was_running;
+    int running = (GAME_FLAGS & FLAG_LEVEL_RUNNING) != 0, r = role();
+    if (!use_digest || !r)
+        return;
+    if (running && !was_running) {   /* a level (or a team restart) is up: give it time to settle */
+        dyn_ready_at = now + 20000;
+        memset(dyn_miss, 0, sizeof dyn_miss);
+        dyn_seq = 0;
+    }
+    was_running = running;
+    if (!running || (int)(now - dyn_ready_at) < 0)
+        return;
+    if (r == MODE_SERVER) {
+        if (dyn_req_n) {   /* (requests first: the scan of this frame serves them) */
+            dyn_scan();
+            for (int i = 0; i < dyn_req_n; i++)
+                dyn_send_detail(dyn_req_peer[i], dyn_req_bucket[i]);
+            dyn_req_n = 0;
+        }
+        if ((int)(now - dyn_next_at) < 0)
+            return;
+        dyn_next_at = now + 4000;
+        dyn_scan();
+        unsigned bh[DYN_B];
+        dyn_buckets(bh, NULL);
+        unsigned char m[4 + DYN_B * 4] = {PROTO, 0, (unsigned char)dyn_seq++, DYN_B};
+        memcpy(m + 4, bh, sizeof bh);
+        if (coopnet_send(-1, SUB_DIGEST, m, sizeof m) > 0)
+            dyn_sent++;
+        return;
+    }
+    /* client */
+    if (dyn_pending) {
+        dyn_pending = 0;
+        dyn_scan();
+        int cnt[DYN_B];
+        dyn_buckets(dyn_own_bh, cnt);
+        dyn_rounds++;
+        for (int k = 0; k < DYN_B; k++) {
+            if (dyn_own_bh[k] == dyn_host_bh[k]) {
+                dyn_miss[k] = 0;
+                continue;
+            }
+            dyn_miss[k]++;
+            VLOG("campaign: digest: bucket %d differs (%d actors here), round %d in a row", k, cnt[k], dyn_miss[k]);
+            if (dyn_miss[k] >= 2 && (dyn_miss[k] % 2) == 0) {
+                unsigned char m[3] = {PROTO, 1, (unsigned char)k};
+                coopnet_send(-1, SUB_DIGEST, m, sizeof m);
+                dyn_requests++;
+            }
+        }
+    }
+    while (dyn_det_n) {
+        const unsigned char *m = dyn_det_buf[--dyn_det_n];
+        int len = dyn_det_len[dyn_det_n], nn = m[3];
+        dyn_scan();
+        dyn_details++;
+        for (int j = 0; j < nn && 4 + (j + 1) * 11 <= len; j++) {
+            unsigned h;
+            unsigned short c;
+            float t;
+            memcpy(&h, m + 4 + j * 11, 4);
+            memcpy(&c, m + 8 + j * 11, 2);
+            unsigned char fl = m[10 + j * 11];
+            memcpy(&t, m + 11 + j * 11, 4);
+            Dyn *d = NULL;
+            for (int i = 0; i < n_dyn; i++)
+                if (dyn[i].hash == h)
+                    d = &dyn[i];
+            if (!d) {
+                dyn_bad++;
+                if (dyn_bad <= 200)
+                    CLOG("campaign: digest: actor %08x (clip %d, %s) of the host is not here (no clip, or not created)", h, c,
+                         fl & 1 ? "runs" : "stopped");
+                continue;
+            }
+            int run = fl & 1, cyc = (fl >> 1) & 1;
+            int differs = d->clip != c || d->run != run || d->cyc != cyc || (!run && fabsf(d->t - t) > 0.6f);
+            if (!differs)
+                continue;
+            dyn_bad++;
+            if (dyn_bad <= 200)
+                CLOG("campaign: digest: %s host clip %d %s%s t %.2f, here clip %d %s%s t %.2f%s", ent_name(d->ent), c,
+                     run ? "runs" : "stopped", cyc ? " cycle" : "", (double)t, d->clip, d->run ? "runs" : "stopped",
+                     d->cyc ? " cycle" : "", (double)d->t, digest_fix ? ": set to the host's" : "");
+            if (digest_fix) {
+                dyn_set_state(d->ent, c, t, cyc, run);
+                dyn_fixed++;
+            }
+        }
+    }
+}
+
 /* ---- per frame (host) ---- */
 static void frame(float dt)
 {
@@ -1628,6 +2068,7 @@ static void frame(float dt)
     if (r == MODE_CLIENT) {
         client_frame();
         veh_step(now);
+        dyn_step(now);
         return;
     }
     if (r != MODE_SERVER) {
@@ -1635,6 +2076,8 @@ static void frame(float dt)
         return;
     }
     veh_step(now);
+    dyn_step(now);
+    locks_send(now);
     if (use_latejoin)
         latejoin_step(now);
     if (use_seats) {
@@ -1763,17 +2206,34 @@ int campaign_console(const char *text, char *out, int size)
         return 1;
     }
     if (!strcmp(cmd, "regroup")) {
-        if (r == MODE_SERVER)
-            return snprintf(out, size, "%d client(s) sent to the host", gather(NULL)), 1;
-        if (r == MODE_CLIENT) {
-            char *s = slot_at(0);
-            float pos[3];
-            if (!s || *(int *)s != 0 || !ent_pos(*(char **)(s + 4), pos))
-                return snprintf(out, size, "the host's player is not known here"), 1;
-            place_local(pos, 1, NULL, NULL);
-            return snprintf(out, size, "moved to the host (%.1f %.1f %.1f)", pos[0], pos[1], pos[2]), 1;
+        int n = campaign_regroup();
+        if (n < 0)
+            return snprintf(out, size, "not in a co-op session with the story on (or TS_CAMPAIGN is off)"), 1;
+        return snprintf(out, size, r == MODE_SERVER ? "%d client(s) sent to the host" : "moved to the host (%d)", n), 1;
+    }
+    if (!strcmp(cmd, "dyn")) {   /* "!cp dyn": the digest's counters and this machine's bucket hashes (lab) */
+        dyn_scan();
+        int cnt[DYN_B];
+        unsigned bh[DYN_B];
+        dyn_buckets(bh, cnt);
+        int n = snprintf(out, size, "digest %s fix %s: %d actors, rounds %d, requests %d, details %d, sent %d, differing %d, fixed %d; buckets:",
+                         use_digest ? "on" : "off", digest_fix ? "on" : "log only", n_dyn, dyn_rounds, dyn_requests, dyn_details, dyn_sent,
+                         dyn_bad, dyn_fixed);
+        for (int k = 0; k < DYN_B && n < size - 30; k++)
+            n += snprintf(out + n, size - n, " %d:%d/%08x", k, cnt[k], bh[k]);
+        return 1;
+    }
+    if (!strcmp(cmd, "life")) {   /* "!cp life": the life of every player this machine knows, the locks seen (lab) */
+        int n = snprintf(out, size, "me %.1f;", PLAYER ? (double)*(float *)(PLAYER + 0x234) : -1.0);
+        for (int i = 0; slot_at(i) && n < size - 60; i++) {
+            char *s = slot_at(i), *ent = *(char **)(s + 4);
+            n += snprintf(out + n, size - n, " slot %d id %d joined %d life %.1f;", i, *(int *)s, slot_joined(s),
+                          ent && !IsBadReadPtr(ent + 0x234, 4) ? (double)*(float *)(ent + 0x234) : -1.0);
         }
-        return snprintf(out, size, "not in a co-op session with the story on (or TS_CAMPAIGN is off)"), 1;
+        n += snprintf(out + n, size - n, " locks mine move %d input %d, host's %d/%d (%lu ms ago), released %d, spread %d", mine.move, mine.input,
+                      host_locks.move, host_locks.input, host_locks.at ? (unsigned long)(GetTickCount() - host_locks.at) : 0UL,
+                      lock_released, spread_count);
+        return 1;
     }
     if (!strcmp(cmd, "pos")) {   /* "!cp pos <object> [object2]": positions of named objects (lab) */
         char a2[128] = "";
@@ -1812,6 +2272,47 @@ int campaign_console(const char *text, char *out, int size)
                       *(unsigned *)(node + 0xc), *(void **)(e + VEH_USER));
         for (int o = 0x08; o < 0x80 && n < size - 16; o += 4)
             n += snprintf(out + n, size - n, " %x:%.2f", o, (double)*(float *)(node + o));
+        return 1;
+    }
+    if (!strcmp(cmd, "loadout")) {   /* "!cp loadout": weapon slots, ammunition, life, time energy of this machine's player; the host also lists the clients' bodies (lab) */
+        char *pl = PLAYER;
+        float total = -1.f;
+        int mag = -1;
+        int n = 0;
+        if (pl && !IsBadReadPtr(pl + 0x3a8, 12)) {
+            split_ammo_get((unsigned char *)pl, &total, &mag);
+            n += snprintf(out + n, size - n, "mine: slots %d %d %d ammo %.0f/%d life %.1f energy %.2f", *(int *)(pl + 0x3a8), *(int *)(pl + 0x3ac),
+                          *(int *)(pl + 0x3b0), (double)total, mag, (double)*(float *)(pl + 0x234), (double)*(float *)(pl + 0x2ac));
+        } else
+            n += snprintf(out + n, size - n, "mine: no player");
+        for (int i = 0; slot_at(i) && n < size - 120; i++) {
+            char *s2 = slot_at(i), *ent = *(char **)(s2 + 4);
+            if (!ent || ent == pl || IsBadReadPtr(ent + 0x3a8, 12))
+                continue;
+            n += snprintf(out + n, size - n, "; slot %d id %d body: slots %d %d %d life %.1f", i, *(int *)s2, *(int *)(ent + 0x3a8),
+                          *(int *)(ent + 0x3ac), *(int *)(ent + 0x3b0), (double)*(float *)(ent + 0x234));
+        }
+        return 1;
+    }
+    if (!strcmp(cmd, "vslot")) {   /* "!cp vslot <object> <hex slot offset> ...": the entity's vtable and the functions at those offsets (lab) */
+        char *e = find_ent(a1);
+        if (!e)
+            return snprintf(out, size, "%s: none", a1), 1;
+        void **vt = *(void ***)e;
+        int n = snprintf(out, size, "%s vt %p:", a1, (void *)vt);
+        const char *p = text + 3;
+        char tok[32];
+        int skip = 2;
+        while (sscanf(p, " %31s", tok) == 1) {
+            p = strstr(p, tok) + strlen(tok);
+            if (skip) {
+                skip--;
+                continue;
+            }
+            unsigned o = (unsigned)strtoul(tok, NULL, 16);
+            if (o < 0x800 && n < size - 30)
+                n += snprintf(out + n, size - n, " +%x=%p", o, vt[o / 4]);
+        }
         return 1;
     }
     if (!strcmp(cmd, "nodeset")) {   /* "!cp nodeset <object> <hex offset> x y z" (lab) */
@@ -2041,6 +2542,12 @@ void campaign_install(void)
     use_ai = !(ts_env("TS_CAMPAIGN_AI", v, sizeof v) && v[0] == '0');
     use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
     use_voice = !(ts_env("TS_CAMPAIGN_VOICE", v, sizeof v) && v[0] == '0');
+    use_digest = !(ts_env("TS_CAMPAIGN_DIGEST", v, sizeof v) && v[0] == '0');
+    digest_fix = !(ts_env("TS_CAMPAIGN_DIGEST_FIX", v, sizeof v) && v[0] == '0');
+    use_locks = !(ts_env("TS_CAMPAIGN_LOCKS", v, sizeof v) && v[0] == '0');
+    use_spread = !(ts_env("TS_CAMPAIGN_SPREAD", v, sizeof v) && v[0] == '0');
+    if (ts_env("TS_CAMPAIGN_LOCKWATCH", v, sizeof v) && atoi(v) > 0)
+        lock_after = atoi(v);
     voice_log = ts_env("TS_CAMPAIGN_VOICELOG", v, sizeof v) && v[0] == '1';
     use_vehsync = !(ts_env("TS_CAMPAIGN_VEHSYNC", v, sizeof v) && v[0] == '0');
     if (ts_env("TS_CAMPAIGN_RIDE_HEIGHT", v, sizeof v))
@@ -2067,7 +2574,8 @@ void campaign_install(void)
     }
     for (int i = 0; i < N_HOOKS; i++) {
         const Hook *h = &hooks[i];
-        if ((h->group == 1 && !use_latejoin) || (h->group == 2 && !use_ai) || (h->group == 3 && !use_voice))
+        if ((h->group == 1 && !use_latejoin && !use_locks) || (h->group == 2 && !use_ai) || (h->group == 3 && !use_voice)
+            || (h->group == 4 && !use_spread))
             continue;
         unsigned char want[7] = {0x6a, 0xff, 0x68}, rep[7];
         memcpy(want + 3, &h->seh, 4);
