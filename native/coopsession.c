@@ -116,9 +116,9 @@ static int n_peers;
 
 /* campaign.c: the in-game Regroup (host: every living client to its player; client: itself to the host's player;
  * -1 = not in a co-op campaign session), and the number of players missing at a gate where the host's player waits
- * (0 = none; a weak default here until campaign.c has it). Declared here: only chunk F edits ts.h. */
+ * (0 = none). Declared here until ts.h lists them. */
 extern int campaign_regroup(void);
-__attribute__((weak)) int campaign_gate_waiting(void) { return 0; }
+extern int campaign_gate_waiting(void);
 
 /* client: the host's "a gate waits" message (written in the net pump, shown in the script tick) */
 static volatile LONG gate_seq, gate_missing;

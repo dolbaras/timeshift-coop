@@ -38,14 +38,21 @@ the game with the "TimeShift Co-op" shortcut (it updates the mod by itself). Det
 
 ## Requirements
 
-- TimeShift **patch 1.2** (the retail exe the mod is made for). Other exe builds (e.g. Steam) are not supported yet:
-  the installer refuses them rather than risk a broken game.
+- TimeShift **patch 1.2** (the mod is made for the code of the 1.2 `bin\TimeShift.exe`; the community's pre-patched
+  build of it is accepted too). **Steam** copies are version 1.0 (Steam never got the update): the installer asks for the
+  community package "TimeShift Update 1.2 (Steam)" that you download yourself (PCGamingWiki, ModDB), checks it, keeps every
+  file it replaces and puts them back on uninstall. That path was tested on a simulated Steam folder and with the
+  package's files, not on a real Steam installation. An exe of another version is refused, changing nothing.
 - Windows 10/11. No Python or other tools: the installer brings what it needs.
+- Languages: the installer and the shortcut's launcher follow Windows' language (English, Russian, German, French, Spanish,
+  Italian); the game's menus have the game's nine languages.
 
 ## For developers
 
 - `native/` — the proxy `dinput8.dll` (C, built with `zig cc`, `native/build.sh`): every engine change is a hook in
-  memory; the game files are never patched on disk.
+  memory. The one change made to a game file on disk is the installer's: it sets the large-address-aware flag in the
+  PE header of `bin\TimeShift.exe` (a copy of the original is kept in `coop-backup` and put back on uninstall); on a
+  Steam copy it also applies the player's own 1.2 update package, with the same backup.
 - `data/` — recipes that edit the player's own archives at install time (`tools/build_pak.py`); this repository holds
   **no game files**.
 - `tools/` — installer, launcher, packaging, archive tools.
@@ -94,8 +101,13 @@ License: MIT (see `LICENSE`). TimeShift is a trademark of its owners; this proje
 
 ## Требования
 
-- TimeShift **с патчем 1.2** (розничный exe, под который сделан мод). Другие сборки exe (например, Steam) пока не
-  поддерживаются: установщик откажется ставиться, чтобы не сломать игру.
+- TimeShift **с патчем 1.2** (мод сделан для кода `bin\TimeShift.exe` версии 1.2; готовая сборка сообщества на его
+  основе тоже принимается). Копии **Steam** - версии 1.0 (обновления в Steam так и не было): установщик просит пакет
+  сообщества «TimeShift Update 1.2 (Steam)», который вы скачиваете сами (PCGamingWiki, ModDB), проверяет его,
+  сохраняет каждый заменяемый файл и возвращает их при удалении. Этот путь проверен на имитации папки Steam и на
+  файлах самого пакета, но не на настоящей установке Steam. Exe другой версии отклоняется, ничего не меняя.
 - Windows 10/11. Python и другие программы не нужны: установщик несёт всё нужное с собой.
+- Языки: установщик и запуск по ярлыку следуют языку Windows (английский, русский, немецкий, французский,
+  испанский, итальянский); меню игры - на девяти языках игры.
 
 Лицензия: MIT (см. `LICENSE`). TimeShift — товарный знак своих владельцев; проект с ними не связан.

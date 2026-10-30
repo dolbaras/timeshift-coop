@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Players' guide (FAQ, firewall, VPN, saves)
+    url: https://github.com/dolbaras/timeshift-coop/blob/main/docs/release-readme.txt
+    about: The README-COOP.txt in the release archive has a FAQ for the usual network and install problems.
