@@ -830,7 +830,7 @@ static int recording(void *obj)
 }
 
 /* (client) what the scripts (the host's replays included) last set on this machine's own player, for the lock watchdog */
-static int use_locks = 1, use_spread = 1;
+static int use_locks = 1, use_spread;   /* (spread teleports: off, the engine pushes stacked bodies apart itself, see the audit) */
 static struct { int move, input; DWORD move_at, input_at; } mine;
 static int tracking_client(void *obj)
 {
@@ -1007,7 +1007,7 @@ static char *split_p2(void) { return (char *)split_player2(); }
 
 static int voice_skip_name(const char *n)
 {
-    return !n[0] || !strncmp(n, "snd", 3) || !strncmp(n, "music", 5) || !strncmp(n, "Music", 5);
+    return !n[0] || !strncmp(n, "snd", 3) || !strncmp(n, "sound", 5) || !strncmp(n, "music", 5) || !strncmp(n, "Music", 5);
 }
 
 static int is_player_ent(char *e)
@@ -1560,6 +1560,19 @@ int campaign_replay_wait(const char *obj, const char *ev)
 #define VEH_METHOD_SLOT 0x78
 #define VEH_METHOD 0x51c160
 #define VEH_USER 0x9c0
+#define PLAYER_USED 0x23c                    /* player vtable: the object the player uses / is attached to (what InBike() asks) */
+/* The vehicle this machine's player is on: the player's own answer (InBike(): vtable +0x23c; a quad attached by the level
+ * script, `$start_bike.AttachPlayer()`, has no user in +0x9c0), or the vehicle that names the player as its user. */
+static int veh_is_mine(char *ent)
+{
+    char *pl = PLAYER;
+    if (!pl || !ent)
+        return 0;
+    if (*(char **)(ent + VEH_USER) == pl)
+        return 1;
+    void **vt = IsBadReadPtr(pl, 4) ? NULL : *(void ***)pl;
+    return vt && ((char *(TSCALL *)(void *))vt[PLAYER_USED / 4])(pl) == ent;
+}
 static int is_vehicle(char *o)
 {
     void **vt = o && !IsBadReadPtr(o, VEH_USER + 4) ? *(void ***)o : NULL;
@@ -1649,8 +1662,8 @@ static int veh_mine(Veh *v, DWORD now)
     if (!v->ent)
         return 0;
     if (role() == MODE_CLIENT)
-        return PLAYER && *(char **)(v->ent + VEH_USER) == PLAYER;
-    return (PLAYER && *(char **)(v->ent + VEH_USER) == PLAYER) || !v->have || now - v->b_at > 1000;   /* (host: unless a
+        return veh_is_mine(v->ent);
+    return veh_is_mine(v->ent) || !v->have || now - v->b_at > 1000;   /* (host: unless a
                                                                                     * client drives it) */
 }
 
@@ -1980,9 +1993,16 @@ static void dyn_send_detail(int peer, int bucket)
 static void dyn_step(DWORD now)
 {
     static int was_running;
-    int running = (GAME_FLAGS & FLAG_LEVEL_RUNNING) != 0, r = role();
+    static char seen_level[0x110];
+    int r = role();
     if (!use_digest || !r)
         return;
+    /* (the host's "level running" flag is not set on a client: there the player's existence says the level runs) */
+    int running = r == MODE_SERVER ? (GAME_FLAGS & FLAG_LEVEL_RUNNING) != 0 : PLAYER != NULL && LEVEL_NAME[0];
+    if (running && strcmp(seen_level, LEVEL_NAME) != 0) {
+        snprintf(seen_level, sizeof seen_level, "%s", LEVEL_NAME);
+        was_running = 0;
+    }
     if (running && !was_running) {   /* a level (or a team restart) is up: give it time to settle */
         dyn_ready_at = now + 20000;
         memset(dyn_miss, 0, sizeof dyn_miss);
@@ -2309,6 +2329,30 @@ int campaign_console(const char *text, char *out, int size)
         }
         return 1;
     }
+    if (!strcmp(cmd, "wpn")) {   /* "!cp wpn": the raw weapon records 0..3 of this machine's player (lab: where the weapon types live) */
+        char *pl = PLAYER;
+        if (!pl || IsBadReadPtr(pl, 4))
+            return snprintf(out, size, "no player"), 1;
+        unsigned char *set = ((unsigned char *(TSCALL *)(void *))(*(void ***)pl)[0x248 / 4])(pl);
+        if (!set || IsBadReadPtr(set, 8) || IsBadReadPtr(*(unsigned char **)(set + 4), 8))
+            return snprintf(out, size, "no weapon set %p", (void *)set), 1;
+        unsigned char *vb = set + 4 + *(int *)(*(unsigned char **)(set + 4) + 4);
+        if (IsBadReadPtr(vb, 4) || IsBadReadPtr(*(void **)vb, 0x50))
+            return snprintf(out, size, "no weapon base"), 1;
+        int n = snprintf(out, size, "set %p:", (void *)set);
+        for (int w = 0; w < 4 && n < size - 120; w++) {
+            unsigned char *rec = ((unsigned char *(TSCALL *)(void *, int))(*(void ***)vb)[0x4c / 4])(vb, w);
+            if (!rec || IsBadReadPtr(rec, 0x24)) {
+                n += snprintf(out + n, size - n, " [%d] none;", w);
+                continue;
+            }
+            n += snprintf(out + n, size - n, " [%d]", w);
+            for (int k = 0; k < 9; k++)
+                n += snprintf(out + n, size - n, " %x", *(unsigned *)(rec + k * 4));
+            n += snprintf(out + n, size - n, ";");
+        }
+        return 1;
+    }
     if (!strcmp(cmd, "vslot")) {   /* "!cp vslot <object> <hex slot offset> ...": the entity's vtable and the functions at those offsets (lab) */
         char *e = find_ent(a1);
         if (!e)
@@ -2373,7 +2417,7 @@ int campaign_console(const char *text, char *out, int size)
             if (v->ent)
                 ent_pos(v->ent, pos);
             n += snprintf(out + n, size - n, " %s%s%s%s (%.1f %.1f %.1f);", v->ent ? ent_name(v->ent) : "?",
-                          v->ent && PLAYER && *(char **)(v->ent + VEH_USER) == PLAYER ? " used" : "", veh_mine(v, now) ? " mine" : "",
+                          v->ent && veh_is_mine(v->ent) ? " used" : "", veh_mine(v, now) ? " mine" : "",
                           v->have && now - v->b_at < 1000 ? " recv" : "", pos[0], pos[1], pos[2]);
         }
         return 1;
@@ -2388,8 +2432,7 @@ int campaign_console(const char *text, char *out, int size)
                 const char *nm = s && !IsBadReadPtr(s, 8) && !IsBadStringPtrA(s->s, 256) ? s->s : "";
                 if (nm[0] && strstr(nm, a1))
                     n += snprintf(out + n, size - n, " %s vt %lx%s%s;", nm, (unsigned long)*(DWORD *)o,
-                                  is_vehicle(o) ? " vehicle" : "", is_vehicle(o) && PLAYER
-                                  && *(char **)(o + VEH_USER) == PLAYER ? " used" : "");
+                                  is_vehicle(o) ? " vehicle" : "", is_vehicle(o) && veh_is_mine(o) ? " used" : "");
                 char *next = *(char **)(o + 8);
                 o = next ? next - 4 : NULL;
             }
@@ -2560,7 +2603,7 @@ void campaign_install(void)
     use_digest = !(ts_env("TS_CAMPAIGN_DIGEST", v, sizeof v) && v[0] == '0');
     digest_fix = !(ts_env("TS_CAMPAIGN_DIGEST_FIX", v, sizeof v) && v[0] == '0');
     use_locks = !(ts_env("TS_CAMPAIGN_LOCKS", v, sizeof v) && v[0] == '0');
-    use_spread = !(ts_env("TS_CAMPAIGN_SPREAD", v, sizeof v) && v[0] == '0');
+    use_spread = ts_env("TS_CAMPAIGN_SPREAD", v, sizeof v) && v[0] == '1';
     if (ts_env("TS_CAMPAIGN_LOCKWATCH", v, sizeof v) && atoi(v) > 0)
         lock_after = atoi(v);
     voice_log = ts_env("TS_CAMPAIGN_VOICELOG", v, sizeof v) && v[0] == '1';

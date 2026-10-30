@@ -769,6 +769,126 @@ Remaining gameplay gaps (the list for the next round):
 8. Unverified: the trap check at the end of a real playback, seat-once on 23, force fields of 5/16/17/19/21 (14 proven),
    level 2's reverse zone.
 
+## 3d. Round 3 (0.1.1, 2026-10-30): voice lines, client use, locks, teleports, quads, digest
+
+Live on the N100 pair (own DLL build; runs `n100pair-20261030-*`). Everything here is switched by `TS_CAMPAIGN_*` variables listed with
+each part; `!cp ...` lab commands are in the file header of `campaign.c`.
+
+### Voice lines of actors the host creates (message 77, `TS_CAMPAIGN_VOICE=0` off, `TS_CAMPAIGN_VOICELOG=1` audit log)
+
+Why they were lost: ShowMsg/PlaySound handlers are classified "local" (presentation), so every machine runs its own copy, and a client's
+copy fails with "unknown object" when the actor is one the host created in play (`$farm.Create`): the actor's name reaches the client from
+aisync a moment later. Cooke and the rebels of the intros of levels 8 and 23 were the worst case (the client's copies of those lines are skipped,
+`campaign_wrap_call`), so clients heard nothing.
+
+How it works now: the engine's ShowMsg and PlaySound natives (`0x647d40`, `0x6478e0`) are hooked on every machine. The host sends every line of a
+non-player, non-"snd*" object at the moment it STARTS (a delayed `:N` line fires when the native runs): `{u8 1, u8 kind, name, string, f32 time,
+string usage/object}`, at most 12 a second and the same line once a second. A client waits 1.2 s, skips the line when it heard the same one in the
+last 30 s (its own copy of the handler ran, or an earlier message), else plays it on its own copy of the actor as soon as the actor has a
+name (up to 12 s, then it logs "dropped"). A client's own copy that comes after a played message is suppressed the same way.
+
+Live: level 8 (n100pair-20261030-143934): 17 lines of the intro played on the client from messages ("client plays Intro_Cooke.ShowMsg(...) -> Ok"),
+the client's own lines for actors it had named (`Zeppelin_commander`) skipped as "heard itself"; level 23 (-144537): `Intro_Cooke`,
+`Intro_rebel_2`, `Opp_Guard_explode` played, lines for the zeppelin's loudspeakers dropped after 12 s when the client's zeppelin was gone. The sound
+itself cannot be judged (test windows are muted): the proof is the engine call returning Ok on the client's own copy of the actor.
+
+Static survey of the 24 levels' scripts (`lg-ssl extract --all`, the object texts; "farm actors" = names in a `$farm.Create("...")` of the
+level; "local" handler = every statement is presentation, the client's own trigger runs it; "story" handler = replayed from the host):
+
+| level | farm actors | ShowMsg lines on them in local handlers | in story handlers | PlaySound local | PlaySound story |
+|---|---|---|---|---|---|
+| city_part01 | 93 | 1 | 53 | 0 | 10 |
+| city_part02 | 75 | 3 | 13 | 1 | 3 |
+| city_part03 | 48 | 0 | 2 | 0 | 0 |
+| cityfinal_part01 | 47 | 9 | 44 | 0 | 1 |
+| guardfactory_part01-05 | 37-45 | 0 | 0 | 0 | 0 |
+| skyscraper_part1 | 73 | 0 | 8 | 0 | 0 |
+| skyscraper_part2 | 61 | 5 | 14 | 0 | 5 |
+| skyscraper_part3 | 58 | 2 | 0 | 0 | 0 |
+| skyscraper_part4, summeroutdoor_part01, zepcrashsite_part01/02 | 41-75 | 0 | 0 | 0 | 0 |
+| summeroutdoor_part02 | 38 | 12 | 9 | 0 | 0 |
+| zep_factory_part1 | 68 | 0 | 2 | 0 | 0 |
+| zep_factory_part2 | 52 | 0 | 11 | 0 | 1 |
+| zep_factory_part3 / part4 | 27 / 56 | 0 | 1 / 3 | 0 | 0 |
+| zepcrashsite_part03 | 34 | 47 | 0 | 10 | 0 |
+| zepride1_part01 | 8 | 20 | 13 | 3 | 0 |
+| zepride2_part01 | 64 | 2 | 16 | 0 | 0 |
+
+(The levels with many lines - 1, cityfinal, 11, 13, 8, 23 - are the ones where clients missed dialogue most.) `ShowMsg`/`PlaySound` lines
+on other objects (domains' own `$snd*` ambience, the player) are not forwarded; ambience is each machine's own.
+
+### Lock watchdog (message 78, `TS_CAMPAIGN_LOCKS=0` off, `TS_CAMPAIGN_LOCKWATCH=<s>`, default 12)
+
+The host tells the clients every second what its own player's scripts last set (`DisableMove`, `DisableInput`: the natives are hooked; the late-join
+recording already did it for the host). A client whose own player holds a lock the host's player does not for 12 s releases it itself (and again
+every 12 s while the difference stays: the lock may be a counter). Live (level 11): `$player.DisableMove(1)` on the client; the key W did nothing; 12 s
+later `campaign: lock watchdog: movement locked for 12 s, the host's player is free: released (Ok)` and the client walked again. It also fired
+once on its own on level 10 after the train button's replay put a lock on a client that the host's player did not have.
+Cinematics: a cinematic camera lock comes with the level's own `DisableInput` pair, covered by the same rule; whether the camera returns after
+every cinematic (T-C) is not separately proven.
+
+### G6 / T-B: a client uses a story button (result)
+
+Level 11, the prison lever `prison_button`: a client placed in front of it (`!cp at`, camera turned with the look keys until the hint "Press X to pull the
+lever" showed) pressed USE (key X, input action 16, `lab\n100_key.ps1 -Code 0x2D -Action 16`): host `prison_button.OnPushed` ran, the client
+replayed it in the same second (`storysync: ran prison_button.OnPushed (host's)`) and ran `Prison_Cine` (frame: the client in the prison cinematic
+camera). So buttons used by a client DO reach the host; no forwarding code is needed (G6 buttons: pass). The first attempt on level 10's
+`train_button` did nothing visible because the crosshair was not on the button (no hint showed): aim is the trap of this test, check the hint text
+in a frame before the key; later frames showed that button's light dim (the lever is locked until the story unlocks it: no "Press X" hint, USE does
+nothing), so the button of level 10 was not a co-op failure.
+
+Mounted gun (T-B, level 2, run n100pair-20261030-153249): the client walked to `final_room_turret_hmg`, the hint "Press X to use the machine gun"
+showed, USE: the client sat on the gun (frame: gun view, the soldiers of the level in front), host log `sent final_room_turret_hmg.OnOccupied`
+then `rockets_unlocker.OnUnlocked` (the level's rocket sequence started on both: the client replayed both). Pass. Story pickups with an `OnPicked`
+script (`magnet_mine_item` of levels 9/11/20): the item does not exist at the start of level 11 (created later) and was not reached; ordinary
+pickups are the engine's `isSyncMP` items (measured earlier, multiplayer.md 8a); G6 pickups stay "by reading" (the host runs `OnPicked` when the
+server takes the item, as for the button).
+
+### Stacked teleports (G11)
+
+`@all $player.Transport("start_pos")` (level 2, host and client): ~4 s later the two bodies stood 1.0 m apart (host 205.23 108.03, client 205.96
+108.71): the engine's body collision pushes stacked players apart by itself. The "step aside" rule written for this (`TS_CAMPAIGN_SPREAD=1`, a client
+that stands on another body 0.4 s after its own Transport moves to its place on a 0.7 m ring around it) is therefore OFF by default (not needed on flat
+ground; a moving train was not tested).
+
+### Campaign end for clients (G15)
+
+Level 24 on the pair: `$FMV_Manager.Start("FMV_17")` on the host: the last film played on the client, then the credits ("ТИТРЫ" list with the
+"Continue" button; frame client shot928). The mouse-only Continue button cannot be clicked in a test window (the key tool's Enter does not reach UI
+buttons), so the button's own handler was run by script on both machines (`$ui.ShowCredits(false)`, `$fmv.Play("fmv15")`, `$ui.CloseMenu()`: the three
+statements of `credits.ui` `JobOnFinish`, which `OnButtonPressed("Continue")` and the end of the scroll call): the client went to the main menu (level
+`menu.lg`, role 0, frame: the main menu with the Co-op entry, no error box), the host to the menu after it. Whoever continues first leaves alone; a
+client left behind by a host that went first gets the stock box "server shut down" with OK (seen when the level-change test dropped a client). Pass
+(by the handler, not by the click).
+
+### Lifes and loadout of respawned and level-changed clients (table test, level 2 -> 3)
+
+`!cp loadout` on both machines (slots, primary weapon ammunition, life, time energy):
+
+| Step | Host | Client |
+|---|---|---|
+| level 2 start | ammo 128/16 (campaign pistol), life 100 | same |
+| `SetupWeapon(4,0,0)` / `(2,0,0)` (a rifle / another weapon) | 240/30 | 40/10 |
+| client killed (`FailMission`) and respawned (about 15 s) | 240/30 kept | **128/16: back to the start weapon** |
+| server level change to level 3 | 128/16 (the level's start loadout) | 128/16 / unarmed while loading |
+
+So a respawned client loses what it carried (the host's death is a team restart from the checkpoint, so it is not comparable); across a level
+change both get the level's start loadout (single player carries the weapons through its save game; the co-op session starts every level from the
+level's own loadout for everybody). The host's view of a dead client reads life 0 on the client's body (`player_alive` uses it). Note for Continue
+(coopsave.c, chunk D): the three "slots" at player +0x3a8 stay `1 0 0` whatever `SetupWeapon` sets (the weapon types live elsewhere: lab
+`!cp wpn` prints the raw weapon records), so a recorded `slots=1 0 0` restores the campaign pistol with the ammunition of the real primary.
+
+### Pickups per level (count of placed objects by class name in the scene files; enemies' drops come on top)
+
+
+`ammobox` / weapon items (`item_*` weapons) / grenade packs per level: city_part01 8/5/0, city_part02 4/12/4, city_part03 0/8/2, cityfinal 4/12/2,
+guardfactory_part01 12/6/0, 02 20/4/0, 03 12/19/6, 04 5/6/4, 05 12/20/0, skyscraper_part1 0/6/0, part2 8/9/5, part3 0/8/2, part4 16/9/0,
+summeroutdoor_part01 16/19/0, part02 16/14/6, zep_factory_part1 4/21/0, part2 4/10/0, part3 0/6/0, part4 8/11/0, zepcrashsite_part01 4/9/4,
+part02 8/11/4, part03 8/7/2, zepride1 0/0/0, zepride2 4/14/0. There are no health pickups (life regenerates). A pickup is `isSyncMP`: the first
+player to touch it takes it, so a level's ammunition, balanced for one player, is shared by 2-4. Policy for 0.1.1: no scaling (nothing is clearly
+right: the levels with many boxes feed 2 players well, the ones with 0-4 boxes rely on enemy drops that the second player can also take); the numbers
+are here for the decision of the owner (question 6 of the plan).
+
 ## 4. Test plan for the live pass
 
 Set-up (N100 pair, `lab\n100_pair.ps1`; later the same steps with the main PC as client when the owner allows):
