@@ -297,6 +297,8 @@ static Active *active_for(const char *name)
     return NULL;
 }
 
+static char *split_p2(void);
+
 /* Every joined client's body is inside (a level without clients: true). */
 static int clients_inside(char *dom, int *missing)
 {
@@ -315,6 +317,13 @@ static int clients_inside(char *dom, int *missing)
             if (missing)
                 (*missing)++;
         }
+    }
+    /* the local player 2 (split screen on this machine, or a client's player 2 run here) is a player of the gate too */
+    char *p2e = split_p2();
+    if (p2e && p2e != PLAYER && player_alive(p2e) && !inside(dom, p2e)) {
+        all = 0;
+        if (missing)
+            (*missing)++;
     }
     return all;
 }
@@ -963,34 +972,46 @@ static int name_remote(int slot, char *ent, char *out, int size)
     return 1;
 }
 
-/* (host) "player" in an AI aim/target call -> the nearest player's name. 1 = argv[0] was swapped (restore after). */
+/* The second player this machine runs (split screen on a host or in single player, a client's player 2 on its host), or NULL. */
+static char *split_p2(void);
+
+/* (host, or single player with split screen) "player" in an AI aim/target call -> the nearest player's name. 1 = argv[0]
+ * was swapped (restore after). The candidates: the machine's own player ("player"), the local player 2 ("player2", the
+ * name split.c gave it) and the clients' players ("coop_player<slot>"). */
 static int swap_player_arg(void *obj, int argc, Variant *argv, String *saved, String *mine)
 {
-    if (!use_ai || role() != MODE_SERVER || argc < 1 || !argv || argv[0].type != type_str() || !argv[0].data
+    int r = role();
+    char *p2e = r != MODE_CLIENT ? split_p2() : NULL;
+    if (!use_ai || (r != MODE_SERVER && !p2e) || argc < 1 || !argv || argv[0].type != type_str() || !argv[0].data
         || _stricmp(((String)argv[0].data)->s, "player") != 0)
         return 0;
     float me[3], p[3];
     if (!ent_pos(obj, me))
         return 0;
-    /* the nearest LIVING player (the host's own counts as "player"); nobody alive: the call stays as the script wrote it */
+    /* the nearest LIVING player (the machine's own counts as "player"); nobody alive: the call stays as the script wrote it */
     float best = 3.4e38f;
-    int best_slot = -1;
+    int best_slot = -1, best_p2 = 0;
     char *best_ent = NULL;
     if (player_alive(PLAYER) && ent_pos(PLAYER, p))
         best = (p[0] - me[0]) * (p[0] - me[0]) + (p[1] - me[1]) * (p[1] - me[1]) + (p[2] - me[2]) * (p[2] - me[2]);
-    for (int i = 0; slot_at(i); i++) {
+    if (p2e && p2e != PLAYER && player_alive(p2e) && ent_pos(p2e, p)) {
+        float d = (p[0] - me[0]) * (p[0] - me[0]) + (p[1] - me[1]) * (p[1] - me[1]) + (p[2] - me[2]) * (p[2] - me[2]);
+        if (d < best)
+            best = d, best_p2 = 1;
+    }
+    for (int i = 0; r == MODE_SERVER && slot_at(i); i++) {
         char *s = slot_at(i), *ent = *(char **)(s + 4);
         if (*(int *)s == 0 || !slot_joined(s) || !player_alive(ent) || !ent_pos(ent, p))
             continue;
         float d = (p[0] - me[0]) * (p[0] - me[0]) + (p[1] - me[1]) * (p[1] - me[1]) + (p[2] - me[2]) * (p[2] - me[2]);
         if (d < best)
-            best = d, best_slot = i, best_ent = ent;
+            best = d, best_slot = i, best_ent = ent, best_p2 = 0;
     }
-    if (best_slot < 0)
-        return 0;   /* (the host's player is the nearest living one, or nobody lives: "player" stays) */
     char name[48];
-    if (best_slot < 0 || !name_remote(best_slot, best_ent, name, sizeof name))
-        return 0;
+    if (best_p2)
+        snprintf(name, sizeof name, "player2");
+    else if (best_slot < 0 || !name_remote(best_slot, best_ent, name, sizeof name))
+        return 0;   /* (the machine's own player is the nearest living one, or nobody lives: "player" stays) */
     *mine = 0;
     str_ctor(mine, name, -1, 0);
     *saved = (String)argv[0].data;
