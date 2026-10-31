@@ -40,7 +40,7 @@ child = [
             type      = text
             name      = ContHint
             posX      = 8%, 85%
-            posY      = 98, 28
+            posY      = 78, 28
             textScale = 7
             textAlign = leftX centerY
             textColor = 200 210 225 255
@@ -134,7 +134,7 @@ child = [
             type      = text
             name      = ModVersion
             posX      = 8%, 85%
-            posY      = -30, 25
+            posY      = -4, 25
             textScale = 7
             textAlign = right centerY
          }
