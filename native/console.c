@@ -58,6 +58,7 @@ static ObjPtr addref(ObjPtr p)
 /* probes.c (dev, off by default; TS_PROBES=<s> or "!pr on"): smoothness, floor and body-collision probes */
 void probes_install(void);
 int probes_console(const char *text, char *out, int size);
+int coopsave_console(const char *text, char *out, int size);
 
 /* Compile and run SSL statements; main thread only (inside the script tick). */
 const char *ts_script_run(const char *text, char *out, int size)
@@ -189,7 +190,8 @@ static void console_pump(void)
             /* "@all ", "@peers ", "@srv ": send to the other machines of a network game (coopnet.c) */
             if (!coopnet_console(texts[i], out, sizeof out) && !storysync_console(texts[i], out, sizeof out)
                 && !aisync_console(texts[i], out, sizeof out) && !campaign_console(texts[i], out, sizeof out)
-                && !coopreverse_console(texts[i], out, sizeof out) && !probes_console(texts[i], out, sizeof out))
+                && !coopreverse_console(texts[i], out, sizeof out) && !probes_console(texts[i], out, sizeof out)
+                && !coopsave_console(texts[i], out, sizeof out))
                 ts_script_run(texts[i], out, sizeof out);
             if (con_sock != INVALID_SOCKET)
                 sendto(con_sock, out, (int)strlen(out), 0, (struct sockaddr *)&from[i], sizeof from[i]);
