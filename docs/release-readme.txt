@@ -28,10 +28,12 @@ What the mod does
   death scene kills only the player who walked into it; the scanners of the quad levels count the
   host only.
 - Continue: after you reach a checkpoint as the host of a co-op game, Co-op -> Continue hosts that
-  chapter again from the checkpoint with your weapons, ammunition, health and time energy; friends join
-  as usual. The save is per profile, is kept when you update the mod and removed when you uninstall it.
-  Grenades are not saved. Where a chapter has no checkpoint marker to restore, it restarts from the
-  start of that chapter.
+  chapter again from the checkpoint with your chosen weapons, every weapon's ammunition, grenades, health
+  and time energy; friends join as usual (a client who rejoins the same session gets its own loadout
+  back). The save is per profile, is kept when you update the mod and removed when you uninstall it.
+  Where a chapter has no checkpoint marker to restore (only 7 of the 24 have one), it restarts from the
+  start of that chapter with your loadout, and the Co-op menu says so; a damaged save is greyed out with
+  a reason.
 - Real rewind: the reverse power rewinds the world (the host keeps the history): the cranes, lifts,
   bridges, trains, cages and force fields of the puzzles go back on every machine, the reverse
   puzzles work for a client's own reverse key, and a player trapped in a closed container after a
@@ -54,17 +56,19 @@ What the mod does
 
 Not finished / known limits
 - Quads on the quad levels (9 and 12): the enemies' quads follow the host's positions on the clients'
-  screens (checked by coordinates on level 9); a client driving a quad is not tested. The truck ride at
-  the start of level 9 works: a client that is already in the game rides along (checked by log and
-  coordinates).
-- The lines Cooke and the rebels speak in the zeppelin intros (levels 8 and 23) are not heard on the
-  clients' machines.
-- Split screen: cutscenes, the pause menu and the loading screens are full screen for both; only
-  player 1 uses turrets in local split screen; the scripts and the enemies treat player 1 as "the
-  player"; each half is drawn every second frame, so each half runs at half of the game's frame rate;
-  the shot sounds of player 2 are untested. Split screen on a client is experimental: its copy of
-  player 2 was run in basic form only; player 2's time power, kills and pick-ups over the network were
-  not checked in a live game yet.
+  screens (checked by coordinates on level 9); a client driving a quad was run on level 12 only, and
+  how a third machine sees it is not tested. The truck ride at the start of level 9 works: a client
+  that is already in the game rides along (checked by log and coordinates).
+- Voices: the lines of Cooke and the rebels in the zeppelin intros (levels 8 and 23) and other spoken
+  lines are started on the clients from the host's messages (checked in the logs); the sound itself
+  could not be judged in the automatic tests (muted windows). Tell us if a client misses a voice,
+  shots or footsteps.
+- Split screen: cutscenes, the pause menu and the loading screens are full screen for both; each half
+  is drawn every second frame, so each half runs at half of the game's frame rate (ts_coop.ini ->
+  [Split] -> BothViews=1 draws both halves every frame; it only helps when the frame rate is capped,
+  off by default); the scripts treat player 1 as "the player" (the enemies and the all-players gates
+  count player 2); the shot sounds of player 2 are untested. Split screen on a client is basic: player
+  2's pick-ups were checked in a live game, its time power and kills over the network were not.
 - Most checks of the rewind, force fields, vehicles and container traps were made by reading clip and
   time values, coordinates and the logs of both machines, not by watching the screens: the results are
   in the numbers, but how it looks in play has had little human testing.
@@ -155,11 +159,12 @@ FAQ
   <game>\coop\continue-<profile>.txt. Both survive an update of the mod; the uninstall removes only the
   mod's coop folder (the Continue record with it), never UserConfigs.
 - What does Continue not restore? It restores the host's last checkpoint of the last co-op session:
-  the chapter, the host's weapons, the main weapon's ammunition, health and time energy; at a chapter
-  that has a restore marker also the place and the story state. Not restored: grenades and other
-  weapons' ammunition, the clients' own loadouts (a client joins as a new player), the enemies' state
-  after the checkpoint; a chapter without a marker starts from its beginning. Only the last
-  checkpoint of the last session is kept.
+  the chapter, the host's weapons, health and time energy; at a chapter
+  that has a restore marker also the place and the story state. Also restored: every weapon's
+  ammunition and the grenades, and a client's own loadout when it rejoins the same session. Not
+  restored: the enemies' state after the checkpoint, the loadout of a player who dies after the
+  Continue (he gets the level's start loadout); a chapter without a marker starts from its
+  beginning with your loadout. Only the last checkpoint of the last session is kept.
 - A friend got stuck or fell behind: pause menu (Esc) -> Regroup.
 - The game does not start after the installer, or shows a black screen: bin\ts_coop.log says which
   start-up fixes were applied; send it with a report (below). Compatibility modes are not needed.
