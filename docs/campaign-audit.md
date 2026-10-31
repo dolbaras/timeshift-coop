@@ -914,6 +914,7 @@ the primary's ammunition every 2 s on foot. (1) A client that respawns gets its 
 the next level of the session each machine gets its previous set (and ammunition) back 12 s into the level, unless the level's own scripts set a loadout
 meanwhile (levels 1, 2, 24 take the weapons away): live, levels 3 -> 4 and 4 -> 5: host and client `loadout carried over from the last level`, 240/30
 after the change instead of the start pistol. Weapons picked up in play (not a set number) are not carried: they are lost on a respawn, as before.
+A recorded `SetupWeapon(0, 0, 0)` (the level took the weapons away, or its start script cleared them) is NOT put back any more: live on the N100 pair (part02 after a team restart) a client that died got `loadout after the respawn: weapon set 0 0 0 (-1/16)` and played the rest of the level with no weapon at all; now the log says `the last set was 0 0 0 (weapons taken away), nothing to put back` and the stock respawn pistol stays.
 
 ### Dynamic actor digest (message 79, `TS_CAMPAIGN_DIGEST=0` off, `TS_CAMPAIGN_DIGEST_FIX=0` log only, `!cp dyn`)
 
