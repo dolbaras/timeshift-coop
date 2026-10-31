@@ -135,6 +135,10 @@ typedef struct {
     int have_shot;                  /* the last shot's geometry is known: */
     float sh_org[3];                /*   server: its origin (absolute); client: relative to the body */
     float sh_dir[3], sh_dist;       /*   its direction and the distance to its target */
+    unsigned short wk, wk_sent;     /* server: counters (2 bits per kind) of the weapon's state events (SHOOT_QUEUE ...) */
+    unsigned short wk_seen;         /* client: the counters read last */
+    unsigned char wk_any;           /* server: a state event happened (the counters ride in every update from then on) */
+    unsigned char wk_pend;          /* client: kinds still to set on the weapon (bit per kind) */
 } AiState;
 #define NO_ANIM 0x7fffffff
 static AiState states[MAX_AI];
@@ -172,6 +176,9 @@ static AiState *state_of(char *ai)
 #define AI_DEAD 0x20000
 static const unsigned char anim_mark[2] = {0xa5, 0x5a};
 static const unsigned char anim_mark_shot[2] = {0xa5, 0x5b};   /* (the last shot's geometry before the 8 bytes) */
+/* Markers 0x5c / 0x5d: as 0x5a / 0x5b, with the weapon's state counters (u16) just before the 8 bytes. */
+static const unsigned char anim_mark_k[2] = {0xa5, 0x5c}, anim_mark_shot_k[2] = {0xa5, 0x5d};
+#define KINDS_EXTRA 2
 #define SHOT_EXTRA 14
 #define MSG_LEN 5                            /* update message: +5 u8 motion bytes, +8 motion bytes pointer */
 #define MSG_BITS 8
@@ -196,10 +203,9 @@ static void TSCALL hook_write(void *ai, int peer, int *msg, int flags)
         return;
     unsigned char *b = *(unsigned char **)(m + MSG_BITS) + m[MSG_LEN];
     short body = (short)anim_id(node), bhv = (short)behaviour_anim(ai);
-    memcpy(b, &body, 2);
-    memcpy(b + 2, &bhv, 2);
     AiState *s = state_of(ai);
     int shot = s && s->have_shot && s->shots != s->shots_sent && m[MSG_LEN] + ANIM_EXTRA + SHOT_EXTRA <= 255;
+    int kn = s && s->wk_any && m[MSG_LEN] + ANIM_EXTRA + (shot ? SHOT_EXTRA : 0) + KINDS_EXTRA <= 255;
     if (shot) {   /* the last shot's geometry before the tail: s16 origin - body (cm) x3, s16 direction x3, u16 dm */
         float *np = (float *)(node + 0x68);
         short v[7];
@@ -212,19 +218,25 @@ static void TSCALL hook_write(void *ai, int peer, int *msg, int flags)
         v[6] = (short)(unsigned short)(dm > 65000.f ? 65000.f : dm < 0.f ? 0.f : dm);
         memcpy(b, v, SHOT_EXTRA);
         b += SHOT_EXTRA;
-        memcpy(b, &body, 2);
-        memcpy(b + 2, &bhv, 2);
     }
+    if (kn) {   /* the weapon's state counters: what the weapon's own program turns into its sounds */
+        memcpy(b, &s->wk, KINDS_EXTRA);
+        b += KINDS_EXTRA;
+    }
+    memcpy(b, &body, 2);
+    memcpy(b + 2, &bhv, 2);
     b[4] = m[MSG_ANIM + 2];
     /* state byte: bit 0 dead on the server, bit 1 attack of the last shot, bits 2-7 its weapon shots (mod 64) */
     b[5] = (unsigned char)(((*(unsigned *)((char *)ai + AI_FLAGS) & AI_DEAD) ? 1 : 0)
                            | (s ? ((s->atk & 1) << 1) | ((s->shots & 63) << 2) : 0));
-    memcpy(b + 6, shot ? anim_mark_shot : anim_mark, 2);
-    m[MSG_LEN] += ANIM_EXTRA + (shot ? SHOT_EXTRA : 0);
+    memcpy(b + 6, shot ? (kn ? anim_mark_shot_k : anim_mark_shot) : (kn ? anim_mark_k : anim_mark), 2);
+    m[MSG_LEN] += ANIM_EXTRA + (shot ? SHOT_EXTRA : 0) + (kn ? KINDS_EXTRA : 0);
     if (s) {
         s->anim = body;
         s->writes++;
         s->shots_sent = s->shots;
+        if (kn)
+            s->wk_sent = s->wk;
     }
 }
 
@@ -245,6 +257,21 @@ static void shots_read(AiState *s, unsigned char state)
     }
 }
 
+/* Weapon state events (the weapon's own sound program reacts to them: SHOOT_SINGLE / MINIQUEUE / QUEUE start the shot
+ * sounds, AI_SHOOT_STOP stops the burst, the recharge states play the reload sound). The server's weapon sets them in its
+ * state set (virtual 0x82ce90 of the weapon interface, kinds 0 1 2 5 6 7); a client's weapon never does. Two bits per kind
+ * count the events (like the shot count), the client sets the state on its own copy of the weapon when a counter moved. */
+static const signed char wk_kind[6] = {0, 1, 2, 5, 6, 7};
+#define WK_STOP 7
+
+static void wk_read(AiState *s, unsigned short wk)
+{
+    for (int i = 0; i < 6; i++)
+        if (((wk >> (2 * i)) - (s->wk_seen >> (2 * i))) & 3)
+            s->wk_pend |= (unsigned char)(1 << wk_kind[i]);
+    s->wk_seen = wk;
+}
+
 static void TSCALL hook_read(void *ai, char *msg, int flags)
 {
     unsigned char *m = (unsigned char *)msg, *b = *(unsigned char **)(m + MSG_BITS);
@@ -253,6 +280,18 @@ static void TSCALL hook_read(void *ai, char *msg, int flags)
         s->reads++;
     if (s && (s->corpse || s->noanim))
         return;   /* (a corpse: the server's "no animation" would stand it up again) */
+    if (b && m[MSG_LEN] >= ANIM_EXTRA + KINDS_EXTRA &&
+        (memcmp(b + m[MSG_LEN] - 2, anim_mark_k, 2) == 0 || memcmp(b + m[MSG_LEN] - 2, anim_mark_shot_k, 2) == 0)) {
+        unsigned char *kd = b + m[MSG_LEN] - ANIM_EXTRA - KINDS_EXTRA;
+        unsigned short wk;
+        memcpy(&wk, kd, KINDS_EXTRA);
+        if (s)
+            wk_read(s, wk);
+        int with_shot = b[m[MSG_LEN] - 1] == anim_mark_shot_k[1];
+        memmove(kd, kd + KINDS_EXTRA, ANIM_EXTRA);   /* (then as an update without the counters) */
+        m[MSG_LEN] -= KINDS_EXTRA;
+        memcpy(b + m[MSG_LEN] - 2, with_shot ? anim_mark_shot : anim_mark, 2);
+    }
     if (b && m[MSG_LEN] >= ANIM_EXTRA + SHOT_EXTRA && memcmp(b + m[MSG_LEN] - 2, anim_mark_shot, 2) == 0) {
         unsigned char *sd = b + m[MSG_LEN] - ANIM_EXTRA - SHOT_EXTRA;
         if (s) {
@@ -331,7 +370,7 @@ static void watch_anim(char *ai)
     if ((*role & 0x44) != 0x44 || !node)
         return;
     AiState *s = state_of(ai);
-    if (s && (anim_id(node) != s->anim || s->shots != s->shots_sent))
+    if (s && (anim_id(node) != s->anim || s->shots != s->shots_sent || (s->wk_any && s->wk != s->wk_sent)))
         *role |= 8;
 }
 
@@ -659,6 +698,119 @@ static int fire_install(void)
     for (unsigned i = 0; i < sizeof wpn_vtables / sizeof wpn_vtables[0]; i++) {
         void *o = (void *)WPN_SHOT, *h = (void *)hook_wpn_shot;
         ok += ts_patch_bytes(wpn_vtables[i] + WPN_SLOT, &o, &h, 4);
+    }
+    return ok;
+}
+
+/* ---- weapon state events: sounds of an AI's shots on clients ----
+ * The set-state virtual of the weapon interface (0x82ce90 in the seven vtables below, thiscall (interface, kind), ret 4)
+ * is hooked: on the server it counts the events of AI weapons per soldier (AiState.wk); on a client wstate_frame sets the
+ * counted kinds on the soldier's own weapon copy (the original function, the hook ignores that call). The interface sits
+ * at a fixed offset from the weapon object (learned per interface vtable from the AI weapons that exist). TS_AISTATE=0: off. */
+#define WST_SET 0x82ce90
+static const DWORD wst_slots[] = {0xd93094, 0xd93374, 0xd93654, 0xd93934, 0xd93c14, 0xd93f44, 0xdbf1bc};
+typedef void (TSCALL *wst_t)(void *iface, int kind);
+static int wst_on = 1;
+static volatile int wst_applying;
+static LONG n_wst_logged;
+
+/* the weapon's interface: the dword in the object that points at (a little before) one of the patched slots, i.e. at the
+ * start of the interface's vtable */
+static char *wst_iface_of(char *w)
+{
+    if (IsBadReadPtr(w, 0x400))
+        return NULL;
+    for (int off = 4; off < 0x400; off += 4) {
+        DWORD v = *(DWORD *)(w + off);
+        for (unsigned i = 0; i < sizeof wst_slots / sizeof wst_slots[0]; i++) {
+            DWORD d = wst_slots[i] - v;
+            if (d <= 0x40 && !(d & 3))
+                return w + off;
+        }
+    }
+    return NULL;
+}
+
+typedef struct { char *iface, *found; } FindIface;
+static void find_iface_fn(char *o, void *ctx)
+{
+    FindIface *f = ctx;
+    if (!f->found && is_ai_weapon(o) && wst_iface_of(o) == f->iface)
+        f->found = o;
+}
+
+/* the AI weapon object an interface pointer belongs to (NULL: not an AI weapon) */
+static char *wst_weapon(void *iface)
+{
+    static char *last_if, *last_w;
+    if (iface == last_if && last_w && is_ai_weapon(last_w) && wst_iface_of(last_w) == iface)
+        return last_w;
+    FindIface f = {iface, NULL};
+    for_each_obj(find_iface_fn, &f);
+    if (f.found) {
+        last_if = iface;
+        last_w = f.found;
+        static LONG logged;
+        if (InterlockedIncrement(&logged) <= 4)
+            ts_log("aisync: weapon state interface %p is weapon %p + %x (weapon vt %06lx)", iface, f.found,
+                   (unsigned)((char *)iface - f.found), *(unsigned long *)f.found);
+    }
+    return f.found;
+}
+
+static void TSCALL hook_wstate(void *iface, int kind)
+{
+    ((wst_t)WST_SET)(iface, kind);
+    char *gm = GAME_MODE_OBJ;
+    if (!wst_on || wst_applying || !engine_mode || !gm || *(int *)(gm + 0x3c) < 2 || *(int *)(gm + 0x3c) == 3)
+        return;
+    int idx = -1;
+    for (int i = 0; i < 6; i++)
+        if (wk_kind[i] == kind)
+            idx = i;
+    if (idx < 0)
+        return;
+    char *w = wst_weapon(iface), *owner = w ? weapon_owner(w) : NULL;
+    if (!owner || !is_ai(owner))
+        return;
+    AiState *s = state_of(owner);
+    if (!s)
+        return;
+    unsigned c = ((s->wk >> (2 * idx)) + 1) & 3;
+    s->wk = (unsigned short)((s->wk & ~(3 << (2 * idx))) | (c << (2 * idx)));
+    s->wk_any = 1;
+    if (fire_debug && InterlockedIncrement(&n_wst_logged) <= 40)
+        ts_log("aisync: weapon state %d of %s (counters %04x)", kind, ai_name(owner), s->wk);
+}
+
+/* (client, every frame) */
+static void wstate_frame(char *ai)
+{
+    AiState *s = state_of(ai);
+    if (!s || !s->wk_pend)
+        return;
+    unsigned char pend = s->wk_pend;
+    s->wk_pend = 0;
+    if (!wst_on || s->corpse || s->noanim)
+        return;
+    char *w = ai_weapon(ai, &s->wpn, s->atk), *iface = w ? wst_iface_of(w) : NULL;
+    if (!iface)
+        return;
+    wst_applying = 1;
+    for (int k = 0; k < 8; k++)
+        if (pend & (1 << k))
+            ((wst_t)WST_SET)(iface, k);
+    wst_applying = 0;
+    if (fire_debug && InterlockedIncrement(&n_wst_logged) <= 40)
+        ts_log("aisync: weapon states %02x set on the weapon of %s here", pend, ai_name(ai));
+}
+
+static int wstate_install(void)
+{
+    int ok = 0;
+    for (unsigned i = 0; i < sizeof wst_slots / sizeof wst_slots[0]; i++) {
+        void *o = (void *)WST_SET, *h = (void *)hook_wstate;
+        ok += ts_patch_bytes(wst_slots[i], &o, &h, 4);
     }
     return ok;
 }
@@ -1386,12 +1538,39 @@ typedef void *(TSCALL *getbuf_t)(void *sys, char *name, int flag);
 static struct { char name[48]; int started, refused; } snd_tab[SND_MAX];
 static int n_snd, snd_on, snd_installed, snd_total;
 
+static char snd_trace[48];   /* "!ai snd trace <part of a name>": log the callers of the first sounds whose name contains it */
+static int snd_trace_left;
+
+static void snd_trace_callers(const char *t, void *r, int flag)
+{
+    char line[400];
+    int n = snprintf(line, sizeof line, "snd-trace: %s -> %s flag %d callers:", t, r ? "started" : "refused", flag);
+    DWORD *q = (DWORD *)__builtin_frame_address(0);
+    NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+    int found = 0;
+    for (; q < (DWORD *)tib->StackBase && found < 10 && q < (DWORD *)__builtin_frame_address(0) + 400; q++) {
+        DWORD a = *q;
+        if (a < 0x401000 || a > 0xc00000)
+            continue;
+        const unsigned char *p = (const unsigned char *)a;
+        if (IsBadReadPtr(p - 6, 6) || !(p[-5] == 0xE8 || (p[-2] == 0xFF && (p[-1] & 0x38) == 0x10) || (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10)))
+            continue;
+        n += snprintf(line + n, sizeof line - n, " %06lx", a);
+        found++;
+    }
+    ts_log("%s", line);
+}
+
 static void *TSCALL hook_getbuffer(void *sys, char *name, int flag)
 {
     void *r = ((getbuf_t)SND_GETBUFFER)(sys, name, flag);
     if (!snd_on || !name || IsBadReadPtr(name, 0x14))
         return r;
     const char *t = name + 0xc;
+    if (snd_trace[0] && snd_trace_left > 0 && !IsBadReadPtr(t, 4) && strstr(t, snd_trace)) {
+        snd_trace_left--;
+        snd_trace_callers(t, r, flag);
+    }
     int i;
     for (i = 0; i < n_snd; i++)
         if (!strncmp(snd_tab[i].name, t, sizeof snd_tab[i].name - 1))
@@ -1502,6 +1681,7 @@ static void frame(float dt)
             dead_list_apply();
         for_each_ai(corpse_check);
         for_each_ai(fire_frame);
+        for_each_ai(wstate_frame);
         pjl_expire();
         if (ts_coop_active()) {
             dead_ask_tick();
@@ -1619,6 +1799,25 @@ int aisync_console(const char *text, char *out, int size)
         put_near_host(sd, bk, upv, k - 1);
         return snprintf(out, size, "placed next to the host (side %.1f back %.1f up %.1f)", sd, bk, upv), 1;
     }
+    if (!strcmp(cmd, "tick")) {   /* "!ai tick": the granularity of timeGetTime, which the net readers' age uses (lab) */
+        DWORD (WINAPI *tgt)(void) = (DWORD (WINAPI *)(void))GetProcAddress(LoadLibraryA("winmm.dll"), "timeGetTime");
+        if (!tgt)
+            return snprintf(out, size, "no timeGetTime"), 1;
+        DWORD t0 = tgt(), last = t0, now, steps = 0, big = 0, small = 0xffff;
+        while ((now = tgt()) - t0 < 300) {
+            if (now != last) {
+                DWORD d = now - last;
+                steps++;
+                if (d > big)
+                    big = d;
+                if (d < small)
+                    small = d;
+                last = now;
+            }
+        }
+        return snprintf(out, size, "timeGetTime: %lu changes in 300 ms (step %.2f ms avg), smallest step %lu, largest %lu",
+                        steps, steps ? 300.0 / steps : 0.0, small, big), 1;
+    }
     if (!strcmp(cmd, "pstate")) {   /* "!ai pstate": the stance words of every player body this machine knows (lab) */
         char *gm = GAME_MODE_OBJ;
         int n = snprintf(out, size, "players:");
@@ -1628,15 +1827,25 @@ int aisync_console(const char *text, char *out, int size)
             if (!e || IsBadReadPtr(e, 0x3a0) || (i >= 0 && e == PLAYER))
                 continue;
             char *node = *(char **)(e + E_NODE);
-            n += snprintf(out + n, size - n, " %s%d%s st %08x %08x %08x mv %d y %.3f;", i < 0 ? "self" : "slot",
+            int ok = node && !IsBadReadPtr(node, 0x74);
+            n += snprintf(out + n, size - n, " %s%d%s st %08x %08x %08x mv %d y %.3f an %d@%.2f;", i < 0 ? "self" : "slot",
                           i < 0 ? 0 : *(int *)slot, e == PLAYER ? "*" : "", *(unsigned *)(e + 0x394), *(unsigned *)(e + 0x398),
-                          *(unsigned *)(e + 0x39c), *(unsigned char *)(e + 0x398) & 0xf,
-                          node && !IsBadReadPtr(node, 0x74) ? ((float *)(node + 0x68))[1] : -99.f);
+                          *(unsigned *)(e + 0x39c), *(unsigned char *)(e + 0x398) & 0xf, ok ? ((float *)(node + 0x68))[1] : -99.f,
+                          ok ? anim_id(node) : -9, ok ? anim_time(node) : -1.f);
         }
         return n;
     }
-    if (!strcmp(cmd, "snd"))   /* "!ai snd on|off|dump|reset" (lab): the sound start counters above */
+    if (!strcmp(cmd, "snd")) {   /* "!ai snd on|off|dump|reset|trace <name part> [count]" (lab): the sound start counters above */
+        if (!strcmp(a1, "trace")) {
+            char part[48] = "", cnt[16] = "";
+            sscanf(text + 3, "%31s %31s %47s %15s", cmd, a1, part, cnt);
+            snprintf(snd_trace, sizeof snd_trace, "%s", part);
+            snd_trace_left = cnt[0] ? atoi(cnt) : 6;
+            snd_control("on", out, size);
+            return snprintf(out, size, "sound trace of \"%s\" (%d times) into the log", snd_trace, snd_trace_left), 1;
+        }
         return snd_control(a1, out, size), 1;
+    }
     if (!strcmp(cmd, "dump")) {   /* "!ai dump <tag>" (lab): the named-actor snapshot above, into the log */
         int n = 0;
         dump_named(a1[0] ? a1 : "x", &n);
@@ -1763,6 +1972,12 @@ void aisync_install(void)
     else if (engine_mode && fire_full > 0 && (!gate_install() || !pjl_catch_install())) {
         ts_log("aisync: projectile dispatchers not found (other exe): AI shots on clients without projectiles");
         fire_full = 0;
+    }
+    if (ts_env("TS_AISTATE", v, sizeof v) && v[0] == '0')
+        wst_on = 0;
+    if (engine_mode && wst_on && wstate_install() != (int)(sizeof wst_slots / sizeof wst_slots[0])) {
+        ts_log("aisync: weapon state virtuals not found (other exe): no AI shot sounds on clients");
+        wst_on = 0;
     }
     if (engine_mode && !coopnet_listen(SUB_NAME_ASK, SUB_LAST, on_message))
         ts_log("aisync: no mod messages (names of new objects, the dead for late joiners)");
