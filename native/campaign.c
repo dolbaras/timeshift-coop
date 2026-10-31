@@ -1010,8 +1010,11 @@ static int swap_player_arg(void *obj, int argc, Variant *argv, String *saved, St
     char name[48];
     if (best_p2)
         snprintf(name, sizeof name, "player2");
-    else if (best_slot < 0 || !name_remote(best_slot, best_ent, name, sizeof name))
+    else if (best_slot < 0 || !name_remote(best_slot, best_ent, name, sizeof name)) {
+        VLOG("campaign: %s aims at \"player\" (nearest living player is the machine's own, %.1f m)", ent_name(obj),
+             best < 3.4e38f ? sqrt(best) : -1.0);
         return 0;   /* (the machine's own player is the nearest living one, or nobody lives: "player" stays) */
+    }
     *mine = 0;
     str_ctor(mine, name, -1, 0);
     *saved = (String)argv[0].data;

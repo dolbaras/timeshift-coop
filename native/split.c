@@ -683,6 +683,13 @@ static void restore_globals(void)
 }
 
 /* ---- renderer frame start / end ---- */
+/* TS_SPLIT_BOTH=1 (tests, off by default): both views are drawn in every game frame. The engine's single-thread frame
+ * (0x649930: update, frame start R+0x1c, object prep, HUD update, render job 0x649830, frame end R+0x24) runs once for
+ * view 0; at its frame end the same steps run again for view 1 (without the game update, and the render job told not to
+ * Present: its flag word 1). Each half then updates as often as the game does, not every second frame. */
+static int both_mode, in_pass2, force_view = -1;
+static void second_pass(void *r);
+
 static void TSCALL hook_fstart(void *r)
 {
     restore_globals();   /* (a frame without its end: never seen, but nothing must stay swapped) */
@@ -690,7 +697,7 @@ static void TSCALL hook_fstart(void *r)
     if (split_wanted()) {
         int w, h;
         bb_size(&w, &h);
-        view = stage >= 2 ? (int)(frame_no++ & 1) : 0;
+        view = stage >= 2 ? (force_view >= 0 ? force_view : both_mode ? (int)(frame_no++ * 0) : (int)(frame_no++ & 1)) : 0;
         BYTE *src = CAM;
         if (view == 1) {
             if (client_split && cl_have && !p2)
@@ -805,13 +812,16 @@ static void TSCALL hook_fstart(void *r)
         static DWORD t0;
         static int nall, nsplit;
         DWORD now = GetTickCount();
-        nall++, nsplit += view >= 0;
+        if (force_view < 0)
+            nall++;
+        nsplit += view >= 0;
         if (!t0)
             t0 = now;
         else if (now - t0 >= 10000) {
             if (nsplit || splitlog)
-                ts_log("split: %.1f frames/s, %.1f split frames/s (each view %.1f/s)", nall * 1000.0f / (now - t0),
-                       nsplit * 1000.0f / (now - t0), nsplit * 500.0f / (now - t0));
+                ts_log("split: %.1f frames/s, %.1f split views/s (each view %.1f/s%s)", nall * 1000.0f / (now - t0),
+                       nsplit * 1000.0f / (now - t0), nsplit * 500.0f / (now - t0),
+                       both_mode ? ", both views every frame" : "");
             t0 = now, nall = nsplit = 0;
         }
     }
@@ -985,12 +995,58 @@ static void fx_restore(void)
 
 static void TSCALL hook_fend(void *r)
 {
+    int again = both_mode && !in_pass2 && view == 0;
     real_fend(r);
     if (splitlog && view >= 0 && logged < 60) {
         logged++;
         ts_log("split: frame end view %d thread %lu", view, GetCurrentThreadId());
     }
     restore_globals();
+    if (again)
+        second_pass(r);
+}
+
+/* The second view's pass (TS_SPLIT_BOTH): the single-thread frame's steps after the game update, as 0x649930 runs them
+ * (decompiled: work	mp_crame.c). Thiscall natives are called with the renderer / the driver / the UI as `this`. */
+typedef void (TSCALL *thunk0_t)(void *);
+typedef void (TSCALL *thunk4_t)(void *, int, int, int, int);
+static void second_pass(void *r)
+{
+    BYTE *ui = *(BYTE **)0x1095fc8, *drv = DRV;
+    DWORD fl = *(DWORD *)0xfcace8, fl0 = *(DWORD *)0xfcace0;
+    int uvar6 = (int)((*(DWORD *)(*(BYTE **)0xecbdb0 + 0x118) >> 0x12) & 1);
+    int normal = 1, mode4 = *(int *)(*(BYTE **)0xfcab34 + 0x3c) == 4;
+    if (uvar6 || !(fl & 0x2000) || mode4 || (*(DWORD *)0x1095f90 & 0x20) || ((*(DWORD *)(*(BYTE **)0xecbdb0 + 0x118) >> 8) & 1)
+        || (fl0 & 0x1000) || (fl0 & 4))
+        normal = 0;
+    if (!normal || !drv || !r || !split_wanted())
+        return;
+    void **rvt = *(void ***)r;
+    in_pass2 = 1;
+    force_view = 1;
+    if (*(int *)0xecb870 == 0)
+        *(DWORD *)0x10c180c = 0;
+    hook_fstart(r);   /* (view 1, then the engine's own frame start) */
+    force_view = -1;
+    ((thunk0_t)rvt[0x40 / 4])(r);
+    ((thunk0_t)rvt[0x30 / 4])(r);
+    ((thunk4_t)rvt[0x34 / 4])(r, 0, 1, 0, 0xa8c);
+    ((thunk0_t)rvt[0x3c / 4])(r);
+    ((thunk0_t)rvt[0x44 / 4])(r);
+    if (ui && *(DWORD *)0xfcab7c != 0)
+        ((void (TSCALL *)(void *, void *, int))(*(void ***)ui)[0x114 / 4])(ui, *(void **)0xfcabc4, 1);
+    *(DWORD *)0xfcace8 |= 0x200;
+    void **dvt = *(void ***)drv;
+    ((thunk0_t)dvt[0x44 / 4])(drv);
+    ((void (TSCALL *)(void *, int))dvt[0x3c / 4])(drv, 0);
+    int timer = 0;
+    int param[4] = {1, (int)*(DWORD *)0x10c180c, 1, (int)(DWORD)&timer};   /* (word 0 = 1: no Present of the previous frame) */
+    ((void (__attribute__((fastcall)) *)(void *))0x649830)(param);
+    ((thunk0_t)dvt[0x40 / 4])(drv);
+    ((thunk0_t)dvt[0x48 / 4])(drv);
+    *(DWORD *)0xfcace8 &= ~0x200u;
+    hook_fend(r);
+    in_pass2 = 0;
 }
 
 /* ---- composite ---- */
@@ -3896,6 +3952,7 @@ void split_install(void)
     if (ts_env("TS_SPLIT_LAYOUT", v, sizeof v) && (v[0] == 'v' || v[0] == 'h'))
         layout_cfg = v[0];
     keep_mt = ts_env("TS_SPLIT_MT", v, sizeof v) && v[0] == '1';
+    both_mode = ts_env("TS_SPLIT_BOTH", v, sizeof v) && v[0] == '1';   /* (tests: both views in every frame) */
     no_geo_owner = ts_env("TS_SPLIT_NOGEO", v, sizeof v) && v[0] == '1';   /* (tests: without the owner swap) */
     fp_share = ts_env("TS_SPLIT_FPSHARE", v, sizeof v) && v[0] == '1';
     splitlog = ts_env("TS_SPLITLOG", v, sizeof v) ? atoi(v) : 0;
