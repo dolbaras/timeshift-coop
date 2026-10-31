@@ -128,7 +128,7 @@ UI strings (live while the game runs) shared by the frames, the DLL and the lab 
 - Session info and version check: coopnet subtypes 40 (server -> client: flags, difficulty, max players,
   version) and 41 (client -> server: same / other version), see the file's header.
 - Regroup (pause menu, co-op session only: the button replaces the Quit row's place and Quit moves one row down; outside co-op
-  the stock rows are untouched) and the gate hint: a line on the HUD (`$ui.ShowGamePlayHint("<string id>,<arg>")`, texts
+  the stock rows are untouched) and the gate hint: a line on the HUD (`$player.ShowMsg("<string id>,<arg>", 6)` (ShowGamePlayHint shows nothing for these ids), texts
   `COOP_MSG_REGROUP_*`, `COOP_HINT_GATE_*` in all 9 languages). While campaign.c's `campaign_gate_waiting()` reports players
   missing at a gate where the host's player waits, the host shows its line and sends subtype 43 (u8 proto, u8 missing) every
   3 s; each client shows its own line.

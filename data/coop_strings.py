@@ -4,7 +4,7 @@ text is a line break, {STRING} is filled from the text's arguments ("KEY,arg1,ar
 
 A table of a language not listed here gets the English text (and the build says so).
 The menu also uses the game's own strings: UI_BTN_LAN_SERVER, UI_BTN_LAN_CLIENT, UI_BTN_IP_CLIENT,
-UI_BTN_DIRECT_CONNECT, UI_ADVSERV_DIFFICULTY, UI_ADVSERV_DIFF_0..2, UI_ADVSERV_MAX_PLAYERS,
+UI_BTN_DIRECT_CONNECT, UI_ADVSERV_DIFFICULTY, UI_ADVSERV_DIFF_0..2,
 UI_CREATE_SERVER_NETWORK, UI_CONNECTION_1, UI_CREATE_SERVER_INTERNET, UI_PLAYER_SETUP_PASSWORD,
 UI_BTN_CREATE, UI_BTN_BACK and the level names GAME_<level>.
 """
@@ -358,6 +358,17 @@ STRINGS = [
         "polish": "Nie było kogo przenieść.",
         "czech": "Nebylo koho přesunout.",
         "hungarian": "Nem volt kit áthelyezni.",
+    }),
+    ("COOP_HOST_MAXPLAYERS", {   # Host frame's player-limit row: the stock Czech text is too long for the row (touches the arrow)
+        "english": "Max Players",
+        "russian": "Макс. игроков",
+        "german": "Spielerlimit",
+        "french": "Joueurs max.",
+        "italian": "N. max giocatori",
+        "spanish": "Máx. jugadores",
+        "polish": "Maks. graczy",
+        "czech": "Max. hráčů",
+        "hungarian": "Max. Játékosok",
     }),
     ("COOP_HINT_GATE_HOST", {   # hint on the host while a gate waits; {STRING} 1 = players missing
         "english": "Waiting for {STRING} more player(s) here. If one is stuck: pause menu, Regroup.",

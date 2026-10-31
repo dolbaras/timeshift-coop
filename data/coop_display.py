@@ -63,7 +63,7 @@ EDITS = [
       mode := $ui.GetUserVar("COOP_DisplayMode")
       if mode != "0" and mode != "1" and mode != "2"
          mode := "0"
-         if $ui.GetUserVar("VIDEO_FullScr") == "no"
+         if $ui.GetUserVar("VIDEO_FullScr") == false   // a bool in the profile: comparing it with "no" is a script error
             mode := "2"
          end
       end

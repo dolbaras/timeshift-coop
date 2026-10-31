@@ -1481,6 +1481,12 @@ static void loadout_step(DWORD now)
         lo.apply_at = 0;
         if (!alive || !on_foot || (kind == 1 && lo.level_set))
             return;
+        if (!lo.wpn[0] && !lo.wpn[1] && !lo.wpn[2]) {   /* the last SetupWeapon(0, 0, 0) TOOK the weapons away (levels 1, 2, 24, a
+                                                         * restart's start): putting that back would strip the respawn's start pistol */
+            CLOG("campaign: loadout %s: the last set was 0 0 0 (weapons taken away), nothing to put back",
+                 kind == 2 ? "after the respawn" : "carried over from the last level");
+            return;
+        }
         char ssl[100], res[100];
         snprintf(ssl, sizeof ssl, "$player.SetupWeapon(%d, %d, %d)", lo.wpn[0], lo.wpn[1], lo.wpn[2]);
         ts_script_run(ssl, res, sizeof res);

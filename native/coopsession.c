@@ -339,11 +339,13 @@ static void check_data_version(void)
         CLOG("coopsession: WARNING: the mod's data is version \"%s\", this DLL %s (reinstall the mod)", d, TS_VERSION);
 }
 
-/* A line on the HUD (the game's own gameplay hint), text id of the mod's strings with the arguments after commas. */
+/* A line on the HUD (the game's own centred message line, ShowMsg), text id of the mod's strings with the arguments after
+ * commas. Called on the player: ShowMsg on other script objects is forwarded to the clients by campaign.c's voice lines
+ * (players are left out of that). ShowGamePlayHint shows nothing for these ids (live, 2026-11-01). */
 static void show_hint(const char *id)
 {
     char ssl[160], out[64];
-    snprintf(ssl, sizeof ssl, "$ui.ShowGamePlayHint(\"%s\")", id);
+    snprintf(ssl, sizeof ssl, "$player.ShowMsg(\"%s\", 6)", id);
     ts_script_run(ssl, out, sizeof out);
 }
 
