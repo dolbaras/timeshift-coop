@@ -106,11 +106,15 @@ Requirements
 - A second XInput gamepad for split screen.
 
 Install
-1. Extract the archive anywhere and run "Install Co-op.bat". It finds the game folder (or asks
-   for it), builds the mod's data from your own game files (a few seconds; the mod contains no
-   game files), keeps a copy of every file it replaces (in <game>\coop-backup) and installs the
-   mod. Its window shows each step. Running it again reinstalls, updates or removes the mod.
-   Its language is Windows' (English, Russian, German, French, Spanish or Italian).
+1. Run "timeshift-coop-setup-<version>.exe" (one file, nothing to extract: it unpacks itself into a
+   temporary folder, starts the installer and deletes the folder afterwards), or extract the .zip
+   anywhere and run "Install Co-op.bat" (the same installer). It finds the game folder (or asks
+   for it; the exe also looks in the folder it lies in), builds the mod's data from your own game
+   files (a few seconds; the mod contains no game files), keeps a copy of every file it replaces
+   (in <game>\coop-backup) and installs the mod. Its window shows each step. Running it again
+   reinstalls, updates or removes the mod (so does "Uninstall Co-op.bat" in the game folder, which
+   the installer leaves either way). Its language is Windows' (English, Russian, German, French,
+   Spanish or Italian).
 2. Start the game with the "TimeShift Co-op" shortcut the installer puts on the desktop and in
    the Start menu, or as usual (bin\TimeShift.Exe).
 Updates: the shortcut first asks GitHub for the newest release of the mod (a second or two;
@@ -185,6 +189,16 @@ Windows and antivirus
   Exclusions). The source is public (the mod's GitHub page); the release page shows the zip's SHA-256.
 - If no window appears within about 25 seconds, "Install Co-op.bat" says so in a console window; the
   log is %TEMP%\timeshift-coop-install.log.
+- The setup exe (timeshift-coop-setup-<version>.exe) is NOT digitally signed (the project has no
+  code-signing certificate), so SmartScreen will probably say "Windows protected your PC" ("More
+  info" -> "Run anyway") and an antivirus may complain about a self-unpacking program. It contains
+  exactly the same .zip as the release (the zip's SHA-256 is on the release page; nothing is
+  downloaded, no game files are inside) and does nothing but unpack it into %TEMP% and start the
+  PowerShell installer from there. To look inside first, run it from a command prompt as
+  "timeshift-coop-setup-<version>.exe --extract <empty folder>": it only unpacks, nothing is
+  started. If the exe is blocked, the .zip + "Install Co-op.bat" does the same. A message box
+  appears when it cannot unpack, when PowerShell cannot be started or when the installer window
+  did not start; the installer's own log is as above.
 
 Troubleshooting and reports
 - The installer stops: its log is <game>\coop\install-log.txt, or

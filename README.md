@@ -11,8 +11,10 @@ whole campaign played by people, play over the Internet (LAN and virtual LAN wer
 the zeppelin-intro lines of levels 8 and 23 on clients. The full list is in the release notes. Please report what
 goes wrong in the [issues](https://github.com/dolbaras/timeshift-coop/issues).
 
-**Install:** download `timeshift-coop-0.1.0.zip` from the release, extract it anywhere, run `Install Co-op.bat`, start
-the game with the "TimeShift Co-op" shortcut (it updates the mod by itself). Details: `README-COOP.txt` in the archive.
+**Install:** download `timeshift-coop-setup-<version>.exe` from the release and run it (one file, nothing to extract; it is
+not code-signed, so Windows SmartScreen may warn: "More info" -> "Run anyway"), or download `timeshift-coop-<version>.zip`,
+extract it anywhere and run `Install Co-op.bat` (the same installer). Start the game with the "TimeShift Co-op" shortcut (it
+updates the mod by itself, from the zip). Details: `README-COOP.txt` in the archive.
 
 [Русская версия ниже](#timeshift-co-op-по-русски)
 
@@ -79,8 +81,10 @@ License: MIT (see `LICENSE`). TimeShift is a trademark of its owners; this proje
 вступлений на дирижабле (уровни 8 и 23) у клиентов. Полный список — в описании релиза. О проблемах пишите в
 [issues](https://github.com/dolbaras/timeshift-coop/issues).
 
-**Установка:** скачайте `timeshift-coop-0.1.0.zip` из релиза, распакуйте куда угодно, запустите `Install Co-op.bat`,
-запускайте игру ярлыком «TimeShift Co-op» (он сам обновляет мод). Подробности — `README-COOP.txt` в архиве.
+**Установка:** скачайте `timeshift-coop-setup-<версия>.exe` из релиза и запустите его (один файл, распаковывать не нужно; он
+без цифровой подписи, поэтому SmartScreen может предупредить: «Подробнее» -> «Выполнить в любом случае») или скачайте
+`timeshift-coop-<версия>.zip`, распакуйте куда угодно и запустите `Install Co-op.bat` (тот же установщик). Запускайте игру
+ярлыком «TimeShift Co-op» (он сам обновляет мод, из zip). Подробности — `README-COOP.txt` в архиве.
 
 ## Что умеет
 

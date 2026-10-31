@@ -31,7 +31,12 @@ param([string] $Game = "", [switch] $Uninstall, [switch] $Quiet, [string] $Lang 
       [string] $SteamUpdate = "", [switch] $AcceptSteamUpdate)
 $ErrorActionPreference = "Stop"
 # The first act: "Install Co-op.bat" waits for this file to know that PowerShell really started the installer.
-if (-not $Quiet) { try { [IO.File]::WriteAllText((Join-Path ([IO.Path]::GetTempPath()) "timeshift-coop-installer-started.flag"), "1") } catch { } }
+if (-not $Quiet -and -not $env:COOP_SETUP_FLAG) { try { [IO.File]::WriteAllText((Join-Path ([IO.Path]::GetTempPath()) "timeshift-coop-installer-started.flag"), "1") } catch { } }
+# The setup exe (timeshift-coop-setup-<version>.exe, tools\mkinstaller) unpacks this installer into a temp folder and says where it
+# lies (COOP_SETUP_DIR: the game and a Steam update package are looked for there too) and which file to write as the first act
+# (COOP_SETUP_FLAG: a failed run without it = PowerShell never ran the script, the exe says so; it replaces the %TEMP% flag of the .bat).
+if ($env:COOP_SETUP_FLAG) { try { [IO.File]::WriteAllText($env:COOP_SETUP_FLAG, "1") } catch { } }
+$script:setupDir = if ($env:COOP_SETUP_DIR -and (Test-Path -LiteralPath $env:COOP_SETUP_DIR -PathType Container)) { $env:COOP_SETUP_DIR } else { $null }
 $here = $PSScriptRoot
 $payload = Join-Path $here "files"
 $script:TITLE = "TimeShift Co-op"
@@ -901,7 +906,7 @@ function Is-Steam($g) {
 # Candidate game folders, most likely first.
 function Find-Games {
     $c = New-Object System.Collections.Generic.List[string]
-    foreach ($d in @($here, (Split-Path $here -Parent))) { if ($d) { $c.Add($d) } }
+    foreach ($d in @($here, (Split-Path $here -Parent), $script:setupDir)) { if ($d) { $c.Add($d) } }
     $keys = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
               "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
               "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*")
@@ -1141,7 +1146,7 @@ function Close-Package($r) { if ($r.zip) { try { $r.zip.Dispose() } catch { }; $
 # Finds a package by itself: a zip in the Downloads folder or next to the installer that holds bin\TimeShift.exe and the
 # 1.2 archive and is named like the update. Only a suggestion: the window shows it, the player confirms by installing.
 function Find-Package {
-    $dirs = @($here, (Split-Path $here -Parent), (Join-Path $env:USERPROFILE "Downloads")) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    $dirs = @($here, (Split-Path $here -Parent), $script:setupDir, (Join-Path $env:USERPROFILE "Downloads")) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
     foreach ($d in $dirs) {
         foreach ($z in @(Get-ChildItem -LiteralPath $d -Filter "*.zip" -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)time.?shift' -and $_.Name -notmatch '(?i)coop' -and $_.Length -lt 200MB })) {
             $p = Open-Package $z.FullName

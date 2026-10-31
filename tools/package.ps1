@@ -11,8 +11,11 @@
 #     coop\coop-launcher.ps1                 behind the "TimeShift Co-op" shortcut (auto-update)
 #     coop\README-COOP*.txt, coop\payload.txt
 # The package holds no game files: the data archives are built on the player's PC.
-# Run native\build.sh first. Usage: package.ps1 [-Version <TS_VERSION>] [-PythonZip <python-3.12.10-embed-amd64.zip>]
-param([string] $Version = "", [string] $PythonZip = "")
+# Run native\build.sh first. Usage: package.ps1 [-Version <TS_VERSION>] [-PythonZip <python-3.12.10-embed-amd64.zip>] [-Exe] [-Dist <folder>]
+# -Exe also builds dist\timeshift-coop-setup-<version>.exe: a single-file installer that carries this zip (an ADDITIONAL release
+# asset; the zip stays the one the shortcut's launcher updates from). Made by <workspace>\tools\mkinstaller (-Mkinstaller <folder>
+# for a clone placed elsewhere); the exe is unsigned. -Dist: write to that folder instead of dist\ (tests: dist\ holds the published zips).
+param([string] $Version = "", [string] $PythonZip = "", [switch] $Exe, [string] $Mkinstaller = "", [string] $Dist = "")
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $tsh = Get-Content -LiteralPath (Join-Path $root "native\ts.h") -Raw
@@ -39,7 +42,7 @@ if (-not (Test-Path -LiteralPath $pyZip)) { throw "tools\vigem-dl\python-3.12.10
 if ((Sha256 $pyZip) -ne $pySha) { throw "the Python zip is not the pinned one" }
 $pyKeep = @("python.exe", "python312.dll", "python312.zip", "python312._pth", "vcruntime140.dll", "vcruntime140_1.dll", "LICENSE.txt")
 
-$dist = Join-Path $root "dist"
+$dist = if ($Dist) { $Dist } else { Join-Path $root "dist" }
 $stage = Join-Path $dist "timeshift-coop-$Version"
 $files = Join-Path $stage "files"
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
@@ -110,3 +113,12 @@ try {
 } finally { $out.Dispose() }
 Remove-Item -LiteralPath $stage -Recurse -Force
 "packaged $zip ($([int]((Get-Item -LiteralPath $zip).Length / 1KB)) KB)"
+if ($Exe) {
+    $mk = if ($Mkinstaller) { $Mkinstaller } else { Join-Path $root "..\..\..\tools\mkinstaller" }
+    $mkScript = Join-Path $mk "mkinstaller.ps1"
+    if (-not (Test-Path -LiteralPath $mkScript)) { throw "tools\mkinstaller\mkinstaller.ps1 missing (the workspace's tools folder; -Mkinstaller <folder>)" }
+    $exeOut = Join-Path $dist "timeshift-coop-setup-$Version.exe"
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $mkScript -Zip $zip -Out $exeOut -Product "TimeShift Co-op" -Version $Version `
+        -Description "TimeShift Co-op installer" -TempPrefix "timeshift-coop-setup" -Accent "227cce"
+    if ($LASTEXITCODE -ne 0) { throw "mkinstaller.ps1 failed" }
+}
