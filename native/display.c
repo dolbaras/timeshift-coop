@@ -81,6 +81,7 @@ static int profile_value(const char *path, const char *key, char *out, int size)
 
 #define FRAME_STYLE (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE)
 static int frame_w, frame_h;   /* window mode: the framed window's outer size */
+static DWORD subclass_at;      /* GetTickCount() when the game window was taken over */
 
 static LRESULT CALLBACK proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -93,6 +94,16 @@ static LRESULT CALLBACK proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         WINDOWPOS *p = (WINDOWPOS *)lp;
         p->cx = frame_w, p->cy = frame_h;
         p->flags &= ~(UINT)SWP_NOSIZE;
+        /* the game also puts its window at 0,0 after the device is up (live, N100: the framed window sat in the top-left
+         * corner): during the first minute that move is turned into the centre of the monitor's work area; the player can
+         * drag the window anywhere afterwards */
+        if (!(p->flags & SWP_NOMOVE) && p->x == 0 && p->y == 0 && GetTickCount() - subclass_at < 60000) {
+            MONITORINFO mi = {sizeof mi};
+            if (GetMonitorInfoA(MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST), &mi)) {
+                p->x = mi.rcWork.left + ((mi.rcWork.right - mi.rcWork.left) - frame_w) / 2;
+                p->y = mi.rcWork.top + ((mi.rcWork.bottom - mi.rcWork.top) - frame_h) / 2;
+            }
+        }
     } else if (mode == 2 && msg == WM_STYLECHANGING && wp == (WPARAM)GWL_STYLE) {
         ((STYLESTRUCT *)lp)->styleNew = FRAME_STYLE;   /* (and takes the frame away) */
     }
@@ -103,6 +114,7 @@ static void subclass(HWND w)
 {
     if (w && w != window) {
         window = w;
+        subclass_at = GetTickCount();
         game_proc = (WNDPROC)SetWindowLongA(w, GWL_WNDPROC, (LONG)proc);
     }
 }
