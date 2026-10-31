@@ -3952,7 +3952,20 @@ void split_install(void)
     if (ts_env("TS_SPLIT_LAYOUT", v, sizeof v) && (v[0] == 'v' || v[0] == 'h'))
         layout_cfg = v[0];
     keep_mt = ts_env("TS_SPLIT_MT", v, sizeof v) && v[0] == '1';
-    both_mode = ts_env("TS_SPLIT_BOTH", v, sizeof v) && v[0] == '1';   /* (tests: both views in every frame) */
+    {   /* both views in every frame: TS_SPLIT_BOTH=1/0, else ts_coop.ini [Split] BothViews=1 (off by default) */
+        char ini[MAX_PATH];
+        DWORD n = GetModuleFileNameA(NULL, ini, MAX_PATH);
+        char *slash = strrchr(ini, 0x5c);
+        both_mode = 0;
+        if (n && slash && slash - ini + 13 < MAX_PATH) {
+            strcpy(slash + 1, "ts_coop.ini");
+            both_mode = GetPrivateProfileIntA("Split", "BothViews", 0, ini) != 0;
+        }
+        if (ts_env("TS_SPLIT_BOTH", v, sizeof v))
+            both_mode = v[0] == '1';
+        if (both_mode)
+            ts_log("split: both views are drawn in every frame (TS_SPLIT_BOTH / ts_coop.ini [Split] BothViews)");
+    }
     no_geo_owner = ts_env("TS_SPLIT_NOGEO", v, sizeof v) && v[0] == '1';   /* (tests: without the owner swap) */
     fp_share = ts_env("TS_SPLIT_FPSHARE", v, sizeof v) && v[0] == '1';
     splitlog = ts_env("TS_SPLITLOG", v, sizeof v) ? atoi(v) : 0;

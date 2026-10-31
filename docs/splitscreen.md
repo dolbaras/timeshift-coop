@@ -55,8 +55,8 @@ instead of ending the game, stays through a level change, and each player sees t
 | Each player has | an own camera, first-person weapon, crosshair, HUD (life, ammunition, grenades, time energy), screen effects (damage, death, low life), pick-up messages, pick-ups and weapons; prompts name the button of the player's own device |
 | Time powers | either player's power works for everybody (as in co-op) |
 | Death | a player who dies comes back beside the other one; both down together restarts as in the game (single player); in a network game player 1 follows the network rules |
-| Not per player | the pause menu and loading screens (full screen, player 1 controls them), cutscenes (the scene camera, full screen), hint boxes (one for both). The scripts and the AI see player 1 as "the player" (e.g. which player an AI chases or a trigger waits for) |
-| Performance | each half is drawn every second frame (the frame rate of each half is half the game's) |
+| Not per player | the pause menu and loading screens (full screen, player 1 controls them), cutscenes (the scene camera, full screen), hint boxes (one for both). Scripts name player 1 as "the player": the AI a script aims (`SetAim("player")`, `SetTarget`) takes the nearest living player including player 2, "all players" gates wait for player 2 too, a turret seat the story gives player 1 gives player 2 the next seat, and the story's weapon removal (`SelectHolster`) is repeated on player 2; everything else a script does to "the player" (checkpoint triggers, cutscenes, death and restart) still sees player 1 only |
+| Performance | by default each half is drawn every second frame (the frame rate of each half is half the game's). Option `ts_coop.ini` `[Split]` `BothViews=1` draws both halves in every frame (round 25: it can double each half's rate when the graphics card has room, and lowers the game's own update rate to the card's speed when it has not) |
 
 ## Why it has to be built
 
@@ -501,11 +501,51 @@ Still to run (needs the N100): split on a client end to end (copy, halves, HUD, 
 death, jitter), and the split host + client checks (player 2's time power, its AI kill, its pick-up) with
 `split_pair_t2.ps1`.
 
+### Round 24 (2026-10-31, main PC alone, one copy, DLL of mod HEAD): turret seats, AI and scripts for player 2
+
+Tools (private, `work\tmp_c`): `t_fire.ps1` (the soak of one level with pad 2 / pad 1 firing and a burst of frames), `t_cmd.ps1` (the soak with
+console statements, `SOAK_CMDS`), `t_batch_ai.sh` (one lock: the AI test and the frame-rate study).
+
+| Item | Result | Evidence |
+|---|---|---|
+| Player 2 in a turret, level 23 (`ts2_zepride2_part01`) | player 1 takes tur01 (the level's script), the gunner `rebel_hmg1` of tur04 is removed, player 2 takes tur04 a second later (`split: player 2 takes ...\|tur04: Ok`); pad 2's right trigger fires the gun (muzzle flash in player 2's half only), pad 1 fires its own; the halves stay 23 m apart (the turrets), both 100 life, no crash. The zeppelin of the level is lost about 30 s after the seats when nobody shoots, so a test has to fire within 15 s | `20261031-203921` `shot110.png` (flash), `shot115.png` |
+| Same, level 8 (`ts2_zepride1_part01`) | the intro runs about 90 s, then the seats (player 1 tur02, player 2 tur04); player 2's right stick swivels its gun (sky, hull, deck) and its trigger fires (muzzle flashes in 4 of 12 burst frames) | `20261031-205410` contact sheet `p2sheet.png`, `20261031-204822` |
+| Player 2 killed in its seat | `player 2 died: respawned next to player 1`; its half still shows the gun view, both halves draw, no crash; the removed gunner does not come back and no script error names it | `20261031-204822` `shot193.png`, `shot206.png` |
+| Level 20 weapon removal | `SelectHolster(1, 1)` of the story is repeated on player 2 at the level start and `(0, 1)` when the vent ends; both halves show no weapon in between (before: player 2 kept its weapon) | `20261030-183935` `shot096.png` and log |
+| AI nearest player (7c) | a scripted `SetAim("player")` of an AI chooses among player 1, player 2 and the clients: with player 1 nearest (50 m) it stays `"player"`, with player 2 put on the soldier it is rewritten to `player2` (`campaign: ai_house_forth_room_1 targets player2 (nearest player) instead of the host`) and the engine accepts the name (no script error). Works in single-player split screen too (the hook no longer needs a network session). The "all players" gates (`campaign_dom_verdict`, the "waits for N players" count) count player 2 on a server (not run live) | `20261031-210057` log (`TS_CAMPAIGN_LOG=1`, level 2 `ts2_city_part02`) |
+
+### Round 25 (2026-10-31, main PC, Intel UHD 630, 1768x992 picture): frame rate per half and `BothViews`
+
+Measured with the log line `split: N frames/s ... (each view M/s)` (every 10 s), level `ts2_city_part02`, idle 40 s, with the lab frame cap `TS_FPSCAP`
+(a sleep at the end of the frame; 60 stands for a 60 Hz screen with vsync):
+
+| Mode | frames/s (game updates) | each half's pictures/s | Run |
+|---|---|---|---|
+| alternate (default), no cap | 67-96 (mostly 77) | 34-48 (mostly 39) | `20261031-210355` |
+| alternate, cap 60 | 60.0 | 30.0 | `20261031-210942` |
+| both views per frame (`TS_SPLIT_BOTH=1`), no cap | 35-52 (mostly 41) | 35-52 (mostly 41) | `20261031-210648` |
+| both views per frame, cap 60 | 35-52 (mostly 40) | 35-52 (mostly 40) | `20261031-211235` |
+
+Reading: one picture costs about 12.5 ms on this card (the same without split screen), so the card is the limit and alternating costs nothing extra per
+picture. With a 60 Hz cap and a card that has room (most players') alternating gives 30 pictures/s per half and `BothViews` 60; on this card it gives
+40 instead of 30, but the game's own updates (movement, AI, physics) fall from 60 to 40 per second. Where the card is the limit (no cap) both modes give
+the same pictures per half and `BothViews` only costs update rate. So it stays **off by default** and is a player's switch: `ts_coop.ini` `[Split]`
+`BothViews=1` (or `TS_SPLIT_BOTH=1`).
+
+How it works (`split.c` `second_pass`): the engine's single-thread frame (`0x649930`) runs once for view 0. In the frame-end hook (`R+0x24`), after the
+real frame end and the restore of the swapped globals, the steps the frame makes after the game update are made again for view 1: frame start (view 1
+forced), object prep (`R+0x40`, `+0x30`, `+0x34(0,1,0,0xa8c)`, `+0x3c`, `+0x44`), the HUD update, the driver's `+0x44` / `+0x3c(0)`, the render job `0x649830`
+with its flag word 1 (no Present of the previous frame), `+0x40` / `+0x48`, then the frame end again. The composite at `0x770f42` already writes both
+halves from the two views' own textures, so nothing else changes. The second pass is skipped under the same conditions in which the engine itself
+does not draw the world (menus, cutscenes, pause: the engine's `iVar4 == 0`). Checked: both halves with their HUDs, weapons and bodies as in the
+alternating mode (`20261031-210648` `shot141.png`), no crash in 40 s. Not checked: long play, level changes and the Co-op menu in this mode, an NVIDIA/AMD
+card, real vsync.
+
 ## Open problems
 
-- **Player 2 is not a player to the game**: AI targets `[0x1095b30]` (player 1), scripts use `$player` (player 1):
-  triggers, checkpoints, cutscenes, death and restart see player 1 only. The same audit as for network co-op
-  (`player-audit.md`).
+- **Player 2 is not a player to the game**: the engine's own AI perception and the scripts use `$player` (player 1). Since round 24 the scripted
+  aim/target calls, the "all players" gates, turret seats and the story's holster follow player 2; checkpoint triggers, cutscenes, death and restart
+  still see player 1 only. The same audit as for network co-op (`player-audit.md`).
 - **Split screen with the network**: player 2 of a split host is seen on clients (round 15); its time powers run
   for everybody since round 16. Split screen on a client: code of rounds 16 and 17, not tested yet.
 - Hint boxes are one for both halves: a hint naming a button names player 1's device when both see it.
@@ -519,7 +559,8 @@ death, jitter), and the split host + client checks (player 2's time power, its A
 - The line of sight of a joining spot is not checked (only the floor level).
 - The pause menu and loading screens are full screen (UI command context); cutscenes with the scene camera are
   full screen. Player 2 has no menu control (only player 1's pad and keyboard drive the menus).
-- Each view runs at half the frame rate; no frame cap yet.
+- Each view runs at half the frame rate by default (round 25: `BothViews=1` draws both in every frame; no automatic choice, because a card with
+  headroom cannot be told from a vsync cap without GPU timing queries).
 - Multi-thread frame: off while split screen is on. With the engine's workers the render job overlaps the game
   update and the globals cannot simply be held for the render span; the swap would have to be limited to the
   frame start, the HUD update and the frame end (see the research notes), and live camera reads in the render job
