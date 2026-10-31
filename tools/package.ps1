@@ -114,7 +114,7 @@ try {
 Remove-Item -LiteralPath $stage -Recurse -Force
 "packaged $zip ($([int]((Get-Item -LiteralPath $zip).Length / 1KB)) KB)"
 if ($Exe) {
-    $mk = if ($Mkinstaller) { $Mkinstaller } else { Join-Path $root "..\..\..\tools\mkinstaller" }
+    $mk = if ($Mkinstaller) { $Mkinstaller } elseif (Test-Path -LiteralPath (Join-Path $root "tools\mkinstaller\mkinstaller.ps1")) { Join-Path $root "tools\mkinstaller" } else { Join-Path $root "..\..\..\tools\mkinstaller" }
     $mkScript = Join-Path $mk "mkinstaller.ps1"
     if (-not (Test-Path -LiteralPath $mkScript)) { throw "tools\mkinstaller\mkinstaller.ps1 missing (the workspace's tools folder; -Mkinstaller <folder>)" }
     $exeOut = Join-Path $dist "timeshift-coop-setup-$Version.exe"
