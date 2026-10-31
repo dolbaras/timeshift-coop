@@ -615,6 +615,72 @@ writes every body's drawn place per frame with the QPC time (`rec.txt`), `lab\a_
 files: err = mean distance of the other machine's picture to the machine that moves the body (at the best time shift), lag = that
 shift, irr = speed irregularity of three frames in a row (0 = even), ups = updates read per second. Same PC, same clock.
 
+| 30 fps cap, 60 s circle run, both players run the same circle 4 m apart | AI err / drawn irr (host's own) / ups | remote players err (p95) / lag / drawn irr (own) |
+|---|---|---|
+| direct (n100pair-20261031-223751) | 0.048 m / 0.24 (0.13) / 27.6 | 0.15 (0.19) and 0.20 (0.23) m / 20-30 ms / 0.14 and 0.07 (0.06, 0.12) |
+| 40 ms each way, 10 ms jitter, 15 % loss in bursts of 3 (n100pair-20261031-224046) | 0.077 m / 0.17 (0.15) / 23.6 | 0.49 (1.25) and 0.40 (0.97) m / 50-60 ms / 0.11 and 0.09 (0.04, 0.03) |
+| same, 30 % loss (older config, n100pair-20261031-222144) | 0.090 m / 0.16 (0.14) / 18.3 | 0.50 (1.16) m / 35 ms / 0.15 (0.07) |
+
+Reading: on a clean link the remote picture is within 0.05 m (AI) and 0.15-0.20 m (players, running at 5 m/s: 30-40 ms
+behind) and not more irregular than the owner's own picture (the mod's targets from Jericho: irr under 0.3, no stalls: met; the
+one outlier, a drawn irr of 0.6 for the host's body, is the host's own irregular walk against a wall, its own picture has the same
+0.6). The AI error stays small even under loss because soldiers move slowly and the reader extrapolates; the running players
+show the loss: 3 lost updates in a row at 30 updates/s are 100 ms of extrapolation at 5 m/s. **Tried and rejected:** limiting
+the extrapolation of remote players to 300 ms (the reader otherwise extrapolates for as long as no update arrives): errors
+0.47/0.43 m with it against 0.49/0.40 m without at 15 % loss, 0.56/0.57 m at 30 % - no gain, removed (d054922).
+
+### Stance, floor height, body against body, enemy damage (chunk A, 2026-10-31, N100 pair, `lab\a_smooth.ps1 -Mode stance|coll|hurt`)
+
+- **Stance.** The client sees the host's body in the animation of the host's own state and the host sees the client's in
+  the client's: stand idle 182, crouch idle 188 (held key and the toggled crouch), crouch walk 101, both directions
+  (n100pair-20261031-214930; `!ai pstate` prints the body's animation id and time next to the stance words).
+- **Floor height.** The remote body's y equals its owner's within 2-4 mm (5.045 / 5.048, 4.985 / 4.989, 5.139 / 5.141 m) standing,
+  crouching and crouch-walking; the floor ray (`!pr feet`) reads d00 0.000 under remote players; AI soldiers stand 0-3 cm
+  below the ray's floor on both machines. Not covered: slide, ladders, lifts and moving platforms, vents, vehicles.
+- **Collision.** Remote players are solid bodies on both machines: a player walking into a standing one stopped at 0.80 m (host
+  view) / 1.01 m (client view) centre distance, the other way round 0.84 m on both, two players running side by side never came
+  under 0.5 m (n100pair-20261031-220133). (Two players that stand on the same spawn point overlap until one moves: `!pr pairs`
+  then reads 0.02 m, as at a level start.)
+- **Enemy fire hurts a client.** God mode off, both players among the start soldiers for 45 s: the client's life as the host
+  sees it follows the client's own value (100 -> 52 -> 0 -> respawn 100), the death replicates (body state 2, animation -1 =
+  ragdoll), 5 deaths on each machine's `player_death` counter (n100pair-20261031-223501). A client does not see the
+  host's life (the proxy body keeps 100): stock multiplayer behaviour, the HUD shows only the own life.
+
+### AccessViolation lines in the logs (chunk A, 2026-10-31)
+
+About every second pair run logged four `AccessViolation at 75490196 (read <page-aligned address>)` lines
+(`eax = edx = page start, ecx = 0xfffff000, esi = 0x1000`) within a few milliseconds, on both machines, with and without a relay.
+Address and registers are the page loop of kernelbase's `IsBadReadPtr`: a range probe whose end lies in an unmapped page (an
+engine object at the end of a heap segment, a stale pointer) raises and catches an access violation per call. The engine does not
+import `IsBadReadPtr` (checked in the exe's import table); the mod calls it 170 times (object scans such as `is_ai_weapon`
+over every object, `ai_name`, split screen, campaign), a handful of times per second. The proxy now points the mod's own imports
+of `IsBadReadPtr` / `IsBadWritePtr` / `IsBadStringPtrA` at `VirtualQuery` based versions with the same answers (`proxy.c`,
+`TS_BADPTR=0` keeps the system's): 0 AccessViolation lines in 30 logs of 15 pair runs after the change against 6 of 20 logs before
+(the same day, same build otherwise). They were harmless (caught inside the probe) but cost exception dispatches, hid real faults
+in the log's four-line limit and consumed stack guard pages in one case seen by chunk B (`!cp near`).
+
+### Internet link stress (netem relay, 2026-10-31)
+
+Seven pair runs through `lab\netem.py` (join, 40 s idle, level exit `dom_reload`, client follows to `ts2_city_part03`):
+
+| Link (each way) | ready | client on part03 | host unacked peak (stock limit 500) |
+|---|---|---|---|
+| 0 % loss, 40 ms (second attempt, see below) | 66 s | 129 s | 35 |
+| 5 % loss (bursts of 2), 80 ms + 20 ms jitter | 67 s | 131 s | 37 |
+| 15 % (bursts of 3), 40 ms + 10 ms | 67 s | 131 s | 59 |
+| 30 % (bursts of 3), 40 ms + 10 ms | 66 s | 129 s | 59 |
+| 20 KB/s limit, 40 ms | 66 s | 129 s | 36 |
+| 10 % loss, 150 ms + 30 ms jitter, 3 % reordered | 76 s | 139 s | 71 |
+| 20 % (bursts of 4), 100 ms + 40 ms jitter, 40 KB/s | 68 s | 132 s | 108 |
+
+All natural exits, no crash, no `server closed`, one join line per client. The first launch of the batch (0 % loss) never started its
+join (the relay saw 0 packets, both logs end in the menu; the N100 copies had been used by another agent just before) and was
+repeated alone (the row above). The connection handshake itself is the weak point
+under heavy burst loss: the game sends about six connect packets and then stops trying (relay log of a failed 30 % run:
+`up: packets 6, lost 5`; the client stayed in the menu for the 15 minutes the script waited), so about one join in three at 30 %
+burst loss did not happen at all and had to be started again by hand; at 15 % and below every join worked. A player simply
+presses Join again; an automatic retry would belong into the co-op menu's join flow.
+
 ### Script facts found on the way
 
 - `string(obj)` turns an object into its name (`"" + obj` is a type error).
