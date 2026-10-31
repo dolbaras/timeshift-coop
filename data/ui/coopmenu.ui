@@ -205,8 +205,12 @@ ssl = <<<
       end
       // Continue: enabled while the mod has a record of the host's last checkpoint (CoopHasSave, set by the DLL)
       Element("Continue").Enable($ui.GetStr("CoopHasSave") == "1")
-      if $ui.GetStr("CoopHasSave") == "1"
+      if $ui.GetStr("CoopHasSave") == "1" and $ui.GetStr("CoopContMarker") == "0"
+         Element("ContHint").SetText("COOP_HINT_CONTINUE_START")
+      else if $ui.GetStr("CoopHasSave") == "1"
          Element("ContHint").SetText("COOP_HINT_CONTINUE")
+      else if $ui.GetStr("CoopHasSave") == "2"
+         Element("ContHint").SetText("COOP_HINT_CONTINUE_BAD")
       else
          Element("ContHint").SetText("COOP_HINT_CONTINUE_NONE")
       end

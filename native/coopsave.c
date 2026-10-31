@@ -200,6 +200,24 @@ static const char *const CHAPTERS[] = {
     "ts2_guardfactory_part05", "ts2_zep_factory_part1", "ts2_zep_factory_part2", "ts2_zep_factory_part3",
     "ts2_zep_factory_part4", "ts2_zepride2_part01", "ts2_cityfinal_part01"};
 
+/* The chapters that have restore objects "Check_Point_<n>" (the level's own restore script of a team restart; found in the level files):
+ * the bit n-1 of the mask is set when Check_Point_<n> exists. The other 17 chapters only have AutoSave(n) calls, which the mod cannot
+ * rebuild on a server: Continue starts them from their beginning (with the weapons of the record). */
+static const struct {
+    const char *level;
+    unsigned mask;
+} MARKERS[] = {{"ts2_city_part03", 0x7},         {"ts2_cityfinal_part01", 0x1},     {"ts2_guardfactory_part05", 0x1},
+               {"ts2_zepride1_part01", 0xff},    {"ts2_zep_factory_part1", 0x7},    {"ts2_zep_factory_part2", 0x3},
+               {"ts2_zep_factory_part4", 0x7}};
+
+static int has_marker(const char *level, int cp)
+{
+    for (size_t i = 0; i < sizeof MARKERS / sizeof *MARKERS; i++)
+        if (!_stricmp(level, MARKERS[i].level))
+            return cp >= 1 && cp <= 32 && (MARKERS[i].mask >> (cp - 1) & 1);
+    return 0;
+}
+
 static int known_chapter(const char *l)
 {
     for (size_t i = 0; i < sizeof CHAPTERS / sizeof *CHAPTERS; i++)
@@ -402,6 +420,9 @@ void coopsave_publish(void)
     ts_script_run(ssl, out, sizeof out);
     if (have) {
         snprintf(ssl, sizeof ssl, "$ui.SetStr(\"CoopContLevel\", \"%s\")", r.level);
+        ts_script_run(ssl, out, sizeof out);
+        /* "1": the chapter has the checkpoint's restore object, "0": Continue starts the chapter from its beginning */
+        snprintf(ssl, sizeof ssl, "$ui.SetStr(\"CoopContMarker\", \"%d\")", has_marker(r.level, r.cp));
         ts_script_run(ssl, out, sizeof out);
     }
 }
