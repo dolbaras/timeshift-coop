@@ -538,8 +538,8 @@ forced), object prep (`R+0x40`, `+0x30`, `+0x34(0,1,0,0xa8c)`, `+0x3c`, `+0x44`)
 with its flag word 1 (no Present of the previous frame), `+0x40` / `+0x48`, then the frame end again. The composite at `0x770f42` already writes both
 halves from the two views' own textures, so nothing else changes. The second pass is skipped under the same conditions in which the engine itself
 does not draw the world (menus, cutscenes, pause: the engine's `iVar4 == 0`). Checked: both halves with their HUDs, weapons and bodies as in the
-alternating mode (`20261031-210648` `shot141.png`), no crash in 40 s. Not checked: long play, level changes and the Co-op menu in this mode, an NVIDIA/AMD
-card, real vsync.
+alternating mode (`20261031-210648` `shot141.png`), no crash in 40 s; a level change 2 -> 3 -> 4 by the natural exits (idle 20 s each): both players in and alive, both halves with radar, no crash
+(`20261031-212356`). Not checked: long play, the Co-op menu and the ini key in this mode, an NVIDIA/AMD card, real vsync.
 
 ## Open problems
 

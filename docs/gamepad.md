@@ -153,3 +153,14 @@ Menus (2026-10-25, main PC, frame shots on request; runs `work\runs\20261025-062
 
 The earlier "menus ignore the pad" was a misreading: the `cmd` log shows the flags one frame late, after the
 menus have consumed the edge (see "Menus"), and the frames of that run did not cover the moment after A.
+
+### Typing with the pad (direct address, password)
+
+The text fields (Direct connection: server address and password) take their characters from the window procedure, so a pad could not
+type. While the UI has a text element focused (`UI` vtable +0x120), `gamepad.c` types into it like an old arcade name entry: d-pad up / down
+(RB / LB: ten at a time) choose the character at the cursor (`0-9 . :` then `a-z A-Z - _ @`), d-pad right keeps it and moves on, d-pad
+left erases the last character, X types a dot, Y a colon, A is the field's Enter (next field, then join); B stays the menu's back. Those buttons
+and the left stick do not reach the menu while the field is focused. Live check (2026-10-31, main PC, virtual pad 1, `TS_PADLOG=1`, run
+`20261031-211851`, frames `shot052`..`shot086`): `gamepad: text entry on (element ...)` when the frame opens; the address field fills character
+by character with d-pad up, right and X (`12.0`, then `12.01`), A moves to the password field, which takes characters the same way, a second A
+tries the join (both fields cleared afterwards). Not done: last-used address memory, a hint line naming the buttons in the frame.
