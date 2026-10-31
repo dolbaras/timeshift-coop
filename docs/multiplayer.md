@@ -531,8 +531,9 @@ later: 1-3 tracers per frame around a firing soldier (`n100pair-20261025-202038`
 shot shown), the stock look. Shots of misses are replayed as the server fired them (the server's count includes
 every shot).
 
-Not checked: the shot sound (test instances are muted); a separate muzzle-flash sprite is not distinguishable in
-the frames (the muzzle is small at that distance), the tracers start at the muzzle.
+Not checked then: the shot sound (test instances are muted) - counted in the section "AI shot sounds on clients" below;
+a separate muzzle-flash sprite is not distinguishable in the frames (the muzzle is small at that distance), the tracers
+start at the muzzle.
 
 Still open:
 
@@ -555,6 +556,64 @@ corpse state), `!ai kill <ai>` (the death state as the server's message sets it)
 its death here), `!ai named` (client: objects asked for and named), `!ai mem <object> <hex offset> [dwords]`,
 `!ai wpn <ai>`, `!ai strikes <ai>` (weapon holder `+0x520`, strike manager `+0x530`), `!ai weapons` (every AI weapon
 object with its owner), `!ai fire <ai>` (shells of one shot here).
+
+### AI shot sounds on clients (`aisync.c`, 2026-10-31, chunk A)
+
+**Finding.** With the sound start counters (`!ai snd on|dump`, every sound goes through the FMOD wrapper's GetBuffer
+`0x78a1c0`, vtable `0xdb77bc +0x18`) a fight on the N100 pair showed that the AI's rifle fire is silent on a client even
+though its tracers are replayed: `wpn_arifle_shoot_loop_*`, `wpn_arifle_shoot_stop`, `wpn_arifle_ai_recharge` started 56 times
+on the host and 0 times on the client (run n100pair-20261031-215611, `TS_AISTATE=0`). Only the bullets' own effects
+(`wpn_pistol_flyby`, `hit_body`, `hit_wood`...) played there. The shot sounds are not made by the projectile: the weapon class
+(`wpn_ai_arifle.cls`, `sml_program sound_actions`) plays them from the weapon's **states** (`State(SHOOT_SINGLE)` ->
+`PlaySound(shoot_single)`, `SHOOT_MINIQUEUE`, `SHOOT_QUEUE` -> the loop sounds, `AI_SHOOT_STOP` -> `MuteSound(loop)` +
+`PlaySound(shoot_stop)`, `AI_RECHARGE`), and the states are set by the soldier's shooting state machine, which runs on the
+server only.
+
+**What sets a state.** The weapon interface's virtual `0x82ce90` (thiscall (interface, kind), ret 4; the same function in the
+seven vtables `0xd93094 0xd93374 0xd93654 0xd93934 0xd93c14 0xd93f44 0xdbf1bc`) turns a kind into the state's id (getters
+`0x82b420` SHOOT_SINGLE, `0x82b4c0` SHOOT_MINIQUEUE, `0x82b560` SHOOT_QUEUE, `0x82b6a0` AI_RECHARGE, `0x82b740`
+AI_RECHARGE_SHORT, `0x82b600` AI_SHOOT_STOP) and sets its bit in the weapon's state set (interface - `0x234`); the sound
+program reads and clears the bits. Kinds: 0 single, 1 mini queue, 2 queue, 5 recharge short, 6 recharge, 7 shoot stop (3 and 4
+do nothing). The interface is the object at weapon + `0x270` (found by its vtable pointer, not by a fixed number).
+
+**What the mod does.** The server hooks the virtual in all seven vtables: for a weapon of an AI soldier it counts the events
+per kind in 2-bit counters (12 bits, `AiState.wk`) and marks the soldier "send now". Once a soldier has had an event, its
+update carries the counters (u16 before the 8-byte animation tail; markers `a5 5c` / `a5 5d` = `5a` / `5b` plus counters). A
+client that sees a counter move calls the original virtual on its own copy of the soldier's weapon (the same weapon the shot
+replay uses), so the weapon's own program plays the sound where the player is. The counters are cumulative like the shot
+count, so a lost unreliable update does not lose an event (4 events in a row would alias). `TS_AISTATE=0` switches it off.
+
+| Check (same fight, 45 s, 30 fps cap on both copies, god mode) | host started | client started |
+|---|---|---|
+| `wpn_arifle_*` without the sync (n100pair-20261031-215611) | 56 | **0** |
+| with the sync (n100pair-20261031-215852) | 50 | **48** |
+| with the sync, second fight (n100pair-20261031-220842) | 64 | **63** |
+
+**Still host-only in the same fights** (same counters): the soldiers' voices `ex_pol3_*` (battle callouts, 8-18 per fight; they
+go through the AI sound list of `ai_swan.cls` -> `0x457510` -> `0x642eb0` -> GetBuffer, called from the AI behaviour code,
+stack chain `47f6f1 642b7c 64301c 45754c 642bfc 47f676`) and the gibbing sound `obj_gibbing_body_rnd_set` (3-14). Not done.
+
+### Remote bodies and AI: how they are drawn, measured (chunk A, 2026-10-31)
+
+**The reader.** Players, items and AI soldiers all use the same motion component (writer vtable `0xd8cacc`, reader
+`0xd8cb00`, frame `0x4f84e0`). Per frame the reader extrapolates the last received state (12 floats: position, linear velocity,
+rotation, angular velocity; `0x68eb80`) over the age of the update (`timeGetTime` minus the receive stamp) plus the frames
+since, and for 0.2 s after an update blends from the state it was drawing when the update arrived to that extrapolation (factor
+5 x seconds, `0x68e6b0`); a jump over 5 m snaps. Without an update it keeps extrapolating. So the picture is smooth by design
+and not delayed by a fixed interpolation buffer, and it is only as late as the extrapolation is wrong. `timeGetTime` ran at
+1.1 ms steps on the N100 (`!ai tick`), so the age is not quantised.
+
+**Update rate = the host's frame rate.** The server sends the regular updates once per rendered frame (netcode.md 2.4), so a
+moving soldier gets as many updates as the host has frames: 6-7 per second when the host ran at 10 fps (two copies on the N100,
+the client at 120 fps starving the host's render thread), 28-30 per second at a 30 fps cap, 52 at a 60 cap. The "~9 updates per
+second" of the first measurement was that host frame rate, not a limit of the mod or of the byte rate. `TS_FPSCAP=<n>` (lab)
+holds a copy to n frames per second; all numbers below use `TS_FPSCAP=30` on both copies unless said otherwise. Uncapped,
+the two instances on one N100 are not a fair test (host dt 95 ms, client 8 ms).
+
+Method: `!ai walk <s> <turn>` makes the copy's own player run a circle (a synthetic key state, no window input), `!ai rec <s>`
+writes every body's drawn place per frame with the QPC time (`rec.txt`), `lab\a_rec.py` compares the host's and the client's
+files: err = mean distance of the other machine's picture to the machine that moves the body (at the best time shift), lag = that
+shift, irr = speed irregularity of three frames in a row (0 = even), ups = updates read per second. Same PC, same clock.
 
 ### Script facts found on the way
 

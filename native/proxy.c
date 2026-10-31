@@ -188,6 +188,100 @@ static LONG CALLBACK log_access_violation(EXCEPTION_POINTERS *x)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+/* ---- IsBadReadPtr and friends without exceptions ----
+ * The mod probes engine pointers in many places (IsBadReadPtr / IsBadWritePtr / IsBadStringPtrA). Kernel32's versions test a
+ * range by touching it and catching the access violation: a probe of a range that runs into an unmapped page (an object at the
+ * end of a heap segment, a stale pointer) raised a first-chance exception each time (hundreds a minute in a pair run: the
+ * "AccessViolation at 75490196" lines of the logs, read of a page-aligned address in kernelbase's probe loop), costing
+ * dispatch time and looking like crashes. The mod's own import slots now point at VirtualQuery based versions with the same
+ * answers (a guard page or no-access page counts as bad). TS_BADPTR=0 keeps the system's functions. */
+static int range_ok(const void *p, UINT_PTR n, int write)
+{
+    DWORD a = (DWORD)p;
+    if (n == 0)
+        return 1;
+    if (a + n - 1 < a)
+        return 0;   /* (wraps around the address space) */
+    DWORD end = a + (DWORD)n - 1;
+    while (a <= end) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery((void *)a, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+            return 0;
+        DWORD ok = write ? (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)
+                         : (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                            PAGE_EXECUTE_WRITECOPY);
+        if (!(mbi.Protect & ok))
+            return 0;
+        DWORD next = (DWORD)mbi.BaseAddress + (DWORD)mbi.RegionSize;
+        if (next <= a)
+            return 0;
+        a = next;
+        if (a == 0)
+            break;
+    }
+    return 1;
+}
+
+static BOOL WINAPI mod_IsBadReadPtr(const void *p, UINT_PTR n)
+{
+    return !range_ok(p, n, 0);
+}
+
+static BOOL WINAPI mod_IsBadWritePtr(LPVOID p, UINT_PTR n)
+{
+    return !range_ok(p, n, 1);
+}
+
+static BOOL WINAPI mod_IsBadStringPtrA(LPCSTR p, UINT_PTR max)
+{
+    for (UINT_PTR i = 0; i < max; i++) {
+        if ((i == 0 || (((DWORD)p + i) & 0xfff) == 0) && !range_ok(p + i, 1, 0))
+            return TRUE;
+        if (p[i] == 0)
+            return FALSE;
+    }
+    return FALSE;
+}
+
+/* One import slot of this DLL (not the exe's) */
+static int patch_own_import(HINSTANCE inst, const char *dll, const char *func, void *hook)
+{
+    BYTE *base = (BYTE *)inst;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dir.VirtualAddress)
+        return 0;
+    for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress); d->Name; d++) {
+        if (_stricmp((const char *)(base + d->Name), dll) != 0)
+            continue;
+        IMAGE_THUNK_DATA *names = (IMAGE_THUNK_DATA *)(base + (d->OriginalFirstThunk ? d->OriginalFirstThunk : d->FirstThunk));
+        void **slots = (void **)(base + d->FirstThunk);
+        for (int i = 0; names[i].u1.AddressOfData; i++) {
+            if (IMAGE_SNAP_BY_ORDINAL(names[i].u1.Ordinal))
+                continue;
+            IMAGE_IMPORT_BY_NAME *ibn = (IMAGE_IMPORT_BY_NAME *)(base + names[i].u1.AddressOfData);
+            DWORD old;
+            if (strcmp((const char *)ibn->Name, func) == 0 && VirtualProtect(&slots[i], sizeof slots[i], PAGE_READWRITE, &old)) {
+                slots[i] = hook;
+                VirtualProtect(&slots[i], sizeof slots[i], old, &old);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static void badptr_install(HINSTANCE inst)
+{
+    char v[8];
+    if (ts_env("TS_BADPTR", v, sizeof v) && v[0] == '0')
+        return;
+    int n = patch_own_import(inst, "KERNEL32.dll", "IsBadReadPtr", (void *)mod_IsBadReadPtr) +
+            patch_own_import(inst, "KERNEL32.dll", "IsBadWritePtr", (void *)mod_IsBadWritePtr) +
+            patch_own_import(inst, "KERNEL32.dll", "IsBadStringPtrA", (void *)mod_IsBadStringPtrA);
+    ts_log("pointer probes without exceptions: %d of 3 imports", n);
+}
+
 /* ---- hang watchdog (tests): TS_WATCHDOG=<s> logs where the main thread is every <s> seconds ---- */
 static HANDLE main_thread;
 static DWORD watchdog_secs;
@@ -337,6 +431,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         ts_log("TimeShift co-op proxy %s loaded", TS_VERSION);
         load_real_dinput8();
         AddVectoredExceptionHandler(1, log_access_violation);
+        badptr_install(inst);
         real_ExitProcess = (ExitProcess_t)ts_patch_iat("KERNEL32.dll", "ExitProcess", (void *)hook_ExitProcess);
         real_TerminateProcess = (TerminateProcess_t)ts_patch_iat("KERNEL32.dll", "TerminateProcess",
                                                                  (void *)hook_TerminateProcess);

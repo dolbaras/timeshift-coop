@@ -742,14 +742,16 @@ static void find_iface_fn(char *o, void *ctx)
 /* the AI weapon object an interface pointer belongs to (NULL: not an AI weapon) */
 static char *wst_weapon(void *iface)
 {
-    static char *last_if, *last_w;
-    if (iface == last_if && last_w && is_ai_weapon(last_w) && wst_iface_of(last_w) == iface)
-        return last_w;
+    static struct { char *iface, *w; } cache[32];   /* (a fight has a handful of firing soldiers; the objects are searched on a miss) */
+    static unsigned next;
+    for (int i = 0; i < 32; i++)
+        if (cache[i].iface == iface && cache[i].w && is_ai_weapon(cache[i].w) && wst_iface_of(cache[i].w) == iface)
+            return cache[i].w;
     FindIface f = {iface, NULL};
     for_each_obj(find_iface_fn, &f);
     if (f.found) {
-        last_if = iface;
-        last_w = f.found;
+        cache[next % 32].iface = iface;
+        cache[next++ % 32].w = f.found;
         static LONG logged;
         if (InterlockedIncrement(&logged) <= 4)
             ts_log("aisync: weapon state interface %p is weapon %p + %x (weapon vt %06lx)", iface, f.found,
@@ -1846,10 +1848,10 @@ int aisync_console(const char *text, char *out, int size)
                 continue;
             char *node = *(char **)(e + E_NODE);
             int ok = node && !IsBadReadPtr(node, 0x74);
-            n += snprintf(out + n, size - n, " %s%d%s st %08x %08x %08x mv %d y %.3f an %d@%.2f;", i < 0 ? "self" : "slot",
+            n += snprintf(out + n, size - n, " %s%d%s st %08x %08x %08x mv %d y %.3f an %d@%.2f hp %.0f;", i < 0 ? "self" : "slot",
                           i < 0 ? 0 : *(int *)slot, e == PLAYER ? "*" : "", *(unsigned *)(e + 0x394), *(unsigned *)(e + 0x398),
                           *(unsigned *)(e + 0x39c), *(unsigned char *)(e + 0x398) & 0xf, ok ? ((float *)(node + 0x68))[1] : -99.f,
-                          ok ? anim_id(node) : -9, ok ? anim_time(node) : -1.f);
+                          ok ? anim_id(node) : -9, ok ? anim_time(node) : -1.f, (double)*(float *)(e + 0x234));
         }
         return n;
     }
