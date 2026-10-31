@@ -344,36 +344,10 @@ static void TSCALL hook_read(void *ai, char *msg, int flags)
     }
 }
 
-/* Extrapolation limit for remote players (TS_EXTRAPCAP=<ms>, 0 = off, the engine's own behaviour). The reader (0x4f84e0)
- * extrapolates the last received state for as long as no update arrives (+0x10 new data flag, +4 seconds since the update
- * as it counts them, +8 the update's age when it was read); behind a burst of lost updates a running player's picture flew
- * on along the old velocity for a second or more and was pulled back by the next update (netem 15 % loss: p95 error 1.25 m).
- * The limit holds the accumulated time back so that age + accumulated + frame stays under it. Other entities (AI, items,
- * physics objects, vehicles) keep the engine's behaviour: far ones get few updates by design. */
-static int extrap_cap_ms;
-
-static int remote_player(void *ent)
-{
-    char *gm = GAME_MODE_OBJ;
-    if (!gm || ent == *(void **)0x1095b30)
-        return 0;
-    int n = *(int *)(gm + 0x2c);
-    for (int i = 0; i < n && i < 64; i++)
-        if (*(void **)(*(char **)(gm + 0x28) + i * 0xa4 + 4) == ent)
-            return 1;
-    return 0;
-}
-
 /* After the reader placed the body (every frame): the entity's own copy of its position follows (the server's AI
  * code keeps it equal to the node's; scripts and distance checks read it). */
 static void TSCALL hook_pframe(void *comp, void *ent, float dt)
 {
-    if (extrap_cap_ms > 0 && !*(int *)((char *)comp + 0x10) && remote_player(ent)) {
-        float *acc = (float *)((char *)comp + 4), age = *(float *)((char *)comp + 8);
-        float room = extrap_cap_ms * 0.001f - age - dt;
-        if (age >= 0.f && age < 5.f && *acc > room)
-            *acc = room > 0.f ? room : 0.f;
-    }
     ((pframe_t)PROXY_FRAME)(comp, ent, dt);
     if (!is_ai(ent))
         return;
@@ -2019,8 +1993,6 @@ void aisync_install(void)
         ts_log("aisync: projectile dispatchers not found (other exe): AI shots on clients without projectiles");
         fire_full = 0;
     }
-    if (ts_env("TS_EXTRAPCAP", v, sizeof v))
-        extrap_cap_ms = atoi(v);
     if (ts_env("TS_AISTATE", v, sizeof v) && v[0] == '0')
         wst_on = 0;
     if (engine_mode && wst_on && wstate_install() != (int)(sizeof wst_slots / sizeof wst_slots[0])) {
