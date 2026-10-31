@@ -440,6 +440,90 @@ int gamepad_pad_active(int player)
     return last_pad_use && (int)(last_pad_use - last_kbm_use) >= 0;
 }
 
+/* ---- text entry with the pad (direct IP address, password) ----
+ * A text field being edited takes its characters from the window procedure (WM_KEYDOWN -> ToUnicode -> 0x674380(char) ->
+ * the UI's focused text element, UI vtable +0x120, element vtable +0x5c), so a pad had no way to type. While the UI
+ * has such an element focused, the pad types into it like an old arcade name entry: d-pad up / down (RB / LB: ten at a
+ * time) choose the character at the cursor (0-9 . : then a-z A-Z - _ @), d-pad right keeps it and moves on, d-pad left
+ * erases the last character, X types a dot, Y a colon, A is the Enter key of the field (next field / join); B (back) stays
+ * the menu's. The d-pad, LB, RB, A and the left stick do not reach the menu then (they would move the highlight away from
+ * the field or press a button behind it). */
+static const char text_set[] = "0123456789.:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_@";
+#define TEXT_N ((int)sizeof text_set - 1)
+static int text_on, text_pending, text_idx;
+
+static void *text_focus(void)
+{
+    BYTE *ui = *(BYTE **)0x1095fc8;
+    if (!ui || IsBadReadPtr(ui, 4) || IsBadReadPtr(*(void **)ui, 0x124))
+        return NULL;
+    void *e = ((void *(THISCALL *)(void *))(*(void ***)ui)[0x120 / 4])(ui);
+    return e && !IsBadReadPtr(e, 4) && !IsBadReadPtr(*(void **)e, 0x60) ? e : NULL;
+}
+
+static void type_char(unsigned ch)
+{
+    ((void (__stdcall *)(unsigned))0x674380)(ch);
+}
+
+static void text_step(int d)
+{
+    if (text_pending) {
+        type_char(8);
+        text_idx = ((text_idx + d) % TEXT_N + TEXT_N) % TEXT_N;
+    } else
+        text_idx = 0;
+    type_char((unsigned char)text_set[text_idx]);
+    text_pending = 1;
+}
+
+/* Returns 1 while the pad is typing (the caller keeps the menu's directions silent). */
+static int text_pad(const XINPUT_GAMEPAD *g, int menu)
+{
+    static WORD held;
+    static DWORD next[9];
+    void *e = menu ? text_focus() : NULL;
+    if (!e) {
+        if (text_on)
+            ts_log("gamepad: text entry off");
+        text_on = text_pending = 0;
+        held = 0;
+        return 0;
+    }
+    if (!text_on) {
+        text_on = 1;
+        text_pending = 0;
+        held = g->wButtons;   /* (buttons already down do not type) */
+        ts_log("gamepad: text entry on (element %p): d-pad up/down choose, right keeps, left erases, X '.', Y ':', A enter", e);
+    }
+    static const WORD keys[9] = {XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_RIGHT_SHOULDER,
+                                 XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT,
+                                 XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y, XINPUT_GAMEPAD_A};
+    DWORD now = GetTickCount();
+    for (int k = 0; k < 9; k++) {
+        int down = (g->wButtons & keys[k]) != 0, was = (held & keys[k]) != 0, fire = 0;
+        if (down && !was)
+            fire = 1, next[k] = now + REPEAT_DELAY;
+        else if (down && k < 5 && (int)(now - next[k]) >= 0)
+            fire = 1, next[k] = now + REPEAT_RATE;
+        if (!fire)
+            continue;
+        switch (k) {
+        case 0: text_step(1); break;
+        case 1: text_step(-1); break;
+        case 2: text_step(10); break;
+        case 3: text_step(-10); break;
+        case 4: type_char(8); text_pending = 0; break;
+        case 5: text_pending = 0; break;
+        case 6: text_pending = 0; type_char('.'); break;
+        case 7: text_pending = 0; type_char(':'); break;
+        case 8: text_pending = 0; type_char(13); break;
+        }
+    }
+    held = g->wButtons;
+    return 1;
+}
+
 static void pad_poll(BYTE *raw)
 {
     static int frame;
@@ -463,6 +547,11 @@ static void pad_poll(BYTE *raw)
     int menu = menu_active(im);
     float l[2], r[2];
     write_codes(v, g, menu, l, r);
+    if (ok && text_pad(g, menu)) {   /* (typing: the menu's directions stay silent) */
+        static const int quiet[] = {J_DUP, J_DDOWN, J_DLEFT, J_DRIGHT, J_LB, J_RB, J_A, J_LX_R, J_LX_L, J_LY_U, J_LY_D};
+        for (unsigned i = 0; i < sizeof quiet / sizeof *quiet; i++)
+            v[quiet[i]] = 0;
+    }
     float lx = l[0], ly = l[1], rx = r[0], ry = r[1];
     if (g->wButtons || g->bLeftTrigger > 30 || g->bRightTrigger > 30 || lx * lx + ly * ly > 0.09f || rx * rx + ry * ry > 0.09f)
         last_pad_use = GetTickCount();

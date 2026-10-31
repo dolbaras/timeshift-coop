@@ -694,6 +694,8 @@ static int hook_slots(void)
  * the host's body (metres in the host's frame) facing the same way, so both machines' frames show the same scene. */
 static char follow_req[MAX_PATH];
 
+static void put_near_host(float side, float back, float up, int n);
+
 static void follow_host(void)
 {
     FILE *f = follow_req[0] ? fopen(follow_req, "r") : NULL;
@@ -703,6 +705,12 @@ static void follow_host(void)
     int n = fscanf(f, "%f %f %f", &side, &back, &up);
     fclose(f);
     DeleteFileA(follow_req);
+    put_near_host(side, back, up, n);
+}
+
+/* This machine's player next to the host's body (metres in the host's frame: side, back, up), facing the way the host faces. */
+static void put_near_host(float side, float back, float up, int n)
+{
     char *gm = GAME_MODE_OBJ, *me = *(char **)0x1095b30, *host = NULL;
     for (int i = 0; gm && i < *(int *)(gm + 0x2c); i++) {
         char *slot = *(char **)(gm + 0x28) + i * 0xa4;
@@ -1206,10 +1214,277 @@ static void dead_ask_tick(void)
     }
 }
 
+/* ---- lab: a walking test body ("!ai walk <seconds> [turn [hexkey [still]]]", console only) ----
+ * Holds the forward key (W, code 0x11) and a constant mouse-x turn in the engine's raw input for a while, so this machine's
+ * own player walks a circle for the smoothness probes (a background test window never acquires keyboard or mouse, so nothing
+ * overwrites the values). turn: mouse axis value per frame (+ right, - left); 0 = straight. */
+static DWORD walk_until;
+static float walk_turn;
+static int walk_key2, walk_fwd = 1;   /* an extra key held meanwhile (hex scan code, 0 = none); forward on/off */
+/* The values are written right after the engine's keyboard poll (input class vtable +0x60, which the poll of a background
+ * window leaves untouched or zeroes): from the script tick the game read zeros, from a hook behind the poll it reads these. */
+typedef void (TSCALL *poll_t)(void *);
+static poll_t walk_prev_poll;
+
+static void walk_apply(char *raw)
+{
+    if (!walk_until)
+        return;
+    if ((int)(GetTickCount() - walk_until) >= 0) {
+        walk_until = 0;
+        *(float *)(raw + 0x10 + 0x11 * 4) = 0.f;
+        if (walk_key2)
+            *(float *)(raw + 0x10 + walk_key2 * 4) = 0.f;
+        *(float *)(raw + 0x10 + 0x12c * 4) = *(float *)(raw + 0x10 + 0x12d * 4) = 0.f;
+        return;
+    }
+    /* (an action a key set off marks the key "used" (bit 8 of the byte at +0x1154 + code) until the device reports its release,
+     * which a background window never does: the mark is cleared every frame, as the lab key tool does) */
+    int keys[2] = {0x11, walk_key2};
+    for (int i = 0; i < 2; i++)
+        if (keys[i]) {
+            raw[0x1154 + keys[i]] &= (char)~8;
+            *(float *)(raw + 0x10 + keys[i] * 4) = (i == 0 && !walk_fwd) ? 0.f : 1.f;
+        }
+    *(float *)(raw + 0x10 + (walk_turn >= 0 ? 0x12c : 0x12d) * 4) = walk_turn >= 0 ? walk_turn : -walk_turn;
+}
+
+static void TSCALL hook_walk_poll(void *raw)
+{
+    walk_prev_poll(raw);
+    walk_apply((char *)raw);
+}
+
+static void walk_frame(void)   /* (the first call after "!ai walk": puts the hook behind the keyboard poll) */
+{
+    static int hooked;
+    if (hooked || !walk_until)
+        return;
+    void *vtp = (void *)0xdb7034;
+    walk_prev_poll = (poll_t)ts_patch_vtable(&vtp, 0x60 / 4, (void *)hook_walk_poll);
+    hooked = walk_prev_poll != NULL;
+    ts_log("aisync: walk: keyboard poll hook %s", hooked ? "set" : "NOT set");
+}
+
+/* ---- lab: a recording of every body's drawn place per frame ("!ai rec <seconds>", console only) ----
+ * For the smoothness work: every frame, one line per AI soldier and per player body, with the machine's QPC time (the same
+ * clock for two copies on one PC), into rec.txt beside TS_LOG (else ts_rec.txt in the game folder):
+ *   r <ms> a<net id> x y z <updates read so far>      an AI soldier (net id; the server's number is the same on both machines)
+ *   r <ms> p<peer> x y z                              a player body of the session slots (peer 0 = the host); a <peer>* label
+ *                                                     is this machine's own body
+ * tool: the lab script a_rec.py compares host and client files (lag, error, irregularity of the drawn path). */
+static FILE *rec_file;
+static DWORD rec_until;
+static LARGE_INTEGER rec_qpf;
+static int rec_net_only;
+
+static void rec_ai_fn(char *ai)
+{
+    char *node = *(char **)(ai + E_NODE);
+    int net = *(int *)(ai + E_NETID);
+    if (!node || net < 0)
+        return;
+    AiState *s = state_of(ai);
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    float *p = (float *)(node + 0x68);
+    fprintf(rec_file, "r %.2f a%d %.3f %.3f %.3f %d\n", c.QuadPart * 1000.0 / rec_qpf.QuadPart, net, p[0], p[1], p[2],
+            s ? s->reads : -1);
+}
+
+static void rec_frame(void)
+{
+    if (!rec_until || !rec_file)
+        return;
+    if ((int)(GetTickCount() - rec_until) >= 0) {
+        fclose(rec_file);
+        rec_file = NULL;
+        rec_until = 0;
+        ts_log("aisync: recording ended");
+        return;
+    }
+    for_each_ai(rec_ai_fn);
+    char *gm = GAME_MODE_OBJ;
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    double ms = c.QuadPart * 1000.0 / rec_qpf.QuadPart;
+    for (int i = 0; gm && i < *(int *)(gm + 0x2c); i++) {
+        char *slot = *(char **)(gm + 0x28) + i * 0xa4, *e = *(char **)(slot + 4);
+        char *node = e && !IsBadReadPtr(e, E_NODE + 4) ? *(char **)(e + E_NODE) : NULL;
+        if (!node || IsBadReadPtr(node, 0x74))
+            continue;
+        float *p = (float *)(node + 0x68);
+        fprintf(rec_file, "r %.2f p%d%s %.3f %.3f %.3f\n", ms, *(int *)slot, e == PLAYER ? "*" : "", p[0], p[1], p[2]);
+    }
+    if (PLAYER && !IsBadReadPtr(PLAYER, E_NODE + 4) && *(char **)(PLAYER + E_NODE) && !IsBadReadPtr(*(char **)(PLAYER + E_NODE), 0x74)) {
+        float *p = (float *)(*(char **)(PLAYER + E_NODE) + 0x68);
+        fprintf(rec_file, "r %.2f me %.3f %.3f %.3f\n", ms, p[0], p[1], p[2]);
+    }
+}
+
+static void rec_start(int secs)
+{
+    char path[MAX_PATH];
+    if (rec_file) {
+        fclose(rec_file);
+        rec_file = NULL;
+    }
+    rec_until = 0;
+    if (secs <= 0)
+        return;
+    if (ts_env("TS_LOG", path, sizeof path - 16)) {
+        char *sl = strrchr(path, '\\');
+        strcpy(sl ? sl + 1 : path, "rec.txt");
+    } else
+        strcpy(path, "ts_rec.txt");
+    QueryPerformanceFrequency(&rec_qpf);
+    rec_file = fopen(path, "a");
+    if (rec_file)
+        rec_until = GetTickCount() + (DWORD)secs * 1000;
+    ts_log("aisync: recording %d s into %s%s", secs, path, rec_file ? "" : " (cannot open)");
+}
+
+/* ---- lab: a snapshot of the named actors ("!ai dump <tag>", console only) ----
+ * For the static comparison of a host and a client (lab script a_dump.py): every named object, one line "dump <tag> <name> net=<id> vt=<class> role=<bits> pos x y z [anim id@time hp fl]" in the log.
+ * The same moment on both machines (a few seconds after a level start, both idle) shows what the client does not show. */
+static void dump_named(const char *tag, int *count)
+{
+    char *mgr = MGR;
+    if (!mgr || IsBadReadPtr(mgr + 0x14, 8))
+        return;
+    void **data = *(void ***)(mgr + 0x14);
+    int n = *(int *)(mgr + 0x18);
+    for (int i = 0; data && i < n && i < 20000; i++) {
+        char *inst = data[i], *o = inst && !IsBadReadPtr(inst, 0x14) ? *(char **)(inst + 0xc) : NULL;
+        if (!o || IsBadReadPtr(o, 0x240) || ((DWORD)o & 3) || !inst_of(o))
+            continue;
+        int net = *(int *)(o + E_NETID), ai = is_ai(o);
+        unsigned role = *(unsigned *)(o + E_ROLE);
+        float *p = (float *)(o + E_POS);
+        if (ai) {
+            char *node = *(char **)(o + E_NODE);
+            float *np = node && !IsBadReadPtr(node, 0x74) ? (float *)(node + 0x68) : p;
+            ts_log("dump %s %s net=%d vt=%06lx role=%x pos %.2f %.2f %.2f anim %d@%.2f hp %.2f fl %x", tag, inst_str(inst), net,
+                   *(unsigned long *)o, role, np[0], np[1], np[2], node ? anim_id(node) : -9, node ? anim_time(node) : -9.f,
+                   *(float *)(o + 0x234), *(unsigned *)(o + AI_FLAGS));
+        } else
+            ts_log("dump %s %s net=%d vt=%06lx role=%x pos %.2f %.2f %.2f", tag, inst_str(inst), net, *(unsigned long *)o,
+                   role, p[0], p[1], p[2]);
+        (*count)++;
+    }
+}
+
+/* ---- lab: sound start counters ("!ai snd on|off|dump|reset", or TS_SNDCOUNT=1 from the start) ----
+ * Every sound the engine starts goes through the FMOD wrapper's GetBuffer (class snd::SYSTEM_FMOD, vtable 0xdb77bc +0x18:
+ * thiscall (system, name string, flag), ret 8; the name is a counted string, refs at +0, text at +0xc; it returns the sound's
+ * buffer or NULL when the sound could not start). Counts per sound name (started / refused); "dump" logs them sorted, so the
+ * sounds of a fight (shots, explosions, steps) can be compared between a host and a client without hearing them. */
+#define SND_VT_GETBUFFER (0xdb77bc + 0x18)
+#define SND_GETBUFFER 0x78a1c0
+#define SND_MAX 512
+typedef void *(TSCALL *getbuf_t)(void *sys, char *name, int flag);
+static struct { char name[48]; int started, refused; } snd_tab[SND_MAX];
+static int n_snd, snd_on, snd_installed, snd_total;
+
+static void *TSCALL hook_getbuffer(void *sys, char *name, int flag)
+{
+    void *r = ((getbuf_t)SND_GETBUFFER)(sys, name, flag);
+    if (!snd_on || !name || IsBadReadPtr(name, 0x14))
+        return r;
+    const char *t = name + 0xc;
+    int i;
+    for (i = 0; i < n_snd; i++)
+        if (!strncmp(snd_tab[i].name, t, sizeof snd_tab[i].name - 1))
+            break;
+    if (i == n_snd) {
+        if (n_snd >= SND_MAX)
+            return r;
+        n_snd++;
+        snprintf(snd_tab[i].name, sizeof snd_tab[i].name, "%.47s", IsBadReadPtr(t, 4) ? "?" : t);
+    }
+    if (r)
+        snd_tab[i].started++;
+    else
+        snd_tab[i].refused++;
+    snd_total++;
+    return r;
+}
+
+static int snd_control(const char *what, char *out, int size)
+{
+    if (!strcmp(what, "on")) {
+        if (!snd_installed) {
+            void *o = (void *)SND_GETBUFFER, *h = (void *)hook_getbuffer;
+            snd_installed = ts_patch_bytes(SND_VT_GETBUFFER, &o, &h, 4);
+        }
+        snd_on = snd_installed;
+        return snprintf(out, size, "sound counters %s", snd_on ? "on" : "not installed (other exe)");
+    }
+    if (!strcmp(what, "off")) {
+        snd_on = 0;
+        return snprintf(out, size, "sound counters off");
+    }
+    if (!strcmp(what, "reset")) {
+        n_snd = snd_total = 0;
+        return snprintf(out, size, "sound counters reset");
+    }
+    /* dump: sorted by started, to the log (one line per sound) and a summary as the reply */
+    int order[SND_MAX];
+    for (int i = 0; i < n_snd; i++)
+        order[i] = i;
+    for (int i = 1; i < n_snd; i++)
+        for (int j = i; j > 0 && snd_tab[order[j]].started > snd_tab[order[j - 1]].started; j--) {
+            int t = order[j];
+            order[j] = order[j - 1];
+            order[j - 1] = t;
+        }
+    int started = 0, refused = 0;
+    for (int k = 0; k < n_snd; k++) {
+        started += snd_tab[order[k]].started;
+        refused += snd_tab[order[k]].refused;
+        ts_log("snd: %-40s started %d refused %d", snd_tab[order[k]].name, snd_tab[order[k]].started, snd_tab[order[k]].refused);
+    }
+    ts_log("snd: total %d sounds (%d names), started %d, refused %d", snd_total, n_snd, started, refused);
+    return snprintf(out, size, "sounds: %d names, started %d, refused %d (log)", n_snd, started, refused);
+}
+
+/* ---- lab: frame rate cap (TS_FPSCAP=<n>) ----
+ * Two test copies on one PC share the GPU: a client running at 120 fps made the host's render thread crawl at 8 fps (measured
+ * 2026-10-30, N100), which spoils every smoothness figure. The cap holds a copy to <n> frames a second (sleep at the end of the
+ * script tick; the last millisecond is waited out). Test use only; unset = no cap. */
+static int fps_cap;
+static void fps_cap_frame(void)
+{
+    static LARGE_INTEGER next, qpf;
+    if (!fps_cap)
+        return;
+    if (!qpf.QuadPart)
+        QueryPerformanceFrequency(&qpf);
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    LONGLONG step = qpf.QuadPart / fps_cap;
+    if (next.QuadPart == 0 || now.QuadPart - next.QuadPart > step * 4)
+        next.QuadPart = now.QuadPart;   /* (late by a lot: start again, no catching up) */
+    next.QuadPart += step;
+    for (;;) {
+        QueryPerformanceCounter(&now);
+        LONGLONG left = next.QuadPart - now.QuadPart;
+        if (left <= 0)
+            break;
+        if (left * 1000 / qpf.QuadPart >= 2)
+            Sleep(1);
+        else
+            Sleep(0);
+    }
+}
+
 /* ---- per frame ---- */
 static void frame(float dt)
 {
     (void)dt;
+    fps_cap_frame();
+    walk_frame();
+    rec_frame();
     char *gm = GAME_MODE_OBJ;
     int mode = gm ? *(int *)(gm + 0x3c) : 0;
     if (mode < 2 || !(GAME_FLAGS & 0x2000))
@@ -1338,6 +1613,49 @@ int aisync_console(const char *text, char *out, int size)
                           *(float *)(o + off + i * 4));
         return 1;
     }
+    if (!strcmp(cmd, "put")) {   /* "!ai put <side> <back> <up>" (client, lab): this player next to the host's, as follow.req does */
+        float sd = 0, bk = 0, upv = 0;
+        int k = sscanf(text + 3, "%31s %f %f %f", cmd, &sd, &bk, &upv);
+        put_near_host(sd, bk, upv, k - 1);
+        return snprintf(out, size, "placed next to the host (side %.1f back %.1f up %.1f)", sd, bk, upv), 1;
+    }
+    if (!strcmp(cmd, "pstate")) {   /* "!ai pstate": the stance words of every player body this machine knows (lab) */
+        char *gm = GAME_MODE_OBJ;
+        int n = snprintf(out, size, "players:");
+        for (int i = -1; gm && i < *(int *)(gm + 0x2c) && n < size - 120; i++) {
+            char *slot = i >= 0 ? *(char **)(gm + 0x28) + i * 0xa4 : NULL;
+            char *e = i < 0 ? PLAYER : *(char **)(slot + 4);
+            if (!e || IsBadReadPtr(e, 0x3a0) || (i >= 0 && e == PLAYER))
+                continue;
+            char *node = *(char **)(e + E_NODE);
+            n += snprintf(out + n, size - n, " %s%d%s st %08x %08x %08x mv %d y %.3f;", i < 0 ? "self" : "slot",
+                          i < 0 ? 0 : *(int *)slot, e == PLAYER ? "*" : "", *(unsigned *)(e + 0x394), *(unsigned *)(e + 0x398),
+                          *(unsigned *)(e + 0x39c), *(unsigned char *)(e + 0x398) & 0xf,
+                          node && !IsBadReadPtr(node, 0x74) ? ((float *)(node + 0x68))[1] : -99.f);
+        }
+        return n;
+    }
+    if (!strcmp(cmd, "snd"))   /* "!ai snd on|off|dump|reset" (lab): the sound start counters above */
+        return snd_control(a1, out, size), 1;
+    if (!strcmp(cmd, "dump")) {   /* "!ai dump <tag>" (lab): the named-actor snapshot above, into the log */
+        int n = 0;
+        dump_named(a1[0] ? a1 : "x", &n);
+        return snprintf(out, size, "dumped %d objects (tag %s)", n, a1[0] ? a1 : "x"), 1;
+    }
+    if (!strcmp(cmd, "rec")) {   /* "!ai rec <seconds>" (lab): the per-frame recording above; 0 = stop */
+        rec_start(atoi(a1));
+        return snprintf(out, size, "recording %s", rec_file ? "on" : "off"), 1;
+    }
+    if (!strcmp(cmd, "walk")) {   /* "!ai walk <seconds> [turn]" (lab): own player walks, see walk_frame */
+        float secs = (float)atof(a1);
+        walk_turn = 0.f;
+        char k2[16] = "", st[16] = "";
+        sscanf(text + 3, "%31s %127s %f %15s %15s", cmd, a1, &walk_turn, k2, st);
+        walk_key2 = k2[0] ? (int)strtol(k2, NULL, 16) & 0xff : 0;   /* "!ai walk 20 0 2e": crouch while walking */
+        walk_fwd = strcmp(st, "still") != 0;                        /* "!ai walk 20 0 2e still": hold the key only */
+        walk_until = secs > 0 ? GetTickCount() + (DWORD)(secs * 1000) : 0;
+        return snprintf(out, size, "walking %.0f s, turn %.2f", secs, walk_turn), 1;
+    }
     if (!strcmp(cmd, "named"))
         return snprintf(out, size, "asked %d, waiting %d, named %ld (log)", n_asked, n_told, n_named_logged), 1;
     char *ai = ai_by_name(a1);
@@ -1418,6 +1736,12 @@ void aisync_install(void)
             firedebug_install();
     }
     char v[16];
+    if (ts_env("TS_FPSCAP", v, sizeof v) && atoi(v) >= 5)
+        fps_cap = atoi(v);   /* (lab) */
+    if (ts_env("TS_SNDCOUNT", v, sizeof v) && v[0] == '1') {   /* (lab: sound start counters from the start) */
+        char o[64];
+        snd_control("on", o, sizeof o);
+    }
     engine_mode = !(ts_env("TS_AISYNC", v, sizeof v) && v[0] == '0');
     if (ts_env("TS_AIDEBUG", v, sizeof v))
         debug_secs = atoi(v);

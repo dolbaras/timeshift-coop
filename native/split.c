@@ -2886,25 +2886,32 @@ static void p2_follow_step(void)
     } else if (hol_want && strcmp(hol_level, SP_LEVEL))
         hol_want = 0;   /* (another level: not this level's story) */
     if (seat_want && (int)(GetTickCount() - seat_due) >= 0) {
-        seat_want = 0;
         int k = clients_in_game();
         for (unsigned i = 0; i < sizeof p2_seats / sizeof p2_seats[0]; i++) {
             if (!strstr(seat_level, p2_seats[i].level))
                 continue;
             if (k > 2 || !p2_seats[i].seat[k]) {
                 ts_log("split: player 1 took %s; no turret seat left for player 2 (%d clients)", seat_p1, k);
+                seat_want = 0;
                 return;
             }
-            snprintf(ssl, sizeof ssl, "$%s.Die(\"REMOVE\")", p2_seats[i].gunner[k]);
-            ts_script_run(ssl, out, sizeof out);
+            if (seat_want == 1) {   /* (the gunner of the seat goes first; the seat is free a moment later) */
+                snprintf(ssl, sizeof ssl, "$%s.Die(\"REMOVE\")", p2_seats[i].gunner[k]);
+                ts_script_run(ssl, out, sizeof out);
+                ts_log("split: player 1 took %s: gunner %s of player 2's seat removed: %s", seat_p1, p2_seats[i].gunner[k], out);
+                seat_want = 2;
+                seat_due = GetTickCount() + 1000;
+                return;
+            }
+            seat_want = 0;
             snprintf(ssl, sizeof ssl, "$player2.StartUse(\"%s\")", p2_seats[i].seat[k]);
             p2_enter();
             ts_script_run(ssl, out, sizeof out);
             p2_leave();
-            ts_log("split: player 1 took %s: player 2 takes %s (gunner %s removed, %d clients): %s", seat_p1, p2_seats[i].seat[k],
-                   p2_seats[i].gunner[k], k, out);
+            ts_log("split: player 2 takes %s (%d clients): %s", p2_seats[i].seat[k], k, out);
             return;
         }
+        seat_want = 0;
     }
 }
 
