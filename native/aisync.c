@@ -1541,6 +1541,24 @@ static int n_snd, snd_on, snd_installed, snd_total;
 static char snd_trace[48];   /* "!ai snd trace <part of a name>": log the callers of the first sounds whose name contains it */
 static int snd_trace_left;
 
+/* (the trace string is a list of name parts separated by '|') */
+static int snd_trace_match(const char *t)
+{
+    char part[48];
+    const char *p = snd_trace;
+    while (*p) {
+        int n = 0;
+        while (*p && *p != '|' && n < (int)sizeof part - 1)
+            part[n++] = *p++;
+        part[n] = 0;
+        if (*p == '|')
+            p++;
+        if (n && strstr(t, part))
+            return 1;
+    }
+    return 0;
+}
+
 static void snd_trace_callers(const char *t, void *r, int flag)
 {
     char line[400];
@@ -1567,7 +1585,7 @@ static void *TSCALL hook_getbuffer(void *sys, char *name, int flag)
     if (!snd_on || !name || IsBadReadPtr(name, 0x14))
         return r;
     const char *t = name + 0xc;
-    if (snd_trace[0] && snd_trace_left > 0 && !IsBadReadPtr(t, 4) && strstr(t, snd_trace)) {
+    if (snd_trace[0] && snd_trace_left > 0 && !IsBadReadPtr(t, 4) && snd_trace_match(t)) {
         snd_trace_left--;
         snd_trace_callers(t, r, flag);
     }
