@@ -61,12 +61,16 @@ Not finished / known limits
   that is already in the game rides along (checked by log and coordinates).
 - Voices: the lines of Cooke and the rebels in the zeppelin intros (levels 8 and 23) and other spoken
   lines are started on the clients from the host's messages (checked in the logs); the sound itself
-  could not be judged in the automatic tests (muted windows). Tell us if a client misses a voice,
-  shots or footsteps.
+  could not be judged in the automatic tests (muted windows). The enemies' weapon shots are heard on
+  the clients, but the soldiers' own voices and the gibbing sounds are still played on the host
+  only. Tell us if a client misses a voice, shots or footsteps.
+- A bad connection: joining a game over a link that loses about a third of its packets can fail once
+  (the game sends its connect packets a few times and gives up); press Join again. Playing, changing
+  levels and Continue were tested with 5 %, 15 % and 30 % lost packets.
 - Split screen: cutscenes, the pause menu and the loading screens are full screen for both; each half
   is drawn every second frame, so each half runs at half of the game's frame rate (ts_coop.ini ->
   [Split] -> BothViews=1 draws both halves every frame; it only helps when the frame rate is capped,
-  off by default); the scripts treat player 1 as "the player" (the enemies and the all-players gates
+  off by default, tried on an Intel card only, not on NVIDIA or AMD); the scripts treat player 1 as "the player" (the enemies and the all-players gates
   count player 2); the shot sounds of player 2 are untested. Split screen on a client is basic: player
   2's pick-ups were checked in a live game, its time power and kills over the network were not.
 - Most checks of the rewind, force fields, vehicles and container traps were made by reading clip and
