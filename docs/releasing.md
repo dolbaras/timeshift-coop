@@ -276,6 +276,22 @@ taken before; never on the owner's install, never beside a running game from tha
 |---|---|---|---|
 | v0.1.0 | 2026-10-28 | `6b4f37a60c92ab3c1a7b3be206a8a6e99adf8619129bbc03f5b54b5e45fd9100` | first public build, commit 9a8b81e; the release page lists what is not finished |
 
+### 0.1.1: what was run before it (2026-11-01, from a clean clone of the release commit; zip and setup exe built with `package.ps1 -Exe -Dist <temp>`)
+
+- Package audit: 30 zip entries with `/` separators, `payload.txt` = the 25 files under `files/`, `version.txt` 0.1.1, the DLL carries `0.1.1`, the exe's
+  `--extract` equals the zip file by file (SHA-256) and the zip is inside the exe byte for byte. The DLL built in the clone differs from the working-tree DLL
+  that was tested only in the PE timestamp and debug-directory id bytes (20 bytes; the compiler stamps them from the build path): the code is identical.
+- Installer on the N100 (Windows 10, a clean copy of the game with a Cyrillic path): from the zip (quiet install, reinstall, uninstall = clean listing by SHA-256;
+  the built archives equal those built on the main PC; the exe gets the LAA flag), from `Install Co-op.bat` (no -Quiet, `-AutoClose`: returns in 5 s, installs,
+  flag cleared), from the setup exe (`lab\setup_exe_test.ps1`, 20 checks) and the Steam branch through the exe (`lab\setup_exe_steam_test.ps1`, 7 checks: refused without
+  `-AcceptSteamUpdate`, installed with it and the real community package, uninstall = the Steam 1.0 stand-in). A quiet install through the .bat is not a supported
+  path (the start flag is not written in -Quiet mode, the .bat waits 25 s and pauses).
+- Self-update 0.1.0 -> 0.1.1 through the real shortcut (its own target and arguments, started in the N100 user's session, local feed with the assets in the
+  order [setup exe, zip]): the launcher took the zip (checksum ok, installer exit 0), the game started with the 0.1.1 DLL, the shortcut stayed, nothing was left in
+  `%TEMP%`, uninstall left a clean game.
+- Game runs with the release DLL and data: 24-level bot (host + client), split screen smoke (levels 2, 12, turret levels 8 and 23 with firing), pad-only address entry,
+  Regroup and the gate hint, Screen mode row, Continue with a client on the real N100 + main PC pair, netem 5 % and 15 % loss.
+
 The release is made with `gh release create v<version> dist\timeshift-coop-<version>.zip dist\timeshift-coop-setup-<version>.exe
 --repo dolbaras/timeshift-coop --target main --title "TimeShift Co-op <version>" --notes-file <notes>` after pushing `main`; then compare the asset's
 `digest` in `gh release view --json assets` with the SHA-256 of the local zip and check that `releases/latest` answers
