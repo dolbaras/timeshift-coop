@@ -275,6 +275,7 @@ taken before; never on the owner's install, never beside a running game from tha
 | Tag | Date | Asset SHA-256 | Notes |
 |---|---|---|---|
 | v0.1.0 | 2026-10-28 | `6b4f37a60c92ab3c1a7b3be206a8a6e99adf8619129bbc03f5b54b5e45fd9100` | first public build, commit 9a8b81e; the release page lists what is not finished |
+| v0.1.1 | 2026-11-01 | zip `f9cd07f1d5492a98db7d678b3051e5cbc98f5a42a068b8530b703e01ecfa07cb`; setup exe `c62a339d88cbe692727c394e4f2e08b1d1d5175b8812ae2cd078e77634562cee` | Steam edition, campaign for several players, Continue with inventory, split screen fixes, setup exe; built from a clean clone of 50de3ab; the zip stays the auto-update asset |
 
 ### 0.1.1: what was run before it (2026-11-01, from a clean clone of the release commit; zip and setup exe built with `package.ps1 -Exe -Dist <temp>`)
 
