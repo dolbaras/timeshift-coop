@@ -172,6 +172,16 @@ bindings, including the pad bindings of `gamepad.c`. The engine fills it with it
 
 Player 1's raw input, context and look state are restored afterwards.
 
+**Walk smoothing is per player** (found 2026-11-04 from a player's report: "characters walk slowly, but fast when both pads push the
+same way"). The player update (`0x40e860`) smooths the walk through two engine globals, not fields of the player: `0xec6e44`
+(forward/back, from `MOVE_FORWARD`/`MOVE_BACKWARD`) and `0xec6e4c` (left/right), each moved towards the keys' target by 6.0 per second
+times dt (`0x42f1a0`, calls at `0x40eb15`, `0x40ec83`; the same smoothing at rest in the else branch `0x40f508-0x40f62a`), and the velocity is
+`smoothstep(value) * MovementSpeed` (`0x42f250`, calls at `0x40f6f5`, `0x40f91b`, `0x40f921`; the animation selection `0x417de0` and the
+bob code `0x42cf1a`, `0x42d249` read the same values). With one global pair, player 1 raised it by one step per update and the idle player 2
+took it back, so player 1 walked at one step of speed (15-25 % of full speed at 35-70 updates per second) until player 2 also pushed the same
+way (the pair then climbed to 1.0). Player 2's own pair now lives in `p2_axes` (`native/p2axes.h`): it is exchanged with the live globals on
+entering and again on leaving the swap that runs player 2's update. Offline model check: `native/tests/run.sh`.
+
 ## Settings (environment, prototype)
 
 | Variable | Meaning |
@@ -187,6 +197,8 @@ Player 1's raw input, context and look state are restored afterwards.
 | `TS_SPLIT_FXVIEW=8,10` | the screen effects (post-effect indices) kept per view; the others show in both halves |
 | `TS_SPLIT_FXSHARED=1` | tests: all screen effects as the game has them (both halves) |
 | `TS_SPLIT_ITEMTEST=<what>,<s>` | tests: <s> seconds after player 2 came in: `list`/`listall` log named objects (30 m / all), `nearitems` puts player 2 on the nearest recorded pick-up nodes one after another, `@name`, `name`, `#x/y/z` ("+"-separated, `!` = player 1) put a player on that object or spot; ammunition and life are logged before and 3 s after each |
+| `TS_SPLIT_SHAREDAXES=1` | tests: the engine's shared walk smoothing (the unfixed behaviour: player 1 walks slowly while player 2 stands still) |
+| `TS_SPLIT_WALKLOG=1` | tests: both cameras' positions and the walk values in the log every 500 ms (`split: walk ...`) |
 | `TS_SPLIT_FPNOSCALE=1` | tests: the weapon pass keeps the half's horizontal angle (first-person weapons cut at the sides) |
 | `TS_SPLITLOG=3` | tests: also every scene node made with its template, and the callers of a pick-up |
 | `TS_SPLIT_HUDNEXT=0` | tests: the HUD weapon panel takes player 2 on the other frame parity (default 1 is right) |

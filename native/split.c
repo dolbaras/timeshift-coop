@@ -46,6 +46,7 @@
 #include <string.h>
 
 #include "ts.h"
+#include "p2axes.h"
 
 #define TSCALL __attribute__((thiscall))
 
@@ -1284,6 +1285,13 @@ static void geo_owner_p2(int on);
  * turns it on: it made no clear difference in run 20261027-012413 (the copy moved about 1.3 m instead of walking), so it is off. */
 static int copy_mode1, saved_mode = -1;
 
+/* The walk smoothing (two engine globals, see p2axes.h) is player 2's own while its code runs. TS_SPLIT_SHAREDAXES=1
+ * keeps the engine's shared pair (tests: shows the slow walk of player 1 while player 2 stands still). */
+#define AXIS_FB (*(volatile float *)0xec6e44)
+#define AXIS_LR (*(volatile float *)0xec6e4c)
+static float p2_axes[2];
+static int shared_axes, walklog;
+
 static void p2_enter(void)
 {
     if (as2.depth++)
@@ -1294,6 +1302,8 @@ static void p2_enter(void)
             saved_mode = 3, *(int *)(gm + 0x3c) = 1;
     }
     geo_owner_p2(1);
+    if (!shared_axes)
+        p2_axes_exchange(&AXIS_FB, &AXIS_LR, p2_axes);
     BYTE *im = IM;
     as2.pa = PLAYER_A, as2.pb = PLAYER_B, as2.cam = CAM;
     as2.ctx1 = im ? *(BYTE **)(im + 0x40) : NULL;
@@ -1325,6 +1335,8 @@ static void p2_leave(void)
         saved_mode = -1;
     }
     geo_owner_p2(0);
+    if (!shared_axes)
+        p2_axes_exchange(&AXIS_FB, &AXIS_LR, p2_axes);
     BYTE *im = IM;
     if (as2.with_ctx && im) {
         *(BYTE **)(im + 0x40) = as2.ctx1;
@@ -3719,6 +3731,18 @@ static void split_tick(float dt)
     coopsave_tick();
     mem_log();
     split_choice();
+    if (walklog && p2) {   /* (tests, TS_SPLIT_WALKLOG=1: both players' camera positions and walk values each 500 ms) */
+        static DWORD lastw;
+        DWORD nowt = GetTickCount();
+        if (nowt - lastw >= 500) {
+            lastw = nowt;
+            BYTE *c1 = as2.depth ? as2.cam : (swapped ? saved_cam : CAM);
+            if (c1 && cam2 && !as2.depth)
+                ts_log("split: walk p1 %.3f %.3f %.3f p2 %.3f %.3f %.3f axes fb %.3f lr %.3f p2 fb %.3f lr %.3f", ((float *)(c1 + 0x30))[0],
+                       ((float *)(c1 + 0x30))[1], ((float *)(c1 + 0x30))[2], ((float *)(cam2 + 0x30))[0], ((float *)(cam2 + 0x30))[1],
+                       ((float *)(cam2 + 0x30))[2], AXIS_FB, AXIS_LR, p2_axes[0], p2_axes[1]);
+        }
+    }
     if (splitlog) {
         static DWORD last;
         DWORD now = GetTickCount();
@@ -3966,6 +3990,8 @@ void split_install(void)
         if (both_mode)
             ts_log("split: both views are drawn in every frame (TS_SPLIT_BOTH / ts_coop.ini [Split] BothViews)");
     }
+    walklog = ts_env("TS_SPLIT_WALKLOG", v, sizeof v) && v[0] == '1';
+    shared_axes = ts_env("TS_SPLIT_SHAREDAXES", v, sizeof v) && v[0] == '1';   /* (tests: the engine's shared walk smoothing) */
     no_geo_owner = ts_env("TS_SPLIT_NOGEO", v, sizeof v) && v[0] == '1';   /* (tests: without the owner swap) */
     fp_share = ts_env("TS_SPLIT_FPSHARE", v, sizeof v) && v[0] == '1';
     splitlog = ts_env("TS_SPLITLOG", v, sizeof v) ? atoi(v) : 0;
