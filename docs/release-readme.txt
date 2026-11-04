@@ -54,6 +54,15 @@ What the mod does
   join as usual. On a host both halves of its screen play in the session and the other players see
   both bodies. On a client the second player is supported in basic form (experimental).
 
+New in 0.1.2
+- Split screen on one PC: with two players, player 1 walked slowly
+  while player 2 stood still, and walked normally only when both pushed the same way. The two
+  players shared the game's walking-speed smoothing; each has its own now, and a stick or pad of the
+  second player no longer slows the first. Checked in a live game with two virtual pads on one PC
+  (camera speed): player 1 alone about 4.3 m/s, player 2 alone about 4.6, both about 4.6 each; before
+  the fix 2.5 / 0.6 / 4.4. Not re-run for this fix: split screen on a client over the network and the
+  test with two PCs (the rest of the mod is as tested for 0.1.1).
+
 Not finished / known limits
 - Quads on the quad levels (9 and 12): the enemies' quads follow the host's positions on the clients'
   screens (checked by coordinates on level 9); a client driving a quad was run on level 12 only, and
