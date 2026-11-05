@@ -528,7 +528,7 @@ the vehicle notes below), (f) bot re-run (`lab\campaign_bot.ps1 -Env 'TS_CAMPAIG
 replay counts need TS_STORYSYNC_LOG=1 now). Test helpers: `work\tmp_agent\numbers.sh`, `pairrun.ps1`. Leave both PCs
 clean with `lab\safe_state.ps1`.
 
-### Bot regression with the 2026-10-27 DLL, chunk 1: levels 1-8 (summary `work	mp_agentot1.out`)
+### Bot regression with the 2026-10-27 DLL, chunk 1: levels 1-8 (summary `work	mp_agent\bot1.out`)
 
 All 8 levels: client joined the next level, no "Unhandled exception" on either side. (The bot's `crash h/c` column counts
 first-chance `AccessViolation` log lines; the mod's `IsBadReadPtr` probes add some, so use `Unhandled exception`.) Vehicle stream,
@@ -545,7 +545,7 @@ rewind recorder, force-field/seat/trap rules all log "on" in every run; the reco
 | 7 | skyscraper_part4 | natural | yes | 12 | 53 | 8 | -171019 | the 53 are level 8's `Intro_Cooke`/`Intro_rebel_1` (client's own `Zeppelin_cruiser_Intro_plc.OnAnimBegin`): the known Cooke gap also hits the 7 -> 8 change (same as 2026-10-26) |
 | 8 | zepride1_part01 | natural | yes | 14 | 2 | 7 | -171232 | |
 
-### Bot regression, chunk 2: levels 9-16 (`work	mp_agentot2.out`, DLL of commit 5922d7c)
+### Bot regression, chunk 2: levels 9-16 (`work	mp_agent\bot2.out`, DLL of commit 5922d7c)
 
 All 8 levels: client on the next level, no "Unhandled exception" on either side, 5-7 vehicle messages in per run on 9-15 (0 on 16, no vehicles there), the
 vehicle stream finds its vehicles (only 2 "not here" lines on level 9: Jets). Quads: unchanged known gap on 9 and 12 (AI quads snap back on the client).
@@ -566,7 +566,7 @@ classifier) now wraps the client's copies of the intro handlers' `$Intro_Cooke/_
 host's run plays them). Level 8: 0 unknown-object lines for them (was up to 10-11 each); level 23: the script errors are gone, 2 benign lines
 per intro remain (aisync's own name probe just before it names the object). Dialogue lines of Cooke are therefore not heard on clients.
 
-### Bot regression, chunk 3: levels 17-24 (`work	mp_agentot3.out`, DLL of b93047f)
+### Bot regression, chunk 3: levels 17-24 (`work	mp_agent\bot3.out`, DLL of b93047f)
 
 All 8 levels: client on the next level (24 is the last), no "Unhandled exception" on either side. 21 and 23 advanced through the server's
 level change (their exits are boxes above the floor), the others naturally.
