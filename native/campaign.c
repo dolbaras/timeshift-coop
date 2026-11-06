@@ -51,8 +51,9 @@
  *   of wrapping it as an AI call (campaign_local_setspeed).
  * - Late joiners (host): the level scripts' DisableMove/DisableInput/Aimable/DisableTC/SetupWeapon on the host's own
  *   player are recorded (native hooks); a client that starts running the level more than 20 s after the host gets
- *   that state (message 72, 3, 10 and 25 s after; the loadout only the first time); one that starts earlier gets it
- *   (without the loadout) when the scripts changed it while the client still loaded (latejoin.h).
+ *   that state (message 72, 3, 10 and 25 s after; the loadout only the first time). The time-power permissions
+ *   (DisableTC) go to every client whenever they changed on the host (1 s settled, the client 3 s in the level): the story
+ *   event that set them may have run while the client still loaded the level (latejoin.h).
  * - AI targets (host): SetAim/SetTarget("player") of AI, turrets and the boss name the nearest player instead of the
  *   host; remote players get a script name for that (coop_player<slot>).
  *
@@ -897,13 +898,20 @@ static void TSCALL hk_aim(void *obj, int argc, Variant *argv, Variant *res, void
     cp_t_aim(obj, argc, argv, res, self);
 }
 
+static unsigned hst_tc_seq;   /* (host) changes of the recorded time-power permissions in this level run (latejoin.h) */
+static DWORD hst_tc_at;
+
 static void TSCALL hk_tc(void *obj, int argc, Variant *argv, Variant *res, void *self)
 {
     if (recording(obj) && argc > 0 && argv && argv[0].type == type_str() && argv[0].data) {
         const char *m = ((String)argv[0].data)->s;
         int i = !_stricmp(m, "time_slow") ? 0 : !_stricmp(m, "time_stop") ? 1 : !_stricmp(m, "time_reverse") ? 2 : -1;
-        if (i >= 0)
+        if (i >= 0) {
             hst.tc[i] = arg_bool(argc, argv, 1, 1), hst.mask |= 8 << i;
+            hst_tc_seq++;
+            hst_tc_at = GetTickCount();
+            VLOG("campaign: the host's player DisableTC(%s, %d) (permissions change %u)", m, hst.tc[i], hst_tc_seq);
+        }
     }
     cp_t_tc(obj, argc, argv, res, self);
 }
@@ -1528,10 +1536,10 @@ __asm__(".text\n"
         "1:\n"
         "  ret\n");
 
-/* ---- late joiners (host): a client that joins a level running for more than 20 s gets the host's player state; one that
- * runs it earlier gets what the scripts changed on the host's player while it still loaded (latejoin.h) ---- */
+/* ---- late joiners (host): a client that joins a level running for more than 20 s gets the host's player state; every client
+ * gets the host's time-power permissions when they change (latejoin.h) ---- */
 static DWORD level_start;
-static struct { int id; DWORD seen; int sends, early; } known[16];
+static struct { int id; DWORD seen; int sends; unsigned tc_sent; } known[16];
 static int n_known;
 
 static void latejoin_step(DWORD now)
@@ -1542,6 +1550,7 @@ static void latejoin_step(DWORD now)
         level_start = now;
         CLOG("campaign: level run starts (%s)", LEVEL_NAME);
         memset(&hst, 0, sizeof hst);
+        hst_tc_seq = 0;
         n_known = 0;
     }
     was_running = running;
@@ -1559,25 +1568,35 @@ static void latejoin_step(DWORD now)
                 continue;
             known[k].id = id;
             known[k].seen = now;
-            /* (a client there from the level start needs nothing; a late joiner gets 3 sends, at 3, 10 and 25 s; an early one
-             * the same when the scripts already changed the host's player while it loaded: their replays reached nobody) */
-            known[k].sends = latejoin_plan(now - level_start, hst.mask, &known[k].early);
+            known[k].tc_sent = 0;
+            /* (clients in the level from its start need nothing; a late joiner gets 3 sends, at 3, 10 and 25 s) */
+            known[k].sends = latejoin_sends(now - level_start);
             if (known[k].sends)
-                CLOG("campaign: client %d runs the level %lu s into it: it gets the host's player state%s (mask %x)", id,
-                     (now - level_start) / 1000, known[k].early ? " set while it loaded" : "", hst.mask);
+                CLOG("campaign: client %d joined %lu s into the level: it gets the host's player state", id,
+                     (now - level_start) / 1000);
             n_known++;
         }
         static const DWORD at[3] = {25000, 10000, 3000};
         if (known[k].sends > 0 && now - known[k].seen >= at[known[k].sends - 1] && hst.mask) {
-            unsigned char b[12] = {PROTO, (unsigned char)latejoin_bits(hst.mask, known[k].early, known[k].sends == 3),
+            unsigned char b[12] = {PROTO, (unsigned char)latejoin_bits(hst.mask, known[k].sends == 3),
                                    (unsigned char)hst.move, (unsigned char)hst.input,
                                    (unsigned char)hst.aim, (unsigned char)hst.tc[0], (unsigned char)hst.tc[1],
                                    (unsigned char)hst.tc[2], (unsigned char)hst.wpn[0], (unsigned char)hst.wpn[1],
                                    (unsigned char)hst.wpn[2], 0};
-            /* (the loadout only once, to late joiners: later pickups must not be replaced) */
+            /* (the loadout only once: later pickups must not be replaced) */
             if (coopnet_send(i, SUB_STATE, b, sizeof b) > 0) {
                 known[k].sends--;
+                known[k].tc_sent = hst_tc_seq;
                 VLOG("campaign: player state (mask %x) sent to client %d", b[1], id);
+            }
+        } else if (tc_mirror_due(hst.mask, hst_tc_seq, known[k].tc_sent, now - hst_tc_at, now - known[k].seen)) {
+            /* (the time-power permissions alone: a story event that set them may have run while this client loaded) */
+            unsigned char b[12] = {PROTO, (unsigned char)(hst.mask & LJ_TC), 0, 0, 0, (unsigned char)hst.tc[0],
+                                   (unsigned char)hst.tc[1], (unsigned char)hst.tc[2], 0, 0, 0, 0};
+            if (coopnet_send(i, SUB_STATE, b, sizeof b) > 0) {
+                known[k].tc_sent = hst_tc_seq;
+                CLOG("campaign: the host's time-power permissions (mask %x: slow %d, stop %d, reverse %d disabled) sent to client %d",
+                     b[1], hst.tc[0], hst.tc[1], hst.tc[2], id);
             }
         }
     }

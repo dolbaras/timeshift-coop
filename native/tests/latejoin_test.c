@@ -1,8 +1,8 @@
 /*
- * Offline check of the late joiner rule (latejoin.h, campaign.c message 72), on the host:  sh tests/run.sh
- * Cases from the live run n100pair-20261106-231030 (level 2): the host's story re-allowed time reversal
- * (DisableTC("time_reverse", 0): bit 32) 13 s into the level while the client still loaded; the client ran the level
- * at 16.5 s. Before the fix such a client got nothing (the rule was "more than 20 s"), so its reverse stayed locked.
+ * Offline check of the host's player state for clients (latejoin.h, campaign.c message 72), on the host:  sh tests/run.sh
+ * Timeline of the live runs n100pair-20261106-231030 / -234222 (level 2): the client starts running the level 16 s into
+ * it; the host's story re-allows time reversal (DisableTC("time_reverse", 0): bit 32) about 7 s after that, from a
+ * replay the client never got. Before the fix only clients more than 20 s late got anything, so its reverse stayed locked.
  */
 #include <stdio.h>
 
@@ -13,33 +13,34 @@ static int fails;
 
 int main(void)
 {
-    int early, n;
+    /* late joiners as before */
+    CHECK(latejoin_sends(25000) == 3, "25 s into the level: 3 full sends");
+    CHECK(latejoin_sends(16000) == 0 && latejoin_sends(20000) == 0, "16 s / 20 s: no full sends");
+    CHECK(latejoin_bits(32 | 64, 1) == (32 | 64) && latejoin_bits(32 | 64, 0) == 32, "the loadout only in the first full send");
 
-    /* the live case: 16.5 s in, the host's reverse re-allowed (32) and its weapons put back (64) */
-    n = latejoin_plan(16500, 32 | 64, &early);
-    CHECK(n == 3 && early, "16.5 s, mask 0x60: %d sends, early %d (want 3, 1)", n, early);
-    CHECK(latejoin_bits(32 | 64, early, 1) == 32, "early first send: bits %x (want 0x20, no loadout)", latejoin_bits(32 | 64, early, 1));
-    CHECK(latejoin_bits(32 | 64, early, 0) == 32, "early later send: bits %x (want 0x20)", latejoin_bits(32 | 64, early, 0));
+    /* the live case: the client runs the level (in_level counts from then); the host's reverse permission changes at 7 s */
+    unsigned seq = 0, sent = 0;
+    CHECK(!tc_mirror_due(0, seq, sent, 100000, 5000), "nothing changed yet: nothing to send");
+    seq = 1;   /* DisableTC("time_reverse", 0) at in_level 7.0 s */
+    CHECK(!tc_mirror_due(32, seq, sent, 400, 7400), "0.4 s after the change: wait until it settles");
+    CHECK(tc_mirror_due(32, seq, sent, 1000, 8000), "1 s after the change: send");
+    sent = seq;
+    CHECK(!tc_mirror_due(32, seq, sent, 5000, 12000), "sent once: not again while it stays");
 
-    /* a client there from the level start: nothing changed yet, or only the loadout: nothing to send */
-    n = latejoin_plan(4000, 0, &early);
-    CHECK(n == 0, "4 s, mask 0: %d sends (want 0)", n);
-    n = latejoin_plan(4000, 64, &early);
-    CHECK(n == 0, "4 s, loadout only: %d sends (want 0)", n);
+    /* a change before the client ran the level: sent 3 s after it starts running, not earlier */
+    seq = 1, sent = 0;
+    CHECK(!tc_mirror_due(32, seq, sent, 4000, 2000), "client runs the level for 2 s: not yet");
+    CHECK(tc_mirror_due(32, seq, sent, 5000, 3000), "client runs the level for 3 s: send");
 
-    /* locks set during the load (a cinematic's DisableMove / DisableInput) count as well */
-    n = latejoin_plan(12000, 1 | 2, &early);
-    CHECK(n == 3 && latejoin_bits(3, early, 1) == 3, "12 s, move/input locks: %d sends, bits %x (want 3, 3)", n, latejoin_bits(3, early, 1));
+    /* a lock and its release within a second (03840: DisableTC 1, then 0 one second later): only the settled state goes */
+    seq = 2, sent = 1;
+    CHECK(!tc_mirror_due(32, seq, sent, 300, 60000), "a quick lock/release: wait");
+    seq = 3;
+    CHECK(tc_mirror_due(32, seq, sent, 1000, 61300), "settled: send the final state");
 
-    /* late joiners as before: 3 sends whatever the mask is now (it is checked at each send), the loadout in the first only */
-    n = latejoin_plan(25000, 0, &early);
-    CHECK(n == 3 && !early, "25 s, mask 0: %d sends, early %d (want 3, 0)", n, early);
-    CHECK(latejoin_bits(32 | 64, early, 1) == (32 | 64), "late first send: bits %x (want 0x60)", latejoin_bits(32 | 64, early, 1));
-    CHECK(latejoin_bits(32 | 64, early, 0) == 32, "late later send: bits %x (want 0x20)", latejoin_bits(32 | 64, early, 0));
-
-    /* the 20 s boundary itself is still "early" (the old rule sent only above 20 s) */
-    n = latejoin_plan(20000, 8, &early);
-    CHECK(early && n == 3, "20.0 s, mask 8: early %d, %d sends (want 1, 3)", early, n);
+    /* other bits alone (loadout, move/input/aim) are not mirrored */
+    CHECK(!tc_mirror_due(64 | 1 | 2 | 4, 5, 0, 9000, 9000), "no time-power bits: nothing");
+    CHECK((LJ_TC & (1 | 2 | 4 | 64)) == 0 && LJ_TC == 56, "LJ_TC is the three DisableTC bits");
 
     printf("latejoin_test: %s\n", fails ? "FAILED" : "ok");
     return fails ? 1 : 0;
