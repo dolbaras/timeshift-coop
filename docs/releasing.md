@@ -171,15 +171,18 @@ issue form (`.github\ISSUE_TEMPLATE\bug_report.yml`) tell players to run `<game>
 `coop\collect-logs.ps1 -Mod timeshift` and puts `timeshift-coop-report-<date>-<time>.zip` on the desktop (`report.txt` with mod
 version, exe/DLL hashes, Windows, UI language, GPU and driver, memory, install record summary, then CPU, display modes, how the
 game folder was found; the cleaned logs `logs\ts_coop*.log`; `coop\install.txt`, `install-log.txt`, `version.txt`,
-`coop_build.txt`, `paks.txt`; `files.txt` with names and sizes of `UserConfigs` and `coop`, no contents). Cleaned: user name,
+`coop_build.txt`, `paks.txt`, `launcher-log.txt`; `temp\timeshift-coop-install.log` (the installer's log in `%TEMP%`: a run
+that stopped before the game had a `coop\`, or the last update the launcher ran); `files.txt` with names and sizes of
+`UserConfigs` and `coop`, no contents). Cleaned: user name,
 computer name, the profile / Documents / game paths (also 8.3 and with `/`), `C:\Users\<x>`, the in-game player name, Steam's
 account and persona names and Steam IDs, public IPv4 / IPv6 addresses (LAN and loopback kept), e-mails, MACs. The script also
 takes `-Game <folder>`, `-OutDir <folder>`, `-NoPause`, and `-All` (one zip with every co-op mod of the workspace found on the
 PC, a folder each). From the release after 0.1.2 on the script is the workspace's shared `tools\log-collector\collect-logs.ps1` (game independent,
 the same for Jericho, Revelations 1 and 2) with `profiles\timeshift.psd1`; `package.ps1` copies both (and the other profiles,
-for `-All`) from there (`-LogCollector <folder>` for a clone placed elsewhere). Its zip holds the same files as the 0.1.1-0.1.2
-collector's, with the same contents, and `report.txt` starts with the same lines (checked by the shared test); the old one
-wrote `\` into the zip's entry names under Windows PowerShell 5.1, the new one `/`.
+for `-All`) from there (`-LogCollector <folder>` for a clone placed elsewhere). Its zip holds every file of the 0.1.1-0.1.2
+collector's, with the same contents, plus `coop\launcher-log.txt` and `temp\timeshift-coop-install.log`, and `report.txt` starts
+with the same lines (checked by the shared test); the old one wrote `\` into the zip's entry names under Windows PowerShell 5.1,
+the new one `/`.
 
 ## The launcher contract
 
