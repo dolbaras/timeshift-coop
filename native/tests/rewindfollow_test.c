@@ -50,6 +50,40 @@ int main(void)
     b[0] = 2;
     CHECK(!rf_unpack(b, RF_LEN, &a, &c, &fl, &t), "another protocol version is refused");
 
+    /* companions (message 85): the level 2 list, and the live end state of run n100pair-20261106-235732 after the host's
+     * rewind: Bridge_plrc_actor hidden again, Bridge_dom_kill_1 locked again (host) */
+    const char *const *s = rf_level(rs_table, "ts2_city_part02");
+    int ns = 0;
+    while (s && s[ns])
+        ns++;
+    CHECK(ns == 12 && !strcmp(s[0], "Bridge_plrc_actor") && !strcmp(s[5], "physc_bridge_actor") && !strcmp(s[6], "Bridge_dom_kill_1")
+          && !strcmp(s[11], "Bridge_dom_kill_6"), "level 2 companions: 6 actors and 6 kill domains (got %d)", ns);
+    CHECK(ns <= RS_MAX, "within RS_MAX");
+    CHECK(!rf_level(rs_table, "ts2_city_part03"), "level 3 has no companions");
+    int hid[RS_MAX], lk[RS_MAX], h2[RS_MAX], l2[RS_MAX];
+    for (int i = 0; i < 12; i++) {
+        hid[i] = i < 6 ? 1 : -1;      /* actors hidden, domains: no hidden state */
+        lk[i] = i < 6 ? -1 : 1;       /* kill domains locked */
+    }
+    hid[5] = -1;                      /* an object the host did not find: nothing to say */
+    unsigned char sb[2 + 3 * RS_MAX];
+    int len = rs_pack(sb, sizeof sb, 12, hid, lk);
+    CHECK(len == 38, "12 companions: 38 bytes (got %d)", len);
+    CHECK(rs_unpack(sb, len, h2, l2) == 12, "unpacked 12");
+    int same = 1;
+    for (int i = 0; i < 12; i++)
+        same &= h2[i] == hid[i] && l2[i] == lk[i];
+    CHECK(same, "round trip of hidden/locks");
+    CHECK(h2[12] == -1 && l2[12] == -1 && h2[RS_MAX - 1] == -1, "indices beyond n: nothing to say");
+    CHECK(rs_unpack(sb, len - 1, h2, l2) < 0, "a short states message is refused");
+    sb[1] = RS_MAX + 1;
+    CHECK(rs_unpack(sb, sizeof sb, h2, l2) < 0, "too many entries are refused");
+    CHECK(rs_pack(sb, sizeof sb, RS_MAX + 1, hid, lk) == 0, "packing too many is refused");
+    CHECK(rs_pack(sb, 10, 12, hid, lk) == 0, "packing into a short buffer is refused");
+    /* the lock steps: the client's kill_1 unlocked (0), the host's locked again (1): one Lock() */
+    CHECK(rs_lock_steps(0, 1) == 1 && rs_lock_steps(1, 0) == -1 && rs_lock_steps(1, 1) == 0, "lock steps +1 / -1 / 0");
+    CHECK(rs_lock_steps(0, 200) == 8 && rs_lock_steps(200, 0) == -8, "lock steps capped at 8");
+
     printf("rewindfollow_test: %s\n", fails ? "FAILED" : "ok");
     return fails ? 1 : 0;
 }

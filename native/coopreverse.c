@@ -33,6 +33,7 @@
  *   82 server -> client  {u8 1}   (trapped in a closed container after a rewind)
  *   83 server -> client  {u8 1, u8 actor, u8 clip, u8 flags, f32 time}   (rewind actors' clips, see send_anims)
  *   84 server -> client  {u8 1, u8 actor, i16 clip, u8 flags, f32 time}  (rewind followers' clips, rewindfollow.h)
+ *   85 server -> client  {u8 1, u8 n, n x {u8 index, u8 hidden, u8 locks}}  (their companions' shown/hidden and locks)
  *
  * Real rewind on the host (TS_COOP_REWIND=1, with TS_COOP_REVERSE=1): the engine's own time recorder.
  * It takes a snapshot of every isSyncTR object every 0.1 s through the save serializer [0x1095f94] (0x5849c0, flags
@@ -612,6 +613,81 @@ static void apply_follow(void)   /* (client, script tick) */
     }
 }
 
+/* The followers' companions (rewindfollow.h rs_table): shown/hidden (entity +0x228 bit 0x1000, the base Hide/Show
+ * 0x668340/0x668470) and the lock count of domains (+0x88). */
+#define SUB_STATES 85
+#define ENT_HIDDEN 0x228
+static unsigned char st_in[2 + 3 * RS_MAX];   /* (client) the latest message 85 */
+static int st_in_len;
+
+static char *obj_ent(const char *name)
+{
+    String nm = 0;
+    ObjPtr inst = 0;
+    str_ctor(&nm, name, -1, 0);
+    mgr_find_obj(MGR, &inst, &nm);
+    if (nm && --nm->refs == 0)
+        eng_free(nm);
+    if (!inst)
+        return NULL;
+    char *e = *(char **)((char *)inst + 0xc);
+    inst_release(&inst);
+    return e && !IsBadReadPtr(e, ENT_HIDDEN + 4) && !IsBadReadPtr(*(void **)e, 0x138) ? e : NULL;
+}
+
+static int ent_is_domain(char *e)
+{
+    return (*(void ***)e)[0x134 / 4] == (void *)DOM_UPDATE;
+}
+
+static const char *const *level_states(void)
+{
+    char base[0x110];
+    level_base(LEVEL_NAME, base, sizeof base);
+    return rf_level(rs_table, base);
+}
+
+static void send_states(void)   /* (host) */
+{
+    const char *const *s = level_states();
+    int hidden[RS_MAX], locks[RS_MAX], n = 0;
+    for (; s && s[n] && n < RS_MAX; n++) {
+        char *e = obj_ent(s[n]);
+        int dom = e && ent_is_domain(e);
+        hidden[n] = e && !dom ? (int)((*(unsigned *)(e + ENT_HIDDEN) >> 12) & 1) : -1;
+        locks[n] = dom ? *(int *)(e + DOM_LOCKS) : -1;
+    }
+    unsigned char b[2 + 3 * RS_MAX];
+    int len = n ? rs_pack(b, sizeof b, n, hidden, locks) : 0;
+    if (len)
+        coopnet_send(-1, SUB_STATES, b, len);
+}
+
+static void apply_states(void)   /* (client, script tick): only what differs from the host's */
+{
+    int hidden[RS_MAX], locks[RS_MAX];
+    int n = st_in_len ? rs_unpack(st_in, st_in_len, hidden, locks) : -1;
+    st_in_len = 0;
+    const char *const *s = level_states();
+    for (int k = 0; n > 0 && s && s[k] && k < n; k++) {
+        char *e = obj_ent(s[k]);
+        if (!e)
+            continue;
+        char stmt[400], res[120] = "";
+        int m = 0, dom = ent_is_domain(e);
+        if (dom && locks[k] >= 0) {
+            int d = rs_lock_steps(*(int *)(e + DOM_LOCKS), locks[k]);
+            for (int i = 0; i < (d < 0 ? -d : d) && m < (int)sizeof stmt - 80; i++)
+                m += snprintf(stmt + m, sizeof stmt - m, "$%s.%s()\n", s[k], d > 0 ? "Lock" : "Unlock");
+        } else if (!dom && hidden[k] >= 0 && (int)((*(unsigned *)(e + ENT_HIDDEN) >> 12) & 1) != hidden[k])
+            m += snprintf(stmt + m, sizeof stmt - m, "$%s.%s()\n", s[k], hidden[k] ? "Hide" : "Show");
+        if (!m)
+            continue;
+        ts_script_run(stmt, res, sizeof res);
+        RLOG("coopreverse: %s put as the host's (%s %d) -> %s", s[k], dom ? "locks" : "hidden", dom ? locks[k] : hidden[k], res);
+    }
+}
+
 /* The host's own record of the rewind actors' animation (clip, time, running; 10 Hz, 33 s). Live 2026-10-27: the
  * engine's playback put the crane back but left the lift of level 10 (and the bridge of 9) at their end pose on the
  * host too, so nothing could reach the clients. During a playback the host therefore steps these actors back itself:
@@ -739,6 +815,7 @@ __attribute__((used)) void crw_tick(void)
             anim_last = GetTickCount();
             send_anims(1);
             send_follow(1);
+            send_states();
         }
     }
     if (stock_ours && (int)(GetTickCount() - until) >= 0)
@@ -943,7 +1020,10 @@ static void on_message(int peer, unsigned short sub, const unsigned char *b, int
         apply(b[1] != 0, b[2] != 0);
     else if (sub == SUB_TRAP && game_mode() == MODE_CLIENT)
         trap_kill = 1;   /* (run in the script tick) */
-    else if (sub == SUB_FOLLOW && game_mode() == MODE_CLIENT) {
+    else if (sub == SUB_STATES && game_mode() == MODE_CLIENT && len <= (int)sizeof st_in) {
+        memcpy(st_in, b, len);
+        st_in_len = len;   /* (run in the script tick) */
+    } else if (sub == SUB_FOLLOW && game_mode() == MODE_CLIENT) {
         int a, c, fl;
         float t;
         if (rf_unpack(b, len, &a, &c, &fl, &t)) {
@@ -1044,10 +1124,12 @@ static void frame(float dt)
     if (game_mode() == MODE_CLIENT) {
         apply_anims();
         apply_follow();
+        apply_states();
     }
     if (game_mode() == MODE_SERVER && anim_finals > 0 && (int)(now - anim_final_at) >= 0) {
         send_anims(0);   /* (after a rewind: 0.2, 0.6 and 1.5 s after its end) */
         send_follow(0);
+        send_states();
         anim_final_at = now + (anim_finals == 3 ? 400 : 900);
         anim_finals--;
     }
