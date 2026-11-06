@@ -32,6 +32,7 @@
  *   81 server -> client  {u8 1, u8 on, u8 yours, u8 tenths left, i32 owner}   (repeated every second while on)
  *   82 server -> client  {u8 1}   (trapped in a closed container after a rewind)
  *   83 server -> client  {u8 1, u8 actor, u8 clip, u8 flags, f32 time}   (rewind actors' clips, see send_anims)
+ *   84 server -> client  {u8 1, u8 actor, i16 clip, u8 flags, f32 time}  (rewind followers' clips, rewindfollow.h)
  *
  * Real rewind on the host (TS_COOP_REWIND=1, with TS_COOP_REVERSE=1): the engine's own time recorder.
  * It takes a snapshot of every isSyncTR object every 0.1 s through the save serializer [0x1095f94] (0x5849c0, flags
@@ -57,6 +58,7 @@
 #include <string.h>
 
 #include "ts.h"
+#include "rewindfollow.h"
 
 #define TSCALL __attribute__((thiscall))
 
@@ -546,6 +548,70 @@ static void apply_anims(void)
     }
 }
 
+/* ---- rewind followers (rewindfollow.h): the host's recorder rewinds them, the clients get their clip (message 84) ---- */
+#define SUB_FOLLOW 84
+static const DWORD fn_clip_start = 0x6aaea0;   /* esi = the entity; clip index, time, cycle (campaign.c's digest uses it) */
+static struct { int set, clip, flags; float t; } fol_in[RF_MAX];   /* (client) the latest per follower */
+
+static const char *const *level_followers(void)
+{
+    char base[0x110];
+    level_base(LEVEL_NAME, base, sizeof base);
+    return rf_level(rf_table, base);
+}
+
+static void send_follow(int hold)   /* (host) */
+{
+    const char *const *f = level_followers();
+    for (int k = 0; f && f[k] && k < RF_MAX; k++) {
+        char *e = named_ent(f[k]), *node = e ? *(char **)(e + 0x230) : NULL;
+        if (!node || IsBadReadPtr(node, 0x88))
+            continue;
+        int clip = node_clip(node);
+        if (clip < 0)
+            continue;
+        unsigned fl = *(unsigned *)(e + 0x280);
+        float t = node_clip_time(node);
+        unsigned char b[RF_LEN];
+        rf_pack(b, k, clip, (fl & 1 ? RF_RUNS : 0) | (fl & 0x10 ? RF_CYCLE : 0) | (hold ? RF_HOLD : 0), t);
+        coopnet_send(-1, SUB_FOLLOW, b, RF_LEN);
+        if (!hold)
+            VLOG("coopreverse: follower %s clip %d at %.2f s (%s) sent", f[k], clip, (double)t, fl & 1 ? "runs" : "stopped");
+    }
+}
+
+static void apply_follow(void)   /* (client, script tick) */
+{
+    const char *const *f = level_followers();
+    int n = 0;
+    while (f && f[n])
+        n++;
+    for (int k = 0; k < RF_MAX; k++) {
+        if (!fol_in[k].set)
+            continue;
+        fol_in[k].set = 0;
+        char *e = k < n ? named_ent(f[k]) : NULL;
+        if (!e)
+            continue;
+        int clip = fol_in[k].clip, cyc = (fol_in[k].flags & RF_CYCLE) != 0, fl = fol_in[k].flags;
+        float t = fol_in[k].t;
+        unsigned tb;
+        memcpy(&tb, &t, 4);
+        __asm__ volatile("pushl %[c]\n\tpushl %[t]\n\tpushl %[i]\n\tcall *%[fn]"
+                         : "+S"(e)
+                         : [c] "m"(cyc), [t] "m"(tb), [i] "m"(clip), [fn] "m"(fn_clip_start)
+                         : "eax", "ecx", "edx", "memory", "cc", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7");
+        char stmt[120], res[120] = "";
+        if ((fl & RF_HOLD) || !(fl & RF_RUNS)) {
+            snprintf(stmt, sizeof stmt, "$%s.Stop()", f[k]);
+            ts_script_run(stmt, res, sizeof res);
+        }
+        if (!(fl & RF_HOLD))
+            VLOG("coopreverse: follower %s set to clip %d at %.2f s (%s) %s", f[k], clip, (double)t,
+                 fl & RF_RUNS ? "runs" : "stopped", res);
+    }
+}
+
 /* The host's own record of the rewind actors' animation (clip, time, running; 10 Hz, 33 s). Live 2026-10-27: the
  * engine's playback put the crane back but left the lift of level 10 (and the bridge of 9) at their end pose on the
  * host too, so nothing could reach the clients. During a playback the host therefore steps these actors back itself:
@@ -672,6 +738,7 @@ __attribute__((used)) void crw_tick(void)
         if (GetTickCount() - anim_last >= 100) {
             anim_last = GetTickCount();
             send_anims(1);
+            send_follow(1);
         }
     }
     if (stock_ours && (int)(GetTickCount() - until) >= 0)
@@ -876,7 +943,16 @@ static void on_message(int peer, unsigned short sub, const unsigned char *b, int
         apply(b[1] != 0, b[2] != 0);
     else if (sub == SUB_TRAP && game_mode() == MODE_CLIENT)
         trap_kill = 1;   /* (run in the script tick) */
-    else if (sub == SUB_ANIM && game_mode() == MODE_CLIENT && len >= 8 && b[1] < MAX_ANIM_ACTORS) {
+    else if (sub == SUB_FOLLOW && game_mode() == MODE_CLIENT) {
+        int a, c, fl;
+        float t;
+        if (rf_unpack(b, len, &a, &c, &fl, &t)) {
+            fol_in[a].clip = c;
+            fol_in[a].flags = fl;
+            fol_in[a].t = t;
+            fol_in[a].set = 1;   /* (run in the script tick) */
+        }
+    } else if (sub == SUB_ANIM && game_mode() == MODE_CLIENT && len >= 8 && b[1] < MAX_ANIM_ACTORS) {
         float t;
         memcpy(&t, b + 4, 4);
         anim_in[b[1]].clip = b[2];
@@ -965,10 +1041,13 @@ static void frame(float dt)
         ts_script_run(game_mode() == MODE_CLIENT ? "$player.FailMission(\"\")" : "$player.Kill()", res, sizeof res);
         RLOG("coopreverse: trapped in a container after the host's rewind: killed -> %s", res);
     }
-    if (game_mode() == MODE_CLIENT)
+    if (game_mode() == MODE_CLIENT) {
         apply_anims();
+        apply_follow();
+    }
     if (game_mode() == MODE_SERVER && anim_finals > 0 && (int)(now - anim_final_at) >= 0) {
         send_anims(0);   /* (after a rewind: 0.2, 0.6 and 1.5 s after its end) */
+        send_follow(0);
         anim_final_at = now + (anim_finals == 3 ? 400 : 900);
         anim_finals--;
     }

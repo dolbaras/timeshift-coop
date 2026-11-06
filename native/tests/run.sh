@@ -8,3 +8,5 @@ mkdir -p ../build
 ../build/axes_test.exe
 "$ZIG" cc -O1 -o ../build/latejoin_test.exe latejoin_test.c
 ../build/latejoin_test.exe
+"$ZIG" cc -O1 -o ../build/rewindfollow_test.exe rewindfollow_test.c
+../build/rewindfollow_test.exe
