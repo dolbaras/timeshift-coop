@@ -23,7 +23,7 @@ The archive holds no game files:
 | `files\coop\tools\build_pak.py`, `s3darc.py`, `files\coop\data\...` | the data builder and the recipes |
 | `files\coop\python\...` | python.org's embeddable CPython 3.12.10 amd64 (SHA-256 pinned in `package.ps1`), trimmed to `python.exe`, `python312.dll`, `python312.zip`, `python312._pth`, `vcruntime140*.dll`, `LICENSE.txt` (PSF) |
 | `files\coop\coop-launcher.ps1` | the shortcut's launcher (`tools/launcher.ps1`) |
-| `files\coop\collect-logs.ps1`, `files\coop\Collect logs.bat` | the bug-report collector (`tools/collect-logs.ps1`) and its double-click start |
+| `files\coop\collect-logs.ps1`, `files\coop\log-profiles\*.psd1`, `files\coop\Collect logs.bat` | the bug-report collector shared by the workspace's co-op mods (`<workspace>\tools\log-collector`: the script and one profile per game, all of them shipped) and its double-click start (`-Mod timeshift`) |
 | `files\coop\version.txt`, `files\coop\payload.txt`, `files\coop\README-COOP*.txt` | version, the package's file list, the texts |
 
 `Install Co-op.bat` is the player's entry point. It starts the installer with a hidden PowerShell and waits up to 25 s for the
@@ -146,7 +146,7 @@ package, never as official, and give no links). Choices and evidence: `notes\pla
 
 arcName back to the recorded value first, then the Steam files (if `steam.txt` exists), then the listed files, the built
 archives, `bin\ts_coop.log` and the rotated `bin\ts_coop.1.log` ... `.9.log`, the shortcuts, the backups put back,
-`coop\` (including `collect-logs.ps1`, `Collect logs.bat`, `launcher-log.txt`, `install-log.txt`) and `coop-backup\` removed.
+`coop\` (including `collect-logs.ps1`, `log-profiles\`, `Collect logs.bat`, `launcher-log.txt`, `install-log.txt`) and `coop-backup\` removed.
 `UserConfigs\` (profiles, saves, the Continue records `coop\continue-*` live in `coop\` and go with it) is never touched.
 A bug-report zip on the desktop is the player's file and stays.
 
@@ -168,10 +168,18 @@ The DLL's log is `bin\ts_coop.log` (the current run). At the start of the next r
 `ts_coop.log` -> `ts_coop.1.log` -> ... -> `ts_coop.4.log` (five kept, the newest first); a previous log under 4096 bytes (a start
 that never left the menu) is deleted instead of rotated; `TS_LOG` set = no rotation (test runs). The players' readmes and the
 issue form (`.github\ISSUE_TEMPLATE\bug_report.yml`) tell players to run `<game>\coop\Collect logs.bat`: it runs
-`coop\collect-logs.ps1` and puts a zip on the desktop (`report.txt` with mod version, exe/DLL hashes, Windows, UI language,
-GPU and driver, memory, install record summary; the cleaned logs; the install files; `files.txt` with names and sizes of
-`UserConfigs` and `coop`, no contents). Cleaned: user name, computer name, `C:\Users\<x>`, game path, in-game player name,
-public IPs (LAN and loopback kept), e-mails, MACs. The script also takes `-Game <folder>` and `-NoPause`.
+`coop\collect-logs.ps1 -Mod timeshift` and puts `timeshift-coop-report-<date>-<time>.zip` on the desktop (`report.txt` with mod
+version, exe/DLL hashes, Windows, UI language, GPU and driver, memory, install record summary, then CPU, display modes, how the
+game folder was found; the cleaned logs `logs\ts_coop*.log`; `coop\install.txt`, `install-log.txt`, `version.txt`,
+`coop_build.txt`, `paks.txt`; `files.txt` with names and sizes of `UserConfigs` and `coop`, no contents). Cleaned: user name,
+computer name, the profile / Documents / game paths (also 8.3 and with `/`), `C:\Users\<x>`, the in-game player name, Steam's
+account and persona names and Steam IDs, public IPv4 / IPv6 addresses (LAN and loopback kept), e-mails, MACs. The script also
+takes `-Game <folder>`, `-OutDir <folder>`, `-NoPause`, and `-All` (one zip with every co-op mod of the workspace found on the
+PC, a folder each). From the release after 0.1.2 on the script is the workspace's shared `tools\log-collector\collect-logs.ps1` (game independent,
+the same for Jericho, Revelations 1 and 2) with `profiles\timeshift.psd1`; `package.ps1` copies both (and the other profiles,
+for `-All`) from there (`-LogCollector <folder>` for a clone placed elsewhere). Its zip holds the same files as the 0.1.1-0.1.2
+collector's, with the same contents, and `report.txt` starts with the same lines (checked by the shared test); the old one
+wrote `\` into the zip's entry names under Windows PowerShell 5.1, the new one `/`.
 
 ## The launcher contract
 
@@ -267,8 +275,10 @@ taken before; never on the owner's install, never beside a running game from tha
   up-to-date feed, a 404 feed (also 403 with the rate-limit headers, 429, 500, an old tag) and the real GitHub URL start the
   game without a word; a feed with a wrong digest stops the update. The previous release's launcher is the one that runs the
   update, so use its zip, not the new one.
-- The bug-report collector on a game folder with strings that must be cleaned (user name, computer name, public IP, e-mail,
-  MAC, the profile's player name): the zip holds none of them.
+- The bug-report collector: `powershell.exe -File <workspace>\tools\log-collector\tests\test-collect.ps1` (fake game folders
+  for all four mods, a fake user, computer, Steam accounts and players: the zip holds none of them, every cleaning rule switched
+  off is caught, exit codes, the shipped `coop\` layout, the same zip as the 0.1.1-0.1.2 collector). Then once on a real
+  install: double-click `coop\Collect logs.bat`, open the zip.
 
 ## Published releases
 

@@ -61,9 +61,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Logs: please attach the zip made by `<game folder>\coop\Collect logs.bat`** (drag it into the comment box). It holds the
-        mod's logs (`bin\ts_coop.log` and `ts_coop.1.log` to `ts_coop.4.log`), the install record, hashes and system information; it removes your
-        Windows user name, computer name, player name and public IP addresses. Open it to check before you attach it.
+        **Logs: please attach the zip made by `<game folder>\coop\Collect logs.bat`** (double-click it; the zip appears on your desktop,
+        drag it into the comment box). It holds the mod's logs (`bin\ts_coop.log` and `ts_coop.1.log` to `ts_coop.4.log`), the install
+        record, hashes and system information; it removes your Windows user name, computer name, folder paths, player names, Steam names
+        and IDs, e-mail and MAC addresses and public IP addresses, and uploads nothing. Open it to check before you attach it.
         For a network problem a zip from the host AND from a client of the same session helps most.
   - type: checkboxes
     id: checks

@@ -220,10 +220,11 @@ Troubleshooting and reports
   ts_coop.1.log ... ts_coop.4.log (a run that never left the main menu is not kept).
 - To report a problem: open the mod's GitHub page -> Issues -> New issue (a form asks for the version,
   the game edition, what happened and what you did) and attach the zip that
-  <game>\coop\Collect logs.bat makes on your desktop: the logs, the install record, hashes, and the
-  system's graphics and Windows version. It removes your Windows user name, computer name, player name
-  and public IP addresses; open the zip to check it before you attach it. A report from the host AND
-  a client of the same session helps most.
+  <game>\coop\Collect logs.bat makes on your desktop (double-click it): the logs, the install record,
+  hashes, and the system's graphics and Windows version. It removes your Windows user name, computer
+  name, folder paths, player names, Steam names and IDs, e-mail and MAC addresses and public IP
+  addresses, and uploads nothing; open the zip to check it before you attach it. A report from the
+  host AND a client of the same session helps most.
 
 Credits and license
 - The mod: MIT license (LICENSE.txt), TimeShift Co-op contributors.
