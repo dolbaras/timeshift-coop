@@ -614,7 +614,8 @@ static void apply_follow(void)   /* (client, script tick) */
 }
 
 /* The followers' companions (rewindfollow.h rs_table): shown/hidden (entity +0x228 bit 0x1000, the base Hide/Show
- * 0x668340/0x668470) and the lock count of domains (+0x88). */
+ * 0x668340/0x668470) or the lock count (+0x88, the IACTIVE count: live, Bridge_dom_kill_1 1 -> 0 at its Unlock(), 1 again
+ * after the host's rewind), as the table says ('#'). */
 #define SUB_STATES 85
 #define ENT_HIDDEN 0x228
 static unsigned char st_in[2 + 3 * RS_MAX];   /* (client) the latest message 85 */
@@ -635,11 +636,6 @@ static char *obj_ent(const char *name)
     return e && !IsBadReadPtr(e, ENT_HIDDEN + 4) && !IsBadReadPtr(*(void **)e, 0x138) ? e : NULL;
 }
 
-static int ent_is_domain(char *e)
-{
-    return (*(void ***)e)[0x134 / 4] == (void *)DOM_UPDATE;
-}
-
 static const char *const *level_states(void)
 {
     char base[0x110];
@@ -652,10 +648,10 @@ static void send_states(void)   /* (host) */
     const char *const *s = level_states();
     int hidden[RS_MAX], locks[RS_MAX], n = 0;
     for (; s && s[n] && n < RS_MAX; n++) {
-        char *e = obj_ent(s[n]);
-        int dom = e && ent_is_domain(e);
-        hidden[n] = e && !dom ? (int)((*(unsigned *)(e + ENT_HIDDEN) >> 12) & 1) : -1;
-        locks[n] = dom ? *(int *)(e + DOM_LOCKS) : -1;
+        char *e = obj_ent(rs_name(s[n]));
+        int lk = rs_is_lock(s[n]);
+        hidden[n] = e && !lk ? (int)((*(unsigned *)(e + ENT_HIDDEN) >> 12) & 1) : -1;
+        locks[n] = e && lk ? *(int *)(e + DOM_LOCKS) : -1;
     }
     unsigned char b[2 + 3 * RS_MAX];
     int len = n ? rs_pack(b, sizeof b, n, hidden, locks) : 0;
@@ -670,21 +666,22 @@ static void apply_states(void)   /* (client, script tick): only what differs fro
     st_in_len = 0;
     const char *const *s = level_states();
     for (int k = 0; n > 0 && s && s[k] && k < n; k++) {
-        char *e = obj_ent(s[k]);
+        const char *nm = rs_name(s[k]);
+        char *e = obj_ent(nm);
         if (!e)
             continue;
         char stmt[400], res[120] = "";
-        int m = 0, dom = ent_is_domain(e);
-        if (dom && locks[k] >= 0) {
+        int m = 0, lk = rs_is_lock(s[k]);
+        if (lk && locks[k] >= 0) {
             int d = rs_lock_steps(*(int *)(e + DOM_LOCKS), locks[k]);
             for (int i = 0; i < (d < 0 ? -d : d) && m < (int)sizeof stmt - 80; i++)
-                m += snprintf(stmt + m, sizeof stmt - m, "$%s.%s()\n", s[k], d > 0 ? "Lock" : "Unlock");
-        } else if (!dom && hidden[k] >= 0 && (int)((*(unsigned *)(e + ENT_HIDDEN) >> 12) & 1) != hidden[k])
-            m += snprintf(stmt + m, sizeof stmt - m, "$%s.%s()\n", s[k], hidden[k] ? "Hide" : "Show");
+                m += snprintf(stmt + m, sizeof stmt - m, "$%s.%s()\n", nm, d > 0 ? "Lock" : "Unlock");
+        } else if (!lk && hidden[k] >= 0 && (int)((*(unsigned *)(e + ENT_HIDDEN) >> 12) & 1) != hidden[k])
+            m += snprintf(stmt + m, sizeof stmt - m, "$%s.%s()\n", nm, hidden[k] ? "Hide" : "Show");
         if (!m)
             continue;
         ts_script_run(stmt, res, sizeof res);
-        RLOG("coopreverse: %s put as the host's (%s %d) -> %s", s[k], dom ? "locks" : "hidden", dom ? locks[k] : hidden[k], res);
+        RLOG("coopreverse: %s put as the host's (%s %d) -> %s", nm, lk ? "locks" : "hidden", lk ? locks[k] : hidden[k], res);
     }
 }
 

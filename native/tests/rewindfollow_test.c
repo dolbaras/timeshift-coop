@@ -56,8 +56,13 @@ int main(void)
     int ns = 0;
     while (s && s[ns])
         ns++;
-    CHECK(ns == 12 && !strcmp(s[0], "Bridge_plrc_actor") && !strcmp(s[5], "physc_bridge_actor") && !strcmp(s[6], "Bridge_dom_kill_1")
-          && !strcmp(s[11], "Bridge_dom_kill_6"), "level 2 companions: 6 actors and 6 kill domains (got %d)", ns);
+    CHECK(ns == 12 && !strcmp(s[0], "Bridge_plrc_actor") && !strcmp(s[5], "physc_bridge_actor") && !strcmp(s[6], "#Bridge_dom_kill_1")
+          && !strcmp(s[11], "#Bridge_dom_kill_6"), "level 2 companions: 6 actors and 6 kill domains (got %d)", ns);
+    int kinds_ok = 1;
+    for (int i = 0; i < ns; i++)
+        kinds_ok &= rs_is_lock(s[i]) == (i >= 6) && strchr(rs_name(s[i]), '#') == NULL;
+    CHECK(kinds_ok, "actors: shown/hidden, kill domains: locks; names without the mark");
+    CHECK(!strcmp(rs_name(s[6]), "Bridge_dom_kill_1") && !strcmp(rs_name(s[0]), "Bridge_plrc_actor"), "rs_name strips the mark only");
     CHECK(ns <= RS_MAX, "within RS_MAX");
     CHECK(!rf_level(rs_table, "ts2_city_part03"), "level 3 has no companions");
     int hid[RS_MAX], lk[RS_MAX], h2[RS_MAX], l2[RS_MAX];

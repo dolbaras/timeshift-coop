@@ -71,11 +71,23 @@ static inline int rf_pack(unsigned char *b, int actor, int clip, int flags, floa
  * client puts only what differs right: Show()/Hide(), Lock()/Unlock() (rs_lock_steps).
  */
 #define RS_MAX 16
+/* (a name with '#' in front: its lock count is mirrored, else its shown/hidden state; the kind is named here because the
+ * kill domains (DOM_KILL) are not told by the domain vtable test: live 2026-11-07, run n100pair-20261107-002022) */
 static const char *const rs_table[] = {
     "ts2_city_part02", "Bridge_plrc_actor", "Bridge_plrc_actor1", "Bridge_plrc_actor2", "Bridge_plrc_actor3",
-    "Bridge_plrc_actor4", "physc_bridge_actor", "Bridge_dom_kill_1", "Bridge_dom_kill_2", "Bridge_dom_kill_3",
-    "Bridge_dom_kill_4", "Bridge_dom_kill_5", "Bridge_dom_kill_6", NULL,
+    "Bridge_plrc_actor4", "physc_bridge_actor", "#Bridge_dom_kill_1", "#Bridge_dom_kill_2", "#Bridge_dom_kill_3",
+    "#Bridge_dom_kill_4", "#Bridge_dom_kill_5", "#Bridge_dom_kill_6", NULL,
     NULL};
+
+static inline int rs_is_lock(const char *entry)
+{
+    return entry[0] == '#';
+}
+
+static inline const char *rs_name(const char *entry)
+{
+    return entry[0] == '#' ? entry + 1 : entry;
+}
 
 /* {u8 proto, u8 n, n x {u8 index, u8 hidden (2: not known / not shown-hidden), u8 locks (255: not a domain)}}; hidden[i]
  * < 0 and locks[i] < 0 mean "nothing to say"; returns the length (0: n too big) */
