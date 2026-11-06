@@ -51,7 +51,8 @@
  *   of wrapping it as an AI call (campaign_local_setspeed).
  * - Late joiners (host): the level scripts' DisableMove/DisableInput/Aimable/DisableTC/SetupWeapon on the host's own
  *   player are recorded (native hooks); a client that starts running the level more than 20 s after the host gets
- *   that state (message 72, 3, 10 and 25 s after; the loadout only the first time).
+ *   that state (message 72, 3, 10 and 25 s after; the loadout only the first time); one that starts earlier gets it
+ *   (without the loadout) when the scripts changed it while the client still loaded (latejoin.h).
  * - AI targets (host): SetAim/SetTarget("player") of AI, turrets and the boss name the nearest player instead of the
  *   host; remote players get a script name for that (coop_player<slot>).
  *
@@ -76,6 +77,7 @@
 #include <math.h>
 
 #include "ts.h"
+#include "latejoin.h"
 
 #define TSCALL __attribute__((thiscall))
 
@@ -1526,10 +1528,10 @@ __asm__(".text\n"
         "1:\n"
         "  ret\n");
 
-/* ---- late joiners (host): a client that joins a level running for more than 20 s gets the host's player state ---- */
-#define LATE_MS 20000
+/* ---- late joiners (host): a client that joins a level running for more than 20 s gets the host's player state; one that
+ * runs it earlier gets what the scripts changed on the host's player while it still loaded (latejoin.h) ---- */
 static DWORD level_start;
-static struct { int id; DWORD seen; int sends; } known[16];
+static struct { int id; DWORD seen; int sends, early; } known[16];
 static int n_known;
 
 static void latejoin_step(DWORD now)
@@ -1557,21 +1559,22 @@ static void latejoin_step(DWORD now)
                 continue;
             known[k].id = id;
             known[k].seen = now;
-            /* (clients in the level from its start need nothing; a late joiner gets 3 sends, at 3, 10 and 25 s) */
-            known[k].sends = now - level_start > LATE_MS ? 3 : 0;
+            /* (a client there from the level start needs nothing; a late joiner gets 3 sends, at 3, 10 and 25 s; an early one
+             * the same when the scripts already changed the host's player while it loaded: their replays reached nobody) */
+            known[k].sends = latejoin_plan(now - level_start, hst.mask, &known[k].early);
             if (known[k].sends)
-                CLOG("campaign: client %d joined %lu s into the level: it gets the host's player state", id,
-                     (now - level_start) / 1000);
+                CLOG("campaign: client %d runs the level %lu s into it: it gets the host's player state%s (mask %x)", id,
+                     (now - level_start) / 1000, known[k].early ? " set while it loaded" : "", hst.mask);
             n_known++;
         }
         static const DWORD at[3] = {25000, 10000, 3000};
         if (known[k].sends > 0 && now - known[k].seen >= at[known[k].sends - 1] && hst.mask) {
-            unsigned char b[12] = {PROTO, (unsigned char)hst.mask, (unsigned char)hst.move, (unsigned char)hst.input,
+            unsigned char b[12] = {PROTO, (unsigned char)latejoin_bits(hst.mask, known[k].early, known[k].sends == 3),
+                                   (unsigned char)hst.move, (unsigned char)hst.input,
                                    (unsigned char)hst.aim, (unsigned char)hst.tc[0], (unsigned char)hst.tc[1],
                                    (unsigned char)hst.tc[2], (unsigned char)hst.wpn[0], (unsigned char)hst.wpn[1],
                                    (unsigned char)hst.wpn[2], 0};
-            if (known[k].sends < 3)
-                b[1] &= ~64;   /* (the loadout only once: later pickups must not be replaced) */
+            /* (the loadout only once, to late joiners: later pickups must not be replaced) */
             if (coopnet_send(i, SUB_STATE, b, sizeof b) > 0) {
                 known[k].sends--;
                 VLOG("campaign: player state (mask %x) sent to client %d", b[1], id);
