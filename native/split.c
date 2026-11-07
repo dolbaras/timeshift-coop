@@ -1593,6 +1593,18 @@ static void TSCALL hook_die(void *pl, int arg)
         real_die(pl, arg);
         return;
     }
+    /* Dead again within 3 s of the respawn: the spot the respawn chose kills too (level 2's collapsing walkway, live
+     * 2026-11-07: player 1 died in a kill zone, was put back on its own trail inside the same zone, died four times in
+     * 2 s and was then put beside player 2 at the walkway's end without floor, and both players ended alive in the
+     * water below, where the single-player game restarts from the checkpoint). The game's own death then, as for both
+     * players down. */
+    if (!net && died_at[who] && now - died_at[who] < 3000) {
+        ts_log("split: player %d died again %lu ms after its respawn: the game's death (restart from the checkpoint)", who + 1,
+               (unsigned long)(now - died_at[who]));
+        died_at[who] = now;
+        real_die(pl, arg);
+        return;
+    }
     died_at[who] = now;
     /* The script's Kill starts the dying first: vtable +0x370 sets +0x39c 0x1000, +0x3a4 (1, ...) sets 0x400000
      * and starts the death screen effect (0x43cb70: a renderer effect and flags in the globals [0xfcabac] +0x28,
