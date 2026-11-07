@@ -9,13 +9,17 @@
 #                                            to what build_pak needs, PSF license in it
 #     coop\version.txt                       TS_VERSION from native\ts.h (the one source of the version)
 #     coop\coop-launcher.ps1                 behind the "TimeShift Co-op" shortcut (auto-update)
+#     coop\collect-logs.ps1, coop\log-profiles\*.psd1, coop\Collect logs.bat
+#                                            the bug-report collector shared by the workspace's co-op mods (<workspace>\tools\
+#                                            log-collector; -LogCollector <folder> for a clone placed elsewhere) and its start
 #     coop\README-COOP*.txt, coop\payload.txt
 # The package holds no game files: the data archives are built on the player's PC.
 # Run native\build.sh first. Usage: package.ps1 [-Version <TS_VERSION>] [-PythonZip <python-3.12.10-embed-amd64.zip>] [-Exe] [-Dist <folder>]
+#   [-LogCollector <folder>]
 # -Exe also builds dist\timeshift-coop-setup-<version>.exe: a single-file installer that carries this zip (an ADDITIONAL release
 # asset; the zip stays the one the shortcut's launcher updates from). Made by <workspace>\tools\mkinstaller (-Mkinstaller <folder>
 # for a clone placed elsewhere); the exe is unsigned. -Dist: write to that folder instead of dist\ (tests: dist\ holds the published zips).
-param([string] $Version = "", [string] $PythonZip = "", [switch] $Exe, [string] $Mkinstaller = "", [string] $Dist = "")
+param([string] $Version = "", [string] $PythonZip = "", [switch] $Exe, [string] $Mkinstaller = "", [string] $Dist = "", [string] $LogCollector = "")
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $tsh = Get-Content -LiteralPath (Join-Path $root "native\ts.h") -Raw
@@ -67,10 +71,18 @@ Get-ChildItem -LiteralPath $data -Recurse -File | Where-Object { $_.FullName -no
 }
 [IO.File]::WriteAllText((Join-Path $files "coop\version.txt"), "$Version`r`n", (New-Object Text.ASCIIEncoding))
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "launcher.ps1") (Join-Path $files "coop\coop-launcher.ps1")
-# The bug-report collector (tools\collect-logs.ps1) and a double-clickable start for it: <game>\coop\Collect logs.bat
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "collect-logs.ps1") (Join-Path $files "coop\collect-logs.ps1")
+# The bug-report collector, one for every co-op mod of the workspace (<workspace>\tools\log-collector: collect-logs.ps1 + a
+# profile per game) and a double-clickable start for it: <game>\coop\Collect logs.bat -> one zip on the desktop. Every profile
+# goes along (collect-logs.ps1 -All also takes the other co-op mods found on the PC); the .bat names this mod's.
+$lc = if ($LogCollector) { $LogCollector } else { Join-Path $root "..\..\..\tools\log-collector" }
+foreach ($p in (Join-Path $lc "collect-logs.ps1"), (Join-Path $lc "profiles\timeshift.psd1")) {
+    if (-not (Test-Path -LiteralPath $p)) { throw "$p missing (the workspace's tools\log-collector; -LogCollector <folder>)" }
+}
+Copy-Item -LiteralPath (Join-Path $lc "collect-logs.ps1") (Join-Path $files "coop\collect-logs.ps1")
+New-Item -ItemType Directory -Force (Join-Path $files "coop\log-profiles") | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $lc "profiles") -Filter "*.psd1" -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName (Join-Path $files "coop\log-profiles\$($_.Name)") }
 [IO.File]::WriteAllText((Join-Path $files "coop\Collect logs.bat"),
-    "@powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0collect-logs.ps1`"`r`n", (New-Object Text.ASCIIEncoding))
+    "@powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0collect-logs.ps1`" -Mod timeshift`r`n", (New-Object Text.ASCIIEncoding))
 Copy-Item -LiteralPath (Join-Path $root "docs\release-readme.txt") (Join-Path $files "coop\README-COOP.txt")
 Copy-Item -LiteralPath (Join-Path $root "docs\release-readme-ru.txt") (Join-Path $files "coop\README-COOP-ru.txt")
 # Every file of the payload: the installer checks the folder it got against it before touching the game.
