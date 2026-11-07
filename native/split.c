@@ -2846,7 +2846,8 @@ static void p2_loadout(BYTE *p1)
  *  - a turret seat taken by player 1 (ts2_zepride1_part01, ts2_zepride2_part01) gives player 2 the next free seat
  *    after the clients' (campaign.c's seat table: client k takes seat k; a copy of its rows below), the gunner of that
  *    seat is removed as for a client, and player 2 takes it 0.7 s later (`$player2.StartUse`);
- *  - player 1's SelectHolster is repeated on player 2 (also when player 2 comes in later in that level). */
+ *  - player 1's SelectHolster is repeated on player 2 (also when player 2 comes in later in that level);
+ *  - player 2's time-power permissions are kept equal to player 1's (p2_tc_follow below). */
 typedef struct { void **type; unsigned data; } SVar;
 #define SP_TRAMP(sym, back, seh) \
     __asm__(".text\n.globl " sym "\n" sym ":\n  pushl $-1\n  pushl $" seh "\n  pushl $" back "\n  ret\n")
@@ -2940,11 +2941,33 @@ static int clients_in_game(void)
     return n;
 }
 
+/* Player 2 takes player 1's time-power permissions. The level scripts lock and allow the powers with
+ * `$player.DisableTC(mode, disable)` (vtable +0x350 = 0x43c110: flag at player +0x290 + mode * 0xc, 1 = allowed; slow +0x290,
+ * stop +0x29c, reverse +0x2a8), on player 1 only. Player 2 is spawned with all three allowed (seen live 2026-11-07, level 2:
+ * player 1 +0x2a8 = 0 from OnInitLevel, player 2 = 1), so it could use a power the story had locked (level 1 starts with
+ * every power locked, levels 2, 3, 14 and 16 lock the reverse until the story allows it). The flags are copied as they are:
+ * the global part of DisableTC (the reverse recorder, 0x43ed80) already ran for player 1. */
+#define TC_ALLOWED(pl, mode) (*(int *)((BYTE *)(pl) + 0x290 + (mode) * 0xc))
+
+static void p2_tc_follow(void)
+{
+    static const char *const names[3] = {"slow", "stop", "reverse"};
+    BYTE *p1 = p1_now();
+    if (!p1 || p1 == p2 || IsBadReadPtr(p1, 0x2b0) || IsBadWritePtr(p2, 0x2b0))
+        return;
+    for (int m = 0; m < 3; m++)
+        if ((TC_ALLOWED(p2, m) != 0) != (TC_ALLOWED(p1, m) != 0)) {
+            ts_log("split: player 2's time power %s %s, as player 1's", names[m], TC_ALLOWED(p1, m) ? "allowed" : "locked");
+            TC_ALLOWED(p2, m) = TC_ALLOWED(p1, m) != 0;
+        }
+}
+
 /* main thread, script tick, while player 2 exists on the machine that runs it */
 static void p2_follow_step(void)
 {
     if (!p2 || p2_follow_off || as2.depth)
         return;
+    p2_tc_follow();
     char ssl[160], out[96];
     if (hol_want && !strcmp(hol_level, SP_LEVEL)) {
         hol_want = 0;
