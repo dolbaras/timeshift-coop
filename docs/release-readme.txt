@@ -54,14 +54,19 @@ What the mod does
   join as usual. On a host both halves of its screen play in the session and the other players see
   both bodies. On a client the second player is supported in basic form (experimental).
 
-New in 0.1.2
-- Split screen on one PC: with two players, player 1 walked slowly
-  while player 2 stood still, and walked normally only when both pushed the same way. The two
-  players shared the game's walking-speed smoothing; each has its own now, and a stick or pad of the
-  second player no longer slows the first. Checked in a live game with two virtual pads on one PC
-  (camera speed): player 1 alone about 4.3 m/s, player 2 alone about 4.6, both about 4.6 each; before
-  the fix 2.5 / 0.6 / 4.4. Not re-run for this fix: split screen on a client over the network and the
-  test with two PCs (the rest of the mod is as tested for 0.1.1).
+New in 0.1.3
+- Level 2 (City, part 2), the covered walkway the robot wrecks, in a network game: when a player
+  reversed time during the collapse, the host's walkway came back but the other players' games let
+  the collapse run on (one player saw the walkway and another did not; most of its kill zones never
+  opened there). The clients now take the collapse, its collision pieces and its kill zones from the
+  host during and after the rewind. A client that was still loading when the story allowed the
+  reverse kept it locked for the whole level; the host now sends its time-power permissions to every
+  client whenever they change. Checked with a host and a client on one test PC.
+- Split screen: player 2 now has the same time-power locks as player 1 (before, it could use a
+  power the story had not given yet, such as the reverse at the start of level 2).
+- Bug reports: Collect logs.bat (in <game>\coop) now also packs the launcher's and the installer's
+  logs and removes more personal data (see "Troubleshooting and reports").
+- 0.1.2 fixed the slow walk of player 1 in split screen while player 2 stood still.
 
 Not finished / known limits
 - Quads on the quad levels (9 and 12): the enemies' quads follow the host's positions on the clients'
@@ -85,6 +90,10 @@ Not finished / known limits
 - Most checks of the rewind, force fields, vehicles and container traps were made by reading clip and
   time values, coordinates and the logs of both machines, not by watching the screens: the results are
   in the numbers, but how it looks in play has had little human testing.
+- After the host's rewind, the clients take the rewound machinery's state from the host on level 2
+  (the walkway) only. On other levels the kill zones, force fields and pieces that a rewound machine's
+  animation switches may stay on a client as they were before the rewind (not seen in the tests; the
+  places are listed for a later version).
 - Only the PC version of the game with patch 1.2 is supported. A Steam copy (version 1.0) works after
   it is brought to 1.2 with the community-made 1.2 update package that you supply yourself (see Requirements);
   that path was tested on a simulated Steam folder and with the package's files, not on a real Steam

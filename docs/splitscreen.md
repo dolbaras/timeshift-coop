@@ -55,7 +55,7 @@ instead of ending the game, stays through a level change, and each player sees t
 | Each player has | an own camera, first-person weapon, crosshair, HUD (life, ammunition, grenades, time energy), screen effects (damage, death, low life), pick-up messages, pick-ups and weapons; prompts name the button of the player's own device |
 | Time powers | either player's power works for everybody (as in co-op) |
 | Death | a player who dies comes back beside the other one; both down together restarts as in the game (single player); in a network game player 1 follows the network rules |
-| Not per player | the pause menu and loading screens (full screen, player 1 controls them), cutscenes (the scene camera, full screen), hint boxes (one for both). Scripts name player 1 as "the player": the AI a script aims (`SetAim("player")`, `SetTarget`) takes the nearest living player including player 2, "all players" gates wait for player 2 too, a turret seat the story gives player 1 gives player 2 the next seat, and the story's weapon removal (`SelectHolster`) is repeated on player 2; everything else a script does to "the player" (checkpoint triggers, cutscenes, death and restart) still sees player 1 only |
+| Not per player | the pause menu and loading screens (full screen, player 1 controls them), cutscenes (the scene camera, full screen), hint boxes (one for both). Scripts name player 1 as "the player": the AI a script aims (`SetAim("player")`, `SetTarget`) takes the nearest living player including player 2, "all players" gates wait for player 2 too, a turret seat the story gives player 1 gives player 2 the next seat, the story's weapon removal (`SelectHolster`) is repeated on player 2, and the story's locks of the time powers (`DisableTC`) hold for player 2 too (0.1.3); everything else a script does to "the player" (checkpoint triggers, cutscenes, death and restart) still sees player 1 only |
 | Performance | by default each half is drawn every second frame (the frame rate of each half is half the game's). Option `ts_coop.ini` `[Split]` `BothViews=1` draws both halves in every frame (round 25: it can double each half's rate when the graphics card has room, and lowers the game's own update rate to the card's speed when it has not) |
 
 ## Why it has to be built
@@ -462,7 +462,7 @@ pads, short walks of each player, a death of each; the keys are taken out again.
 `lab/split_soak.ps1` (pwsh 7): one TimeShift with `TS_SPLIT=1` and two virtual pads; for each level in order it waits until both
 players are placed (log), skips an intro cutscene with pad 1's Start, waits until both halves show their radar, takes a frame at
 full size, idles 20 s, takes a second frame, then the level's exit (reload domain unlocked and the player put in; if the level
-does not change in 20 s `$ui.LoadLevel(next)`). One line per level goes to `workuns\split-soak-<stamp>.txt`. Run
+does not change in 20 s `$ui.LoadLevel(next)`). One line per level goes to `work\runs\split-soak-<stamp>.txt`. Run
 `20261027-060114` (levels 1-21), `-062443` (23-24), `-161845` (22 alone, fresh).
 
 | Levels | Result |

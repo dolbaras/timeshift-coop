@@ -2,7 +2,7 @@
 #define TS_H
 #include <windows.h>
 
-#define TS_VERSION "0.1.2"
+#define TS_VERSION "0.1.3"
 
 /* proxy.c */
 void ts_log(const char *fmt, ...);
