@@ -94,6 +94,14 @@ Not finished / known limits
   (the walkway) only. On other levels the kill zones, force fields and pieces that a rewound machine's
   animation switches may stay on a client as they were before the rewind (not seen in the tests; the
   places are listed for a later version).
+- Level 2, the walkway the robot wrecks: a reverse in the first seconds of the collapse brings the
+  walkway back (checked in split screen for both players), but while a player still stands on it the
+  collapse starts again 2-3 seconds after the rewind, because the walkway's trigger is rewound too.
+  The trigger is the level's own, so the same is expected in a network game and in the single-player
+  game (not checked there). In split screen the walkway's trigger and its time-power zone follow
+  player 1 only: RB (F on the keyboard), the automatic power the level's hint names, reverses only
+  while player 1 is on the walkway (otherwise it gives slow motion); the reverse button itself (D-pad
+  right, B on the keyboard) works for both players.
 - Only the PC version of the game with patch 1.2 is supported. A Steam copy (version 1.0) works after
   it is brought to 1.2 with the community-made 1.2 update package that you supply yourself (see Requirements);
   that path was tested on a simulated Steam folder and with the package's files, not on a real Steam

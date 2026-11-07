@@ -553,6 +553,28 @@ does not draw the world (menus, cutscenes, pause: the engine's `iVar4 == 0`). Ch
 alternating mode (`20261031-210648` `shot141.png`), no crash in 40 s; a level change 2 -> 3 -> 4 by the natural exits (idle 20 s each): both players in and alive, both halves with radar, no crash
 (`20261031-212356`). Not checked: long play, the Co-op menu and the ini key in this mode, an NVIDIA/AMD card, real vsync.
 
+### Round 26 (2026-11-07, N100, one copy, two virtual pads made in the N100 user session): the level 2 walkway and the reverse
+
+A player's report ("mission 3": at the walkway the robot wrecks, one player did not see some platforms and the reverse did not undo
+the collapse; both players stayed alive) was, per the owner, from split screen. Checked on `ts2_city_part02` with `TS_SPLIT=1`
+(level loaded from the console, so without the robot; the wreck's clip `ANIM_GROUP` "ACTION", its six collision pieces and six kill
+zones are what was read), each player's power pressed on its own virtual pad:
+- one machine, one world: both halves show the same objects; nothing of the wreck is per player;
+- the reverse button (D-pad right) of either player, pressed about 2 s into the collapse, rewinds it completely (clip back at 0,
+  pieces hidden, kill zones locked, the presser's energy spent), with the bridge's time-power zone on or off;
+- RB (the automatic power, the button the level's hint names: "Activate TimeShift RB to reverse time and clear path forward") does a
+  reverse only while the zone `tc_domain_bridge` has set the automatic choice to reverse. Domains react to player 1 only, so the zone
+  follows player 1's place (and it is `isActOnce`); with player 1 off the walkway, player 2's RB gives slow motion and the collapse
+  runs on slowly;
+- with a player still standing on the walkway after a successful rewind, the collapse started again about 5 s later (`dom_BRIDGE` is
+  `isActOnce` but isSyncTR: the rewind re-arms it), and the players fell into the water below, alive: the reporter's picture;
+- found and fixed: player 2 had every power allowed while the story had locked player 1's reverse (`OnInitLevel`); player 2's three
+  permission flags now follow player 1's (`p2_tc_follow`). Checked: player 2 locked at the level start, its press does nothing, it
+  follows the story's unlock.
+- the tester's way (player 1 steps onto the walkway, a press about 2.5 s into the collapse, each on a fresh level, 8 tests): player 1's
+  or player 2's reverse button, player 1's or player 2's RB all rewound the walkway completely, and each time the collapse started
+  again about 2 s after the playback, with player 1 still on the walkway; both players ended alive in the water below. Not run: the
+  same in the single-player game (expected, the trigger is the level's), with the real robot, or stepping off right after the rewind.
 ## Open problems
 
 - **Player 2 is not a player to the game**: the engine's own AI perception and the scripts use `$player` (player 1). Since round 24 the scripted

@@ -307,6 +307,30 @@ taken before; never on the owner's install, never beside a running game from tha
 - Game runs with the release DLL and data: 24-level bot (host + client), split screen smoke (levels 2, 12, turret levels 8 and 23 with firing), pad-only address entry,
   Regroup and the gate hint, Screen mode row, Continue with a client on the real N100 + main PC pair, netem 5 % and 15 % loss.
 
+### 0.1.3: what was run before it (2026-11-07; the main PC ran no game, all game runs on the N100)
+
+- Offline: `native\tests\run.sh` (axes, latejoin, rewindfollow) passed; the shared collector's `<workspace>\tools\log-collector\tests\test-collect.ps1`
+  95/95 (start it with a clean `PSModulePath`: launched from a pwsh 7 shell, Windows PowerShell 5.1 cannot load `Import-PowerShellDataFile`).
+- Package audit (clean clone, `package.ps1 -Exe -Dist <temp>`): 34 zip entries with `/` separators, `payload.txt` = the files under `files/`, `version.txt`
+  0.1.3, the DLL carries `0.1.3`, no game files, the exe's `--extract` equals the zip; no user name, workspace path, e-mail or LAN address in any text
+  file, the DLL or the setup exe (the only path hits are the common install folders `C:\Games\...` / `D:\Games\...` in the installer and the collector's
+  profiles). Against the published 0.1.2 zip: new `files/coop/log-profiles/*.psd1`; changed the DLL, the readmes, `collect-logs.ps1`, `Collect logs.bat`
+  (`-Mod timeshift`), `payload.txt`, `version.txt`; `coop-installer.ps1` and the launcher are unchanged.
+- The DLL and the zip the N100 ran were built from the release worktree; the clean clone's differ only in the DLL's PE timestamp and debug-directory id
+  (20 bytes) and in the readmes' text of the last docs commit (compared file by file).
+- N100, one copy, split screen (`TS_SPLIT=1`, two ViGEm pads made in the N100 user session): the level 2 walkway wreck and both players' reverse
+  (splitscreen.md round 26); player 2's time-power permissions follow player 1's.
+- N100 pair, the release DLL and data (built with the lab's autotest recipe): campaign bot levels 1-24 (24/24 ready, no crash, the client followed every
+  level change; level exits by the server's change on 1, 8, 21, 23); the time-power permissions reach the client on level 2.
+- N100, split screen started the player's way (no `TS_SPLIT`: the Co-op split frame's own `Launch`, two pads, level 1): split on, player 2 in after the
+  intro scene, both halves drawn (walking not shown: level 1's opening held both players during the check).
+- N100, a clean copy of the retail game in a path with Cyrillic letters and a space: the published 0.1.2 zip installed quietly, its launcher updated it to
+  0.1.3 from a local feed (checksum ok, installer exit 0, version, record, `coop\log-profiles\`, collector and DLL equal to the 0.1.3 zip, both shortcuts
+  kept, start flag cleared), an up-to-date feed just starts, reinstall keeps the archives, the archives equal a fresh build, uninstall by the 0.1.3
+  installer leaves the clean listing (5434 files), no `%TEMP%\timeshift-coop-*` left.
+- Not re-run for 0.1.3: the setup exe's own test scripts, the Steam branch, the edge matrix, the window pages (the installer and the launcher did not
+  change); the real two-PC pair; the network fix on other levels (see the players' readme).
+
 The release is made with `gh release create v<version> dist\timeshift-coop-<version>.zip dist\timeshift-coop-setup-<version>.exe
 --repo dolbaras/timeshift-coop --target main --title "TimeShift Co-op <version>" --notes-file <notes>` after pushing `main`; then compare the asset's
 `digest` in `gh release view --json assets` with the SHA-256 of the local zip and check that `releases/latest` answers
