@@ -316,10 +316,13 @@ taken before; never on the owner's install, never beside a running game from tha
   file, the DLL or the setup exe (the only path hits are the common install folders `C:\Games\...` / `D:\Games\...` in the installer and the collector's
   profiles). Against the published 0.1.2 zip: new `files/coop/log-profiles/*.psd1`; changed the DLL, the readmes, `collect-logs.ps1`, `Collect logs.bat`
   (`-Mod timeshift`), `payload.txt`, `version.txt`; `coop-installer.ps1` and the launcher are unchanged.
-- The DLL and the zip the N100 ran were built from the release worktree; the clean clone's differ only in the DLL's PE timestamp and debug-directory id
-  (20 bytes) and in the readmes' text of the last docs commit (compared file by file).
+- The DLL and the zip the N100 regression ran were built from the release worktree before the repeated-death rule: the campaign bot (network game:
+  the rule does not act there), the split start and the installer tests ran with that build; the split-screen walkway runs ran with the rule. The
+  final clean clone's zip differs from the installer-tested one in the DLL and the readmes only (compared file by file).
 - N100, one copy, split screen (`TS_SPLIT=1`, two ViGEm pads made in the N100 user session): the level 2 walkway wreck and both players' reverse
-  (splitscreen.md round 26); player 2's time-power permissions follow player 1's.
+  (splitscreen.md round 26); player 2's time-power permissions follow player 1's; the walkway played the player's way (enter, reverse, run): in the
+  single-player game across with a reverse, a death without; in split screen both players across (player 1's D-pad right or player 2's RB), and a
+  second death within 3 s of a respawn now gives the game's death instead of the respawn loop that left both players alive in the water.
 - N100 pair, the release DLL and data (built with the lab's autotest recipe): campaign bot levels 1-24 (24/24 ready, no crash, the client followed every
   level change; level exits by the server's change on 1, 8, 21, 23); the time-power permissions reach the client on level 2.
 - N100, split screen started the player's way (no `TS_SPLIT`: the Co-op split frame's own `Launch`, two pads, level 1): split on, player 2 in after the

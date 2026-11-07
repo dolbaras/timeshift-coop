@@ -567,14 +567,24 @@ zones are what was read), each player's power pressed on its own virtual pad:
   follows player 1's place (and it is `isActOnce`); with player 1 off the walkway, player 2's RB gives slow motion and the collapse
   runs on slowly;
 - with a player still standing on the walkway after a successful rewind, the collapse started again about 5 s later (`dom_BRIDGE` is
-  `isActOnce` but isSyncTR: the rewind re-arms it), and the players fell into the water below, alive: the reporter's picture;
+  `isActOnce` but isSyncTR: the rewind re-arms it). That is the level's design (a walkthrough: reverse, then "you'll have some time
+  to get to the other side"): in the single-player game reverse + run gets across, no reverse is a death and a restart from the
+  checkpoint the walkway saves (runs H, `notes\mission3-tester-report.md` section 23);
 - found and fixed: player 2 had every power allowed while the story had locked player 1's reverse (`OnInitLevel`); player 2's three
   permission flags now follow player 1's (`p2_tc_follow`). Checked: player 2 locked at the level start, its press does nothing, it
   follows the story's unlock.
 - the tester's way (player 1 steps onto the walkway, a press about 2.5 s into the collapse, each on a fresh level, 8 tests): player 1's
   or player 2's reverse button, player 1's or player 2's RB all rewound the walkway completely, and each time the collapse started
-  again about 2 s after the playback, with player 1 still on the walkway; both players ended alive in the water below. Not run: the
-  same in the single-player game (expected, the trigger is the level's), with the real robot, or stepping off right after the rewind.
+  again about 2 s after the playback, with player 1 still on the walkway; both players ended alive in the water below;
+- found and fixed (the reporter's "players are still alive"): player 1, killed by the walkway's kill zone, was put back by
+  `hook_die` on a trail spot inside the same open kill zone, died every 0.5 s, and was then put beside player 2 on a spot without
+  floor at the walkway's end, from where it sank into the water alive; the single-player game has a death and a restart there. Since
+  0.1.3 a player who dies again within 3 s of its respawn gets the game's death (the restart for both), as when both are down.
+  Checked: "player 1 died again 516 ms after its respawn: the game's death" (twice); a single death still brings the player back
+  beside the partner; with both pads held forward and a reverse 3 s after the entry (player 1's D-pad right, or player 2's RB)
+  both players crossed, and a player 2 left behind died in the second collapse and came back beside player 1 on the far side.
+  Not run: the real robot and battle state, a network game.
+
 ## Open problems
 
 - **Player 2 is not a player to the game**: the engine's own AI perception and the scripts use `$player` (player 1). Since round 24 the scripted

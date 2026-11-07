@@ -63,7 +63,11 @@ New in 0.1.3
   reverse kept it locked for the whole level; the host now sends its time-power permissions to every
   client whenever they change. Checked with a host and a client on one test PC.
 - Split screen: player 2 now has the same time-power locks as player 1 (before, it could use a
-  power the story had not given yet, such as the reverse at the start of level 2).
+  power the story had not given yet, such as the reverse at the start of level 2). A player who dies
+  again right after coming back beside the partner (on the level 2 walkway the comeback spot was
+  inside the same kill zone, then a spot without floor) now gets the game's own restart from the
+  checkpoint, as in the single-player game; before, both players could end alive in the water below
+  the walkway.
 - Bug reports: Collect logs.bat (in <game>\coop) now also packs the launcher's and the installer's
   logs and removes more personal data (see "Troubleshooting and reports").
 - 0.1.2 fixed the slow walk of player 1 in split screen while player 2 stood still.
@@ -94,14 +98,14 @@ Not finished / known limits
   (the walkway) only. On other levels the kill zones, force fields and pieces that a rewound machine's
   animation switches may stay on a client as they were before the rewind (not seen in the tests; the
   places are listed for a later version).
-- Level 2, the walkway the robot wrecks: a reverse in the first seconds of the collapse brings the
-  walkway back (checked in split screen for both players), but while a player still stands on it the
-  collapse starts again 2-3 seconds after the rewind, because the walkway's trigger is rewound too.
-  The trigger is the level's own, so the same is expected in a network game and in the single-player
-  game (not checked there). In split screen the walkway's trigger and its time-power zone follow
-  player 1 only: RB (F on the keyboard), the automatic power the level's hint names, reverses only
-  while player 1 is on the walkway (otherwise it gives slow motion); the reverse button itself (D-pad
-  right, B on the keyboard) works for both players.
+- Level 2, the walkway the robot wrecks, works as the level is made: reverse time in the first
+  seconds of the collapse and run across at once; a few seconds after the rewind the walkway
+  collapses again, and a player still on it dies (the game restarts from the checkpoint it saved on
+  the walkway). In split screen the walkway's trigger and its time-power zone follow player 1 only:
+  RB (F on the keyboard), the automatic power the level's hint names, reverses only while player 1
+  is on the walkway (otherwise it gives slow motion); the reverse button itself (D-pad right, B on
+  the keyboard) works for both players. Checked with virtual pads in the single-player game and in
+  split screen, not yet in a network game.
 - Only the PC version of the game with patch 1.2 is supported. A Steam copy (version 1.0) works after
   it is brought to 1.2 with the community-made 1.2 update package that you supply yourself (see Requirements);
   that path was tested on a simulated Steam folder and with the package's files, not on a real Steam
