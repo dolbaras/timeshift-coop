@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "ts.h"
+#include "iat_guard.h"
 
 typedef HRESULT (WINAPI *DirectInput8Create_t)(HINSTANCE, DWORD, REFIID, LPVOID *, LPUNKNOWN);
 static DirectInput8Create_t real_DirectInput8Create;
@@ -75,18 +76,19 @@ void **ts_find_iat_slot(const char *dll, const char *func)
     return NULL;
 }
 
+/* (iat_guard.c: when another module patched the slot first, an ASI loader that writes its patches back at the game's
+   first call among them, the exe's own calls through the slot are pointed at the hook too) */
 void *ts_patch_iat(const char *dll, const char *func, void *hook)
 {
-    void **slot = ts_find_iat_slot(dll, func);
-    DWORD old;
-    if (!slot || !VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &old)) {
+    iat_guard_result r;
+    if (!iat_guard_hook(dll, func, hook, &r)) {
         ts_log("import %s!%s not found", dll, func);
         return NULL;
     }
-    void *orig = *slot;
-    *slot = hook;
-    VirtualProtect(slot, sizeof *slot, old, &old);
-    return orig;
+    if (r.prepatched)
+        ts_log("import %s!%s was hooked by %s before the mod (an ASI loader writes such hooks back): %d call(s) of the exe "
+               "pointed at the mod's hook", dll, func, r.by, r.redirected);
+    return r.prev;
 }
 
 void *ts_patch_vtable(void *obj, int index, void *hook)
