@@ -36,7 +36,7 @@
 
 enum { M_DAMAGED, M_UNPACK, M_PS, M_NOSTART, M_ZIP, M_COUNT };
 
-static const wchar_t *const TEXTS[6][M_COUNT] = {
+static const wchar_t *const TEXTS[9][M_COUNT] = {
     { /* en */
         L"This setup file is damaged (its built-in checksum does not match). Please download it again.",
         L"The installer could not be unpacked into the temporary folder.",
@@ -79,12 +79,33 @@ static const wchar_t *const TEXTS[6][M_COUNT] = {
         L"La finestra del programma di installazione non si è aperta. Windows, un criterio di sicurezza o un antivirus potrebbe aver bloccato PowerShell.",
         L"Il pacchetto .zip della stessa versione fa lo stesso: estrailo ed esegui \"Install Co-op.bat\".",
     },
+    { /* pl */
+        L"Ten plik instalacyjny jest uszkodzony (wbudowana suma kontrolna się nie zgadza). Pobierz go ponownie.",
+        L"Nie udało się rozpakować instalatora do folderu tymczasowego.",
+        L"Nie udało się uruchomić Windows PowerShell. Instalator go potrzebuje (jest częścią systemu Windows).",
+        L"Okno instalatora się nie otworzyło. Możliwe, że PowerShell zablokował Windows, zasady zabezpieczeń lub program antywirusowy.",
+        L"To samo robi pakiet .zip tego samego wydania: rozpakuj go i uruchom \"Install Co-op.bat\".",
+    },
+    { /* cs */
+        L"Tento instalační soubor je poškozený (vestavěný kontrolní součet nesouhlasí). Stáhni ho prosím znovu.",
+        L"Instalátor se nepodařilo rozbalit do dočasné složky.",
+        L"Windows PowerShell se nepodařilo spustit. Instalátor ho potřebuje (je součástí Windows).",
+        L"Okno instalátoru se neotevřelo. PowerShell možná zablokoval Windows, bezpečnostní zásady nebo antivirus.",
+        L"Totéž udělá balíček .zip stejného vydání: rozbal ho a spusť \"Install Co-op.bat\".",
+    },
+    { /* hu */
+        L"Ez a telepítőfájl sérült (a beépített ellenőrzőösszeg nem egyezik). Töltsd le újra.",
+        L"A telepítőt nem sikerült kicsomagolni az ideiglenes mappába.",
+        L"A Windows PowerShellt nem sikerült elindítani. A telepítőnek szüksége van rá (a Windows része).",
+        L"A telepítő ablaka nem nyílt meg. Lehet, hogy a Windows, egy biztonsági házirend vagy egy víruskereső letiltotta a PowerShellt.",
+        L"Ugyanezt teszi ugyanennek a kiadásnak a .zip csomagja: csomagold ki, és futtasd az \"Install Co-op.bat\" fájlt.",
+    },
 };
 
 static const wchar_t *msg(int id)
 {
     int l;
-#ifdef FORCE_LANG   /* tests only: -CFlags "-DFORCE_LANG=<0..5>" renders every language's boxes on one PC */
+#ifdef FORCE_LANG   /* tests only: -CFlags "-DFORCE_LANG=<0..8>" renders every language's boxes on one PC */
     return TEXTS[FORCE_LANG][id];
 #endif
     switch (PRIMARYLANGID(GetUserDefaultUILanguage())) {
@@ -93,6 +114,9 @@ static const wchar_t *msg(int id)
     case LANG_FRENCH: l = 3; break;
     case LANG_SPANISH: l = 4; break;
     case LANG_ITALIAN: l = 5; break;
+    case LANG_POLISH: l = 6; break;
+    case LANG_CZECH: l = 7; break;
+    case LANG_HUNGARIAN: l = 8; break;
     default: l = 0;
     }
     return TEXTS[l][id];
