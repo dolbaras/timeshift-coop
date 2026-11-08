@@ -64,6 +64,14 @@ def build(ctx): ...        # generated content
 | `coop_menu` | `mainmenu.ui`, `multiplayer.ui`, `creategame.ui`, `commsettings_pc.ui`, `servermodifiers.ui`, `ingamemulti.ui`; new `coopmenu.ui`, `coophost.ui`, `coopsplit.ui` (from `data/ui/`) | the Co-op menu (below); the pause menu's Regroup button |
 | `coop_strings` | every `Strings/strings_<language>` | the menu's texts in all 9 languages of the game (en, ru, de, fr, it, es, pl, cs, hu); the game shows the table of its own language |
 
+Texts: every text the mod shows is an id of `coop_strings` (or a stock id), in all 9 languages; the installer,
+the launcher and the setup exe have the same 9 languages and pick Windows' one. `tests/test_texts.py` (offline, also
+the first step of `native/tests/run.sh`) fails on a missing language, a text equal to English that is not on its
+allow-list (the pad's printed labels A/B/X/Y/LB/RB/LT/RT/BACK/START, file names), a hard-coded text in a frame,
+recipe, script error or message box, and on characters the game's font is not known to have (the stock tables'
+characters plus Cyrillic Io; quotes are `\"...\"` as in the stock tables, not guillemets). `--strings <folder>`
+(a lab copy's extracted `Strings`) also checks the stock ids the mod uses against every table.
+
 What stays stock: the map list (`gs_map_list.cls` is read, not changed: the campaign levels are not
 offered in the stock server set-up), the multiplayer rule defaults (`gs_mp_modifier.cls`), the stock
 frames' behaviour while no co-op step runs, and the player's own multiplayer settings (set aside and put
