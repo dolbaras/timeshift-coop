@@ -14,7 +14,12 @@ What the mod does
 - Joining: the game's LAN list, its Internet list or a direct connection by IP address.
   The Internet list and Internet hosting go through OpenSpy (a community replacement for the
   closed GameSpy servers); nothing to set up.
-- In a co-op session: no friendly fire, no warm-up or ready step; the enemies move, fight and die
+- Ready step: the first chapter of a co-op game waits until every player is ready. Everybody
+  (the host too) opens the pause menu (Esc) and picks READY (NOT READY takes it back); the
+  screen shows "Select READY in Menu" until you are ready, the game's message feed names each
+  player who gets ready, and the mission starts when all players are. Until then nobody can
+  move. Chapters that follow in the same game start at once.
+- In a co-op session: no friendly fire; the enemies move, fight and die
   the same on every machine; slow, stop and reverse time work for the players; a player who joins
   a level that is already running gets the state the host's player is in (locks, weapons).
   Every player needs the same version of the mod (a player with another version is told so and

@@ -41,19 +41,18 @@ static void room_run(int counter_kind)
     const char *k = counter_kind ? "counter" : "flag";
     ent p = {counter_kind, 0}, p2 = {counter_kind, 0};
     rr_hold h = {0};
-    int act, ev, holds = 0, hints = 0, enters = 0, leaves = 0;
+    int act, ev, holds = 0, enters = 0, leaves = 0;
     unsigned t = 1000;
     /* the level's intro locks the player before the room's first tick (the start camera) */
     lock(&p, 1);
     for (int tick = 0; tick < 400; tick++, t += 50) {   /* 20 s of room at 20 ticks a second */
         rr_step(&h, 1, &p, t, &act, &ev);
         apply(&p, act);
-        holds += (ev & RR_EV_HELD) != 0, hints += (ev & RR_EV_HINT) != 0, enters += (ev & RR_EV_ENTER) != 0;
+        holds += (ev & RR_EV_HELD) != 0, enters += (ev & RR_EV_ENTER) != 0;
         if (tick == 100) lock(&p, 0);   /* the intro ends at 5 s and releases its lock */
         if (tick > 120) CHECK(locked(&p), "%s: the player is held through the room (tick %d: value %d)", k, tick, p.value);
     }
     CHECK(enters == 1 && holds == 1, "%s: one enter, one hold (enters %d holds %d)", k, enters, holds);
-    CHECK(hints == 3, "%s: the not-ready line at 0, 8 and 16 s (%d)", k, hints);
     /* a flag cleared by a level script in the middle of the room: held again within RR_REASSERT_MS */
     if (!counter_kind) {
         lock(&p, 0);
@@ -109,7 +108,7 @@ int main(void)
     rr_hold h = {0};
     int act, ev;
     rr_step(&h, 1, 0, 100, &act, &ev);
-    CHECK(act == RR_NONE && (ev & RR_EV_ENTER) && !(ev & RR_EV_HINT), "no player yet: no call, no hint");
+    CHECK(act == RR_NONE && (ev & RR_EV_ENTER) && !(ev & RR_EV_HELD), "no player yet: no call");
     rr_step(&h, 0, 0, 200, &act, &ev);
     CHECK(act == RR_NONE && (ev & RR_EV_LEAVE), "the room ends without a player: nothing to release");
     printf("readyroom: %d checks, %d failed%s\n", checks, fails, fails == 1 ? " (expected: the 0.1.3 rules' line)" : "");

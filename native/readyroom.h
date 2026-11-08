@@ -16,7 +16,6 @@
 #define TS_READYROOM_H
 
 #define RR_REASSERT_MS 1000u
-#define RR_HINT_MS 8000u
 
 /* bWarmUp: ready_mode = the room is wanted (TS_COOP_READY), levels_before = server level starts already seen in this
  * session (back at the menu: 0), server = this machine is the server. */
@@ -34,20 +33,20 @@ static inline int rr_ready_opt(int warmup_running)
 /* The hold. rr_step tells the caller what to call on the player entity this tick (in this order):
  * RR_SET = DisableMove(1) + DisableInput(1); RR_PAIR = (0) then (1) for both; RR_RELEASE = (0) for both. */
 enum { RR_NONE = 0, RR_SET = 1, RR_PAIR = 2, RR_RELEASE = 3 };
-enum { RR_EV_NONE = 0, RR_EV_ENTER = 1, RR_EV_LEAVE = 2, RR_EV_HELD = 4, RR_EV_HINT = 8 };
+enum { RR_EV_NONE = 0, RR_EV_ENTER = 1, RR_EV_LEAVE = 2, RR_EV_HELD = 4 };
 typedef struct {
     int on;                 /* the room is running here */
     const void *held;       /* the entity this machine holds (NULL = none) */
-    unsigned held_at, since, hint_at;
+    unsigned held_at, since;
 } rr_hold;
 
 /* in_room = the room's warm-up runs in a co-op session; player = this machine's player entity now (NULL = none); now = ms.
- * *act = what to do with `player` this tick (RR_*), *ev = what happened (RR_EV_* bits, for the log and the hint). */
+ * *act = what to do with `player` this tick (RR_*), *ev = what happened (RR_EV_* bits, for the log). */
 static inline void rr_step(rr_hold *h, int in_room, const void *player, unsigned now, int *act, int *ev)
 {
     *act = RR_NONE, *ev = RR_EV_NONE;
     if (in_room && !h->on) {
-        h->on = 1, h->since = now, h->hint_at = now - RR_HINT_MS, h->held = 0;
+        h->on = 1, h->since = now, h->held = 0;
         *ev |= RR_EV_ENTER;
     }
     if (h->on && in_room) {
@@ -58,8 +57,6 @@ static inline void rr_step(rr_hold *h, int in_room, const void *player, unsigned
             h->held_at = now;
             *act = RR_PAIR;
         }
-        if (player && now - h->hint_at >= RR_HINT_MS)
-            h->hint_at = now, *ev |= RR_EV_HINT;
     }
     if (h->on && !in_room) {
         h->on = 0;

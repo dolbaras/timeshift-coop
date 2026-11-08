@@ -36,8 +36,9 @@
  *   counts). The pause menu shows the game's READY / NOT READY button there (data: ingamemulti.ui). While the room lasts
  *   each machine holds its own player (DisableMove + DisableInput through the player's vtable, +0x34c / +0x348: not the
  *   script natives, so campaign.c's lock records and watchdog never see it), re-asserted every second as a release+set
- *   pair (right for a flag and for a counter), released once at the end; and the HUD line "Select READY in Menu To End
- *   Warm-Up" (the game's text) every 8 s for a player who is not ready yet. TS_COOP_READY=0: no ready room (no warm-up,
+ *   pair (right for a flag and for a counter), released once at the end. The game's own HUD shows "Select READY in Menu
+ *   To End Warm-Up" to a player who is not ready and "Warm-Up" to one who is (live 2026-11-09; a ShowMsg copy of the
+ *   first line was a duplicate and is gone), the game's message feed "<name> is ready". TS_COOP_READY=0: no ready room (no warm-up,
  *   no ready system, as before); a lab copy (TS_CONSOLE set) has no ready room unless TS_COOP_READY=1, so the lab's pair
  *   scripts run as before. TS_COOP_MPRULES=1 keeps the stock warm-up and ready system on every level.
  *   (Minimum players, time and score limit are profile keys: the co-op menu sets them for its server and
@@ -604,8 +605,6 @@ static void room_tick(DWORD now)
                  me ? "READY" : "not ready", warmup_running() ? "here" : "from the host's message");
         }
         room_ui_set(1, me);
-        if ((ev & RR_EV_HINT) && !me)
-            show_hint("GAME_MP_DESC_NOT_READY");
         if (game_mode() != MODE_CLIENT && now - room_sent >= 2000)
             room_sent = now, room_send(1), room_off_sends = 3;
     } else if (room_ui == 1)
@@ -613,8 +612,8 @@ static void room_tick(DWORD now)
     if (!room.on && room_off_sends > 0 && game_mode() != MODE_CLIENT && now - room_sent >= 500)
         room_sent = now, room_send(0), room_off_sends--;
     if (ev & RR_EV_LEAVE)
-        CLOG("coopsession: ready room over after %u s (%s): the mission starts%s", (now - since) / 1000,
-             ts_coop_active() ? "every player is ready" : "the session ended",
+        CLOG("coopsession: ready room over after %u s (%s)%s", (now - since) / 1000,
+             ts_coop_active() ? "every player is ready: the mission starts" : "the session ended",
              act == RR_RELEASE ? ", own player released" : was_held ? " (the held entity is gone)" : "");
 }
 

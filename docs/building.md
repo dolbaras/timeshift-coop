@@ -99,7 +99,9 @@ CoopHost:  level list (24 campaign levels, campaign order, the game's level name
 - **Join**: the stock LAN list, Internet list (OpenSpy, `native/netfix.c`) and direct connection. Co-op
   servers are marked by their name (`[COOP]...`) and show the campaign level as their map.
 - **In the session**: the DLL (`native/coopsession.c`) knows a co-op session by the level (a network game
-  on a `ts2_` level), switches off warm-up, ready system and friendly fire there, sends each joining client
+  on a `ts2_` level), starts the session's first level as the ready room (the game's warm-up with its ready
+  system: every player presses READY in the pause menu, the mission starts when all are ready; later levels
+  start at once), switches friendly fire off there, sends each joining client
   the host's settings and version, and a client with another version leaves with the message
   `COOP_ERR_VERSION` (main menu, UI string `CoopError`). The stock in-game multiplayer menu and score
   board are used.
@@ -122,9 +124,14 @@ UI strings (live while the game runs) shared by the frames, the DLL and the lab 
   machine, no message needed.
 - `ts_coop_feature(COOP_F_*)`: the session's settings: the host's (environment overrides for tests), on a
   client the ones the host sent.
-- Rules, co-op sessions only: no friendly fire (MP damage factor 0 between different players), no warm-up,
-  no ready system (the game option reads see 0). `TS_COOP_FF=1` / `TS_COOP_MPRULES=1` keep the stock rules;
-  `TS_COOP=0` switches all of it off.
+- Rules, co-op sessions only: no friendly fire (MP damage factor 0 between different players). Warm-up and
+  ready system only as the ready room: bWarmUp reads 1 for the first level of a hosted session (0 for its
+  later levels), bReadySystem 1 while that warm-up runs, WarmUpTime has no limit; each machine holds its own
+  player meanwhile (no movement, no input; the game's HUD says "Select READY in Menu" to a player who is not
+  ready); the pause menu shows the game's READY / NOT READY button (data: `ingamemulti.ui`); message 44
+  tells clients that the room runs. `TS_COOP_READY=0` no ready room (lab copies with `TS_CONSOLE`: none
+  unless `TS_COOP_READY=1`). `TS_COOP_FF=1` / `TS_COOP_MPRULES=1` keep the stock rules; `TS_COOP=0` switches
+  all of it off.
 - Session info and version check: coopnet subtypes 40 (server -> client: flags, difficulty, max players,
   version) and 41 (client -> server: same / other version), see the file's header.
 - Regroup (pause menu, co-op session only: the button replaces the Quit row's place and Quit moves one row down; outside co-op
