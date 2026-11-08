@@ -148,7 +148,7 @@ Install
    (in <game>\coop-backup) and installs the mod. Its window shows each step. Running it again
    reinstalls, updates or removes the mod (so does "Uninstall Co-op.bat" in the game folder, which
    the installer leaves either way). Its language is Windows' (English, Russian, German, French,
-   Spanish or Italian).
+   Spanish, Italian, Polish, Czech or Hungarian: the languages of the game).
 2. Start the game with the "TimeShift Co-op" shortcut the installer puts on the desktop and in
    the Start menu, or as usual (bin\TimeShift.Exe).
 Updates: the shortcut first asks GitHub for the newest release of the mod (a second or two;

@@ -112,7 +112,7 @@ workspace (`tools\mkinstaller`), not in this repository yet: publish it with the
 4. Shortcuts, then `coop\install.txt`, then `coop\version.txt` last.
 
 Installer parameters: `-Game <folder>` (default: found by `Find-Games`: the installer's own folder and the one above it, the
-uninstall registry (Inno Setup installs), Steam libraries, the common install folders), `-Uninstall`, `-Quiet` (no window; messages on the console), `-Lang en|ru|de|fr|es|it` (default: the
+uninstall registry (Inno Setup installs), Steam libraries, the common install folders), `-Uninstall`, `-Quiet` (no window; messages on the console), `-Lang en|ru|de|fr|es|it|pl|cs|hu` (default: the
 UI language), `-AutoClose` (the window closes by itself after success), `-NoShortcut` (refresh only the shortcuts the record
 lists), `-ShortcutDir "<dir1>;<dir2>"`, `-GameProcess <name>` (tests), `-SteamUpdate <zip|folder>`, `-AcceptSteamUpdate`.
 
