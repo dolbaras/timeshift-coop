@@ -285,7 +285,7 @@ taken before; never on the owner's install, never beside a running game from tha
   + update keep it all once, uninstall byte for byte); a copy the player changed stays; no copy next to a foreign `winmm.dll`, for
   a 64-bit loader, another mod's DLL; another mod's DLL put over the co-op one, then uninstall / update + uninstall; with `-OldZip`
   that release over a loader, updated by this tree's installer; the new texts in six languages; the result texts fit the result
-  page (measured, no window). 2026-11-08: this tree 44/44 with `-OldZip` 0.1.3; the published 0.1.3 zip (`-Zip`) fails 23 of 41.
+  page (measured, no window), Fit-Result itself on controls of the page's geometry (none shown). 2026-11-08: this tree 45/45 with `-OldZip` 0.1.3; the published 0.1.3 zip (`-Zip`) fails 23 of 41.
 - Exe classes: retail, large-address-aware, community pre-patched, Steam package exe, a variant, one code byte changed, a changed
   entry point, padding changed, a truncated file: the first five are accepted, the rest refused with nothing changed.
 - A modified exe (a scratch folder with `bin\TimeShift.exe` + 1 byte): refused, nothing changed.

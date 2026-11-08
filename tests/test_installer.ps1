@@ -261,6 +261,25 @@ foreach ($lg in $langs) {
 Check ($tall.Count -eq 0) "the result texts with the dinput8.dll notes fit in 190 px at 10.5 pt ($($tall -join ', '))"
 $inst = Get-Content -LiteralPath (Join-Path $x1 "coop-installer.ps1") -Raw -Encoding UTF8
 Check ($inst.Contains("function Fit-Result") -and $inst.Contains("Fit-Result `$ok")) "the result page fits its text (Fit-Result)"
+# Fit-Result itself: the installer's function run on controls with the result page's geometry (none is shown)
+$fnFit = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "Fit-Result" }, $true)
+$fnFont = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "Font" }, $true)
+if ($fnFit -and $fnFont) {
+    . ([ScriptBlock]::Create($fnFont.Extent.Text + "`n" + $fnFit.Extent.Text))
+    $mk = { param($t, $x, $y, $w, $h) $c = New-Object $t; $c.Location = New-Object Drawing.Point($x, $y); $c.Size = New-Object Drawing.Size($w, $h); $c }
+    $lbResText = & $mk Windows.Forms.Label 92 66 540 140; $lbAction = & $mk Windows.Forms.Label 28 212 510 22; $lbPct = & $mk Windows.Forms.Label 540 212 92 22
+    $bar = & $mk Windows.Forms.Panel 28 238 604 14; $tbLog = & $mk Windows.Forms.TextBox 28 264 604 70; $btClose = & $mk Windows.Forms.Button 502 346 130 36
+    $fit = @()
+    $t = $TX["de"]
+    foreach ($case in @(@("short", $t["start_msg"], 140, $true, $true), @("with the note", ($t["start_msg"] + "`n`n" + $t["the_shortcut"] + "`n`n" + $t["asi_note"]), 190, $false, $true),
+                        @("very long", ($t["start_msg"] + "`n`n" + $t["the_shortcut"] + "`n`n" + $t["asi_note"] + "`n`n" + $t["off_note"] + "`n`n" + $t["the_shortcut"]), 270, $false, $false))) {
+        $lbResText.Text = $case[1]
+        try { Fit-Result $true } catch { $fit += "$($case[0]): $($_.Exception.Message)"; continue }
+        $h = [Windows.Forms.TextRenderer]::MeasureText($lbResText.Text, $lbResText.Font, (New-Object Drawing.Size(540, 100000)), [Windows.Forms.TextFormatFlags]::WordBreak).Height
+        if ($lbResText.Height -ne $case[2] -or $bar.Visible -ne $case[3] -or $tbLog.Visible -ne $case[4] -or $h -gt $lbResText.Height) { $fit += "$($case[0]): height $($lbResText.Height) bar $($bar.Visible) log $($tbLog.Visible) text $h px at $($lbResText.Font.Size) pt" }
+    }
+    Check ($fit.Count -eq 0) "Fit-Result (de): 140 px for a short text, 190 without the bar for the note, 270 without the log and a smaller font for a very long one ($($fit -join '; '))"
+}
 $bigAfter = @(Get-ChildItem -LiteralPath (Join-Path $GameFrom "preload\paks") -Filter "out*.s3darc" -File | ForEach-Object { "$($_.Name) $($_.Length) $($_.LastWriteTimeUtc.Ticks)" }) -join ";"
 Check ($bigAfter -eq $bigBefore) "the lab copy's out*.s3darc (hard-linked) unchanged"
 
