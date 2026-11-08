@@ -166,6 +166,14 @@ package (see Requirements). Nothing outside the game folder is changed except th
 Uninstall: "Uninstall Co-op.bat" in the game folder - removes the mod, puts the replaced files
 (the exe too, and on a Steam copy the files the 1.2 update replaced) and the arcName setting back.
 Profiles and saves (UserConfigs) are not touched.
+Other mods with a dinput8.dll (ASI loaders): an ASI loader that is there already (Ultimate ASI Loader,
+the dinput8.dll most ASI mods come with) is kept in coop-backup and keeps running as bin\winmm.dll,
+so its plugins (bin\scripts, bin\plugins) stay on. Any other mod's dinput8.dll is kept in coop-backup
+and is off while co-op is installed. Removing co-op puts it back. A dinput8.dll another mod puts over
+co-op's later is kept too: the next install or update of co-op keeps it as the original, the
+uninstaller leaves it in place. Other DLLs such mods use (d3d9.dll, ddraw.dll, dsound.dll,
+version.dll, winmm.dll) are not touched. Not checked in the game with a real ASI plugin (none is
+known for TimeShift).
 Good to know about the installer:
 - A game folder under C:\Program Files (x86) makes Windows ask for administrator rights (once for the
   installer; the shortcut's update asks each time it installs a new version).

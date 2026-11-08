@@ -142,6 +142,37 @@ package, never as official, and give no links). Choices and evidence: `notes\pla
   Steam copy is byte-identical to before (tested with a simulated Steam copy and with the real package).
 - A later release updating such a copy needs no package: the exe is 1.2 already, `steam.txt` only carries over.
 
+### Other mods' DLLs: an ASI loader as bin\dinput8.dll (after 0.1.3)
+
+The mod is `bin\dinput8.dll` too. What the installer does with what it finds in `bin\`:
+
+- **`bin\dinput8.dll` of someone else's** (an ASI loader, any other mod): kept in `coop-backup\bin\dinput8.dll` once, replaced, put
+  back on uninstall (byte for byte). When it is an **Ultimate ASI Loader** (ThirteenAG; 32-bit, exports `IsUltimateASILoader` and
+  winmm's `timeGetTime`; the file's export table is read, nothing of it runs) and `bin\winmm.dll` does not exist, a copy of it is made
+  as `bin\winmm.dll` and its `bin\dinput8.ini` as `bin\winmm.ini`: a name the loader serves and `TimeShift.exe` imports, so Windows
+  loads it at the start and it loads its plugins (`bin\scripts`, `bin\plugins`) as before. The record lists the copies as `chain=`
+  and `file=` (written before the copies are made); reinstall and update keep them; the uninstaller removes a copy only while it
+  still equals its source. Not `dinput8_real.dll` or any other name: the loader picks its role by its own file name and shows "This
+  library isn't supported." and closes the game under one it does not know (its source, read for Revelations 2 Co-op 0.2.0, which
+  does the same). Any other `dinput8.dll`, a 64-bit loader, or a loader next to a `winmm.dll` of someone else's stays off while
+  co-op is installed; the result page says which of the two happened.
+- **A `dinput8.dll` another mod put over the co-op one after the install**: an update keeps it in `coop-backup` as the original (it
+  replaces an older one there; copies made from that older one are made again from it) and puts the co-op DLL back; the uninstaller
+  leaves it in place. Up to 0.1.3 the update overwrote it without a copy and the uninstaller deleted it.
+- **Other proxy DLLs and plugin folders** (`d3d9.dll` of DXVK / ReShade / dgVoodoo, `ddraw.dll`, `dsound.dll` + its ini, `version.dll`,
+  a `winmm.dll`, `bin\scripts`, `bin\plugins`): not in the payload, never touched.
+
+The DLL's side (`native\iat_guard.c`, used by `ts_patch_iat`): Ultimate ASI Loader (v10.0.2 `source/loader/startup/startup.cpp`,
+read on GitHub) patches the exe's kernel32 import slots of about 30 functions in its DllMain, `GetSystemInfo` among them, records
+the value it saw and writes it back at the exe's first such call (the C runtime's start). TimeShift.exe imports WINMM, DDRAW and
+d3d9 before DINPUT8, so a loader under one of those names runs first and took the mod's `GetSystemInfo` hook away: on a CPU with
+more than 8 threads the start then crashes at 0x946499 as without the fix. When a kernel32 slot was patched before the mod (only
+then) the exe's own instructions reading it are now pointed at the mod's hook too; the log says `import KERNEL32.dll!<function> was
+hooked by <dll> before the mod ...`. Tests: `sh native/tests/ual_test.sh` (a stand-in loader written from that source as
+`winmm.dll`, a stand-in exe importing WINMM before DINPUT8, a model DLL and the real build; `OLD_DLL=<an earlier dinput8.dll>` shows
+that one letting the exe see all processors). NOT checked with the real loader in the game (no TimeShift ASI plugin is known:
+ThirteenAG's WidescreenFixesPack has none, 2026-11-08).
+
 ### Uninstall
 
 arcName back to the recorded value first, then the Steam files (if `steam.txt` exists), then the listed files, the built
@@ -154,7 +185,7 @@ A bug-report zip on the desktop is the player's file and stays.
 
 | File | Written by | Content |
 |---|---|---|
-| `coop\install.txt` | installer, last | `version=`, then `file=` (every installed file, relative), `backup=` (originals kept in `coop-backup\`), `built=` (archives in `preload\paks`), `shortcut=`, `arcname=` (arcName value before the install), `exe=` (SHA-256 of the exe the installer made) |
+| `coop\install.txt` | installer, last | `version=`, then `file=` (every installed file, relative), `backup=` (originals kept in `coop-backup\`), `chain=` (after 0.1.3: a copy made for the player's ASI loader, also a `file=`), `built=` (archives in `preload\paks`), `shortcut=`, `arcname=` (arcName value before the install), `exe=` (SHA-256 of the exe the installer made) |
 | `coop\version.txt` | installer, after `install.txt` | the version without `v`; the launcher compares with it |
 | `coop\steam.txt` | installer, Steam copies only | `steam=` / `steamnew=` lines (above) |
 | `coop-backup\...` | installer | originals: `bin\TimeShift.Exe`, a foreign `bin\dinput8.dll`, `steam10\...` |
@@ -246,6 +277,15 @@ taken before; never on the owner's install, never beside a running game from tha
   in the window): the copy must equal the clean listing byte for byte.
 - The installed archives must be byte-identical to `python -I tools\build_pak.py <copy> -o <tmp>`.
 - A foreign `bin\dinput8.dll`: kept in `coop-backup`, still the original after a reinstall, put back.
+- Other mods' DLLs: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\test_installer.ps1 [-GameFrom <a lab copy>]
+  [-Zip <release zip>] [-OldZip <release zip>] [-Keep]` (about 4 minutes; stand-in game folders next to the lab copy
+  `work\game`, its exe / ini / `patch*.s3darc` copied, the big `out*.s3darc` hard-linked and checked unchanged; made-up PE files
+  only read): the zip's `/` names; an ASI loader as `bin\dinput8.dll` next to `d3d9` / `ddraw` / `dsound` (+ini) / `version` and
+  plugin folders (backup, the `winmm.dll` + `winmm.ini` copies, the record, the result text, every other file unchanged, reinstall
+  + update keep it all once, uninstall byte for byte); a copy the player changed stays; no copy next to a foreign `winmm.dll`, for
+  a 64-bit loader, another mod's DLL; another mod's DLL put over the co-op one, then uninstall / update + uninstall; with `-OldZip`
+  that release over a loader, updated by this tree's installer; the new texts in six languages; the result texts fit the result
+  page (measured, no window). 2026-11-08: this tree 44/44 with `-OldZip` 0.1.3; the published 0.1.3 zip (`-Zip`) fails 23 of 41.
 - Exe classes: retail, large-address-aware, community pre-patched, Steam package exe, a variant, one code byte changed, a changed
   entry point, padding changed, a truncated file: the first five are accepted, the rest refused with nothing changed.
 - A modified exe (a scratch folder with `bin\TimeShift.exe` + 1 byte): refused, nothing changed.
