@@ -28,6 +28,9 @@
  *   wrapper that reads 0. TS_COOP_MPRULES=1 keeps them.
  *   (Minimum players, time and score limit are profile keys: the co-op menu sets them for its server and
  *   puts the player's own values back at the main menu; see mod/docs/building.md.)
+ * - The partner on the HUD radar (radarmate.h): the RadarType read of the player-blip registration FUN_005F8820 (call at 0x5f8900) answers 2
+ *   (ShowAll) in a co-op session, and every 2 s a player of the multiplayer list without a radar record gets FUN_005F8820. TS_COOP_RADAR=0 keeps
+ *   the stock radar (no player blips with the shipped game type).
  * - No multiplayer score bar (match time, frags) on the HUD: the HUD element (type scoreBar) hides itself when
  *   its check 0x5b2b90, called at 0x5b2c80, returns 0; in a co-op session it does. (A hud.ui script cannot
  *   do it: the element sets its own visibility every frame.)
@@ -52,6 +55,7 @@
 #include <string.h>
 
 #include "ts.h"
+#include "radarmate.h"
 
 #define TSCALL __attribute__((thiscall))
 
@@ -94,7 +98,7 @@
 #define MAX_PEERS 32
 #define VER_MAX 40
 
-static int enabled, ff_off = 1, rules_off = 1;
+static int enabled, ff_off = 1, rules_off = 1, radar_on = 1;
 static char my_version[VER_MAX + 1] = TS_VERSION;   /* (TS_COOP_VERSION: lab test of the version check) */
 static int host_flags, host_difficulty = 255, host_maxplayers;
 static int last_role = -1;
@@ -195,6 +199,48 @@ static int TSCALL opt_rule_off(void *store, int index, int *out)
     if (r && out && rules_off && ts_coop_active())
         *out = 0;
     return r;
+}
+
+/* The partner on the radar: FUN_005F8820's RadarType read answers ShowAll in a co-op session (radarmate.h). */
+typedef void *(TSCALL *optget_t)(void *option, void *a1, int *value);
+static void *TSCALL opt_radar_all(void *option, void *a1, int *value)
+{
+    void *r = ((optget_t)RM_OPT_GET)(option, a1, value);
+    if (value)
+        *value = rm_radar_type(*value, ts_coop_active(), radar_on);
+    return r;
+}
+
+static unsigned radar_regs;
+static DWORD radar_last;
+/* every 2 s in a co-op session: a player of the multiplayer list without a radar record gets one (the stock registration, FUN_005F8820) */
+static void radar_tick(DWORD now)
+{
+    if (!radar_on || now - radar_last < 2000)
+        return;
+    radar_last = now;
+    char *list = *(char **)RM_LIST_CELL;
+    if (!list)
+        return;
+    int n = *(int *)(list + 0x100);
+    char *ents = *(char **)(list + 0xfc);
+    if (!ents || n <= 0 || n > 64)
+        return;
+    rm_entry e[64];
+    for (int i = 0; i < n; i++) {
+        char *en = ents + i * RM_ENTRY_SIZE;
+        unsigned *op = *(unsigned **)(en + RM_ENTRY_OBJ);
+        e[i].obj = op ? *op : 0;
+        e[i].flags = *(unsigned *)(en + RM_ENTRY_FLAGS);
+        e[i].rec = *(unsigned *)(en + RM_ENTRY_REC);
+    }
+    int i = rm_next(e, n, *(unsigned *)RM_LOCAL_CELL);
+    if (i < 0)
+        return;
+    ((void (__stdcall *)(void *, int))RM_REGISTER)(list, i);
+    radar_regs++;
+    CLOG("coopsession: radar: the partner (player entry %d, object %08x) put on the HUD radar: record %08x (%u so far)", i, e[i].obj,
+         *(unsigned *)(ents + i * RM_ENTRY_SIZE + RM_ENTRY_REC), radar_regs);
 }
 
 /* The HUD score bar is wanted outside co-op only. */
@@ -560,8 +606,10 @@ static void frame(float dt)
         gate_tick(GetTickCount());
     } else if (role == MODE_CLIENT)
         client_tick();
-    if (role)
+    if (role) {
         regroup_tick(GetTickCount());
+        radar_tick(GetTickCount());
+    }
 }
 
 void coopsession_install(void)
@@ -595,6 +643,7 @@ void coopsession_install(void)
     }
     ff_off = !env_on("TS_COOP_FF", 0);
     rules_off = !env_on("TS_COOP_MPRULES", 0);
+    radar_on = env_on("TS_COOP_RADAR", 1);
     enabled = 1;
     static const unsigned char ff_want[6] = {0x0f, 0x85, 0x93, 0x00, 0x00, 0x00};
     unsigned char ff_rep[6] = {0x0f, 0x85};
@@ -604,8 +653,9 @@ void coopsession_install(void)
                    + patch_call(SITE_READY, OPT_GETINT, (void *)opt_rule_off)
                    + patch_call(SITE_READY_HINT, OPT_GETINT, (void *)opt_rule_off);
     int ok_hud = patch_call(SITE_SCOREBAR, SCOREBAR_WANTED, (void *)score_bar_wanted);
+    int ok_radar = radar_on ? patch_call(RM_OPT_SITE, RM_OPT_GET, (void *)opt_radar_all) : 0;
     int ok_tick = ts_frame_add(frame), ok_net = coopnet_listen(SUB_SESSION, SUB_LAST, on_message);
-    ts_log("coopsession: on, version %s (friendly fire %s %d, warm-up/ready %s %d/3, score bar off %d, session messages %s)",
-           my_version, ff_off ? "off" : "stock", ok_ff, rules_off ? "off" : "stock", ok_rules, ok_hud,
+    ts_log("coopsession: on, version %s (friendly fire %s %d, warm-up/ready %s %d/3, score bar off %d, partner on the radar %s %d, session messages %s)",
+           my_version, ff_off ? "off" : "stock", ok_ff, rules_off ? "off" : "stock", ok_rules, ok_hud, radar_on ? "on" : "off (TS_COOP_RADAR=0)", ok_radar,
            ok_tick && ok_net ? "on" : "OFF: no script tick or mod messages");
 }
