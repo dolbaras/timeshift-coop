@@ -22,10 +22,24 @@
  *   returns a float) compares the players' slots at 0x4e4099; the "different players" branch (jne 0x4e4142
  *   at 0x4e40a9) is sent through a stub that returns 0.0 (the function's own epilogue at 0x4e42fc).
  *   TS_COOP_FF=1 keeps the stock rule (friendly fire option, team check).
- * - No warm-up and no ready system: the game options bWarmUp (read at 0x5ee949, server level start
- *   0x5ee870) and bReadySystem (0x596cbb in the rules, 0x5ff66a for the HUD hint) are read through the
- *   option store's int getter 0x4027f0 (thiscall (store, index, int *out), ret 8); those three calls get a
- *   wrapper that reads 0. TS_COOP_MPRULES=1 keeps them.
+ * - The ready room (ready-ts, 2026-11-09; the owner: "Ready" as in Jericho, where the host's Start waits until every
+ *   player is ready): the FIRST level of a hosted co-op session starts in the game's own warm-up with its own ready
+ *   system; later levels of the session (level exits, team restarts) start at once as before. The game options bWarmUp
+ *   (read at 0x5ee949, server level start 0x5ee870) and bReadySystem (0x596cbb in the rules = GetGameInfo("ReadyType"),
+ *   0x5ff66a for the HUD hint) are read through the option store's int getter 0x4027f0 (thiscall (store, index,
+ *   int *out), ret 8); those three calls get wrappers: bWarmUp = 1 for the session's first level only, bReadySystem = 1
+ *   while the warm-up runs (the rules' warm-up object rules+0xf8 in its state 0, on every machine). WarmUpTime (0x5ee9d5,
+ *   0x4149c0: eax index, ecx store, float *out, ret 4) gets no limit: the warm-up ends only when every player is ready.
+ *   The rest is the game's: $mp_rules_sys.Ready() toggles the player's ready bit (0x10 of its record, FUN_005e9e70, only
+ *   in the warm-up), every machine prints "<name> is ready" / "<name> is no longer ready", the scoreboard shows the ready
+ *   icons, the server's warm-up check starts the mission when every player is ready (a player who leaves no longer
+ *   counts). The pause menu shows the game's READY / NOT READY button there (data: ingamemulti.ui). While the room lasts
+ *   each machine holds its own player (DisableMove + DisableInput through the player's vtable, +0x34c / +0x348: not the
+ *   script natives, so campaign.c's lock records and watchdog never see it), re-asserted every second as a release+set
+ *   pair (right for a flag and for a counter), released once at the end; and the HUD line "Select READY in Menu To End
+ *   Warm-Up" (the game's text) every 8 s for a player who is not ready yet. TS_COOP_READY=0: no ready room (no warm-up,
+ *   no ready system, as before); a lab copy (TS_CONSOLE set) has no ready room unless TS_COOP_READY=1, so the lab's pair
+ *   scripts run as before. TS_COOP_MPRULES=1 keeps the stock warm-up and ready system on every level.
  *   (Minimum players, time and score limit are profile keys: the co-op menu sets them for its server and
  *   puts the player's own values back at the main menu; see mod/docs/building.md.)
  * - No multiplayer score bar (match time, frags) on the HUD: the HUD element (type scoreBar) hides itself when
@@ -52,6 +66,7 @@
 #include <string.h>
 
 #include "ts.h"
+#include "readyroom.h"
 
 #define TSCALL __attribute__((thiscall))
 
@@ -78,6 +93,18 @@
 #define SITE_WARMUP 0x5ee949
 #define SITE_READY 0x596cbb
 #define SITE_READY_HINT 0x5ff66a
+/* the ready room: the WarmUpTime read (0x4149c0: eax index, ecx store, push float *out, ret 4), the rules' warm-up object, the player */
+#define SITE_WARMUP_TIME 0x5ee9d5
+#define OPT_GETFLOAT 0x4149c0
+#define MP_RULES (*(char **)0xfcab18)        /* +0xf8 warm-up object (+0x10 state, 0 = warm-up), +0xfc player records (0x84 each, +0x68 flags) */
+#define RULES_WARMUP 0xf8
+#define RULES_RECORDS 0xfc
+#define RECORD_SIZE 0x84
+#define RECORD_FLAGS 0x68
+#define RECORD_READY 0x10
+#define OWN_PLAYER (*(char **)0x1095b30)     /* this machine's player entity */
+#define VT_DISABLE_INPUT 0x348
+#define VT_DISABLE_MOVE 0x34c
 /* HUD score bar: its update 0x5b2bf0 shows it in a network game when 0x5b2b90 (no arguments) returns non-zero */
 #define SCOREBAR_WANTED 0x5b2b90
 #define SITE_SCOREBAR 0x5b2c80
@@ -95,6 +122,9 @@
 #define VER_MAX 40
 
 static int enabled, ff_off = 1, rules_off = 1;
+static int ready_mode = 1;                   /* the ready room on (TS_COOP_READY; lab copies with TS_CONSOLE: off unless =1) */
+static int ready_levels;                     /* host: server level starts in this session (at the menu: 0) */
+static int ready_room_host;                  /* host: this level started as the ready room */
 static char my_version[VER_MAX + 1] = TS_VERSION;   /* (TS_COOP_VERSION: lab test of the version check) */
 static int host_flags, host_difficulty = 255, host_maxplayers;
 static int last_role = -1;
@@ -188,14 +218,66 @@ __asm__(".text\n"
 
 typedef int (TSCALL *getint_t)(void *store, int index, int *out);
 
-/* bWarmUp / bReadySystem read as 0 in a co-op session. */
-static int TSCALL opt_rule_off(void *store, int index, int *out)
+/* The ready room: the rules' warm-up object exists and is in its warm-up state (the same test as the game's ReadyType and
+ * ready message handler; clients see the server's state). */
+static int warmup_running(void)
+{
+    char *rules = MP_RULES, *w;
+    if (!rules || IsBadReadPtr(rules + RULES_WARMUP, 4))
+        return 0;
+    w = *(char **)(rules + RULES_WARMUP);
+    return w && !IsBadReadPtr(w + 0x10, 4) && *(int *)(w + 0x10) == 0;
+}
+
+/* bWarmUp in a co-op session: 1 for the first level of a hosted session (the ready room), else 0. The server's level start
+ * reads it once per level, so the reads count the session's levels. */
+static int TSCALL opt_warmup(void *store, int index, int *out)
+{
+    int r = ((getint_t)OPT_GETINT)(store, index, out);
+    if (r && out && rules_off && ts_coop_active()) {
+        int m = game_mode();
+        ready_room_host = rr_warmup(ready_mode, ready_levels, m == MODE_SERVER || m == MODE_DEDICATED);
+        ready_levels++;
+        *out = ready_room_host;
+        CLOG("coopsession: server level start #%d of this session on \"%.80s\": %s", ready_levels, LEVEL_NAME,
+             ready_room_host ? "READY ROOM (the game's warm-up with its ready system, no time limit)"
+                             : ready_mode ? "starts at once (not the session's first level)" : "starts at once (TS_COOP_READY=0 or a lab copy)");
+    }
+    return r;
+}
+
+/* bReadySystem in a co-op session (the rules' ReadyType and the HUD hint): 1 while the ready room's warm-up runs. */
+static int TSCALL opt_ready(void *store, int index, int *out)
 {
     int r = ((getint_t)OPT_GETINT)(store, index, out);
     if (r && out && rules_off && ts_coop_active())
-        *out = 0;
+        *out = rr_ready_opt(warmup_running());
     return r;
 }
+
+/* WarmUpTime of the ready room: no limit (the warm-up ends when every player is ready). Called after the original read. */
+__attribute__((used)) void coop_warmtime_fix(float *out) __asm__("coop_warmtime_fix");
+__attribute__((used)) void coop_warmtime_fix(float *out)
+{
+    if (out && ready_room_host && rules_off && ts_coop_active())
+        *out = 1.0e7f;   /* (about 115 days) */
+}
+
+/* Replaces "call 0x4149c0" at 0x5ee9d5: the same call (eax = option index, ecx = store, the float pointer on the stack,
+ * the callee pops it), then the fix on the result. */
+extern void coop_warmtime_stub(void) __asm__("coop_warmtime_stub");
+__asm__(".text\n"
+        ".globl coop_warmtime_stub\n"
+        "coop_warmtime_stub:\n"
+        "  pushl 4(%esp)\n"                  /* the float pointer again, for the original */
+        "  movl $0x4149c0, %edx\n"
+        "  call *%edx\n"                     /* (it pops its argument) */
+        "  pushl %eax\n"
+        "  pushl 8(%esp)\n"                  /* the float pointer */
+        "  call coop_warmtime_fix\n"
+        "  addl $4, %esp\n"
+        "  popl %eax\n"
+        "  ret $4\n");
 
 /* The HUD score bar is wanted outside co-op only. */
 static int score_bar_wanted(void)
@@ -401,6 +483,84 @@ static void gate_tick(DWORD now)
     }
 }
 
+/* ---- the ready room (each machine) ---- */
+typedef void (TSCALL *vt_bool_t)(void *self, int on);
+static rr_hold room;                         /* readyroom.h: the room on this machine and the player it holds */
+static int room_on, room_ready_mask = -1;
+
+static void hold_call(char *pl, int off, int on)
+{
+    void **vt = pl && !IsBadReadPtr(pl, 4) ? *(void ***)pl : NULL;
+    if (vt && !IsBadReadPtr((char *)vt + off, 4) && vt[off / 4])
+        ((vt_bool_t)vt[off / 4])(pl, on);
+}
+
+static void hold_set(char *pl, int on)
+{
+    hold_call(pl, VT_DISABLE_MOVE, on);
+    hold_call(pl, VT_DISABLE_INPUT, on);
+}
+
+/* the ready bits of the rules' player records (the scoreboard's icons), for the log */
+static int ready_mask(void)
+{
+    char *rules = MP_RULES, *rec;
+    int n = slot_count(), mask = 0;
+    if (!rules || IsBadReadPtr(rules + RULES_RECORDS, 4) || !(rec = *(char **)(rules + RULES_RECORDS)))
+        return -1;
+    for (int i = 0; i < n && i < 16; i++) {
+        char *s = slot_at(i);
+        if (!s || IsBadReadPtr(rec + i * RECORD_SIZE + RECORD_FLAGS, 4))
+            break;
+        if (*(char **)(s + 4) && (*(int *)(rec + i * RECORD_SIZE + RECORD_FLAGS) & RECORD_READY))
+            mask |= 1 << i;
+    }
+    return mask;
+}
+
+static int own_ready(void)
+{
+    char out[32];
+    ssl_str("return $ui.GetGameInfo(\"ReadyType\")", out, sizeof out);
+    return strcmp(out, "NotReady") == 0;   /* (the button then offers NOT READY: this player is ready) */
+}
+
+static void room_tick(DWORD now)
+{
+    int in_room = rules_off && ts_coop_active() && warmup_running(), act, ev;
+    char *pl = OWN_PLAYER;
+    unsigned since = room.since;
+    const void *was_held = room.held;
+    rr_step(&room, in_room, pl, now, &act, &ev);
+    room_on = room.on;
+    if (act == RR_SET)
+        hold_set(pl, 1);
+    else if (act == RR_PAIR)   /* re-assert: release + set (a flag ends set, a counter stays balanced) */
+        hold_set(pl, 0), hold_set(pl, 1);
+    else if (act == RR_RELEASE)
+        hold_set(pl, 0);
+    if (ev & RR_EV_ENTER) {
+        room_ready_mask = -1;
+        CLOG("coopsession: ready room: this machine waits (%s); the mission starts when every player is ready",
+             game_mode() == MODE_CLIENT ? "client" : "host");
+    }
+    if (ev & RR_EV_HELD)
+        CLOG("coopsession: ready room: own player %p held (no movement, no input) until the start", (void *)pl);
+    if (room.on) {
+        int m = ready_mask();
+        if (m != room_ready_mask) {
+            room_ready_mask = m;
+            CLOG("coopsession: ready room: ready players (slot bits) %#x of %d slot(s)", m, slot_count());
+        }
+        if ((ev & RR_EV_HINT) && !own_ready())
+            show_hint("GAME_MP_DESC_NOT_READY");
+    }
+    if (ev & RR_EV_LEAVE)
+        CLOG("coopsession: ready room over after %u s (%s): the mission starts%s", (now - since) / 1000,
+             ts_coop_active() ? "every player is ready" : "the session ended",
+             act == RR_RELEASE ? ", own player released" : was_held ? " (the held entity is gone)" : "");
+}
+
 static void host_session_start(void)
 {
     char s[64], d[64], m[64];
@@ -548,6 +708,7 @@ static void frame(float dt)
         } else if (role == MODE_CLIENT)
             CLOG("coopsession: joined a co-op server on \"%.80s\", waiting for its session info", LEVEL_NAME);
         if (!role) {
+            ready_levels = 0, ready_room_host = 0;   /* (the next hosted session's first level is a ready room again) */
             InterlockedExchange(&got_session, 0);
             handled_seq = session_seq;
             client_applied = client_left = client_warned = client_asks = 0;
@@ -562,6 +723,8 @@ static void frame(float dt)
         client_tick();
     if (role)
         regroup_tick(GetTickCount());
+    if (role || room_on)
+        room_tick(GetTickCount());
 }
 
 void coopsession_install(void)
@@ -595,17 +758,23 @@ void coopsession_install(void)
     }
     ff_off = !env_on("TS_COOP_FF", 0);
     rules_off = !env_on("TS_COOP_MPRULES", 0);
+    if (ts_env("TS_COOP_READY", v, sizeof v))
+        ready_mode = v[0] != '0';
+    else
+        ready_mode = !ts_env("TS_CONSOLE", v, sizeof v);   /* (lab copies: the pair scripts expect the level to run at once) */
     enabled = 1;
     static const unsigned char ff_want[6] = {0x0f, 0x85, 0x93, 0x00, 0x00, 0x00};
     unsigned char ff_rep[6] = {0x0f, 0x85};
     *(DWORD *)(ff_rep + 2) = (DWORD)coop_ff_stub - (FF_SITE + 6);
     int ok_ff = ts_patch_bytes(FF_SITE, ff_want, ff_rep, 6);
-    int ok_rules = patch_call(SITE_WARMUP, OPT_GETINT, (void *)opt_rule_off)
-                   + patch_call(SITE_READY, OPT_GETINT, (void *)opt_rule_off)
-                   + patch_call(SITE_READY_HINT, OPT_GETINT, (void *)opt_rule_off);
+    int ok_rules = patch_call(SITE_WARMUP, OPT_GETINT, (void *)opt_warmup)
+                   + patch_call(SITE_READY, OPT_GETINT, (void *)opt_ready)
+                   + patch_call(SITE_READY_HINT, OPT_GETINT, (void *)opt_ready)
+                   + patch_call(SITE_WARMUP_TIME, OPT_GETFLOAT, (void *)coop_warmtime_stub);
     int ok_hud = patch_call(SITE_SCOREBAR, SCOREBAR_WANTED, (void *)score_bar_wanted);
     int ok_tick = ts_frame_add(frame), ok_net = coopnet_listen(SUB_SESSION, SUB_LAST, on_message);
-    ts_log("coopsession: on, version %s (friendly fire %s %d, warm-up/ready %s %d/3, score bar off %d, session messages %s)",
-           my_version, ff_off ? "off" : "stock", ok_ff, rules_off ? "off" : "stock", ok_rules, ok_hud,
+    ts_log("coopsession: on, version %s (friendly fire %s %d, warm-up/ready %s %d/4, ready room %s, score bar off %d, session messages %s)",
+           my_version, ff_off ? "off" : "stock", ok_ff, rules_off ? "co-op rules" : "stock", ok_rules,
+           ready_mode ? "on (first level of a hosted session)" : "off", ok_hud,
            ok_tick && ok_net ? "on" : "OFF: no script tick or mod messages");
 }

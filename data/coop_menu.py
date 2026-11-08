@@ -257,6 +257,9 @@ def build(ctx):
     # (QuitToMenuCoop) is shown instead of the first, so the stock multiplayer menu keeps its rows. The button sets the UI
     # string CoopRegroup; native/coopsession.c polls it and calls campaign.c's regroup (host: every living client to the
     # host's player; client: itself to the host's player) and shows a hint line.
+    # The ready room (the first level of a co-op session starts in the game's warm-up with its ready system, see
+    # native/coopsession.c): while the game's ReadyType says "Ready" / "NotReady", the game's own READY / NOT READY button
+    # (the stock code of InGameMultiTeam: $mp_rules_sys.Ready()) stands in Regroup's place.
     ctx.edit("CacheBlock/ps/ingamemulti.ui", [
         ('''            name        = QuitToMenu
             posX        = center, 100%
@@ -277,6 +280,13 @@ def build(ctx):
          }
          {
             type        = button
+            name        = CoopReady
+            posX        = center, 100%
+            posY        = 170, 30
+            text        = UI_BTN_READY
+         }
+         {
+            type        = button
             name        = QuitToMenuCoop
             posX        = center, 100%
             posY        = 210, 30
@@ -285,19 +295,35 @@ def build(ctx):
 '''),
         ('''ssl = <<<
    override OnButtonPressed("ResumeGame")''', '''ssl = <<<
-   // co-op mod: Regroup and the lower Quit button exist in a co-op session only
+   // co-op mod: Regroup and the lower Quit button exist in a co-op session only; in the ready room READY / NOT READY
+   // takes Regroup's place
    override OnInit
       if $ui.GetStr("CoopSession") != ""
          Element("QuitToMenu").Show(false)
+         if $ui.GetGameInfo("ReadyType") == "Ready"
+            Element("Regroup").Show(false)
+            Element("CoopReady").SetText("UI_BTN_READY")
+         else if $ui.GetGameInfo("ReadyType") == "NotReady"
+            Element("Regroup").Show(false)
+            Element("CoopReady").SetText("UI_BTN_NOT_READY")
+         else
+            Element("CoopReady").Show(false)
+         end
       else
          Element("Regroup").Show(false)
          Element("QuitToMenuCoop").Show(false)
+         Element("CoopReady").Show(false)
       end
    end
 
    override OnButtonPressed("Regroup")
       $ui.SetStr("CoopRegroup", "1")
       $ui.CloseMenu()
+   end
+
+   override OnButtonPressed("CoopReady")
+      $ui.CloseMenu()
+      $mp_rules_sys.Ready()
    end
 
    override OnButtonPressed("QuitToMenuCoop")

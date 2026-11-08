@@ -10,3 +10,5 @@ mkdir -p ../build
 ../build/latejoin_test.exe
 "$ZIG" cc -O1 -o ../build/rewindfollow_test.exe rewindfollow_test.c
 ../build/rewindfollow_test.exe
+"$ZIG" cc -O1 -o ../build/readyroom_test.exe readyroom_test.c
+../build/readyroom_test.exe
