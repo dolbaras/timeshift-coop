@@ -185,7 +185,7 @@ STRINGS = [
     }),
     ("COOP_HINT_CONTINUE_NONE", {
         "english": "Continue becomes available once you reach a checkpoint as the host of a co-op game.",
-        "russian": "Кнопка «Продолжить» станет доступна, когда вы достигнете контрольной точки как хозяин кооперативной игры.",
+        "russian": "Кнопка \"Продолжить\" станет доступна, когда вы достигнете контрольной точки как хозяин кооперативной игры.",
         "german": "Fortsetzen ist verfügbar, sobald du als Host eines Koop-Spiels einen Kontrollpunkt erreicht hast.",
         "french": "Continuer sera disponible dès que vous aurez atteint un point de contrôle en hébergeant une partie coop.",
         "italian": "Continua sarà disponibile quando raggiungerai un checkpoint come host di una partita co-op.",
@@ -233,7 +233,8 @@ STRINGS = [
         "hungarian": "INDÍTÁS",
     }),
     # Pad button names for prompts ("Press {PARAM}"): the game looks up CTRL_<key name>, the mod names pad codes
-    # PAD_* (native/gamepad.c); split.c names the pad binding when a player uses a pad
+    # PAD_* (native/gamepad.c); split.c names the pad binding when a player uses a pad. The buttons keep the label printed
+    # on the pad in every language (A, B, X, Y, LB, RB, LT, RT, BACK, START: tests/test_texts.py allows them).
     ("CTRL_PAD_A", {l: "A" for l in LANGS}),
     ("CTRL_PAD_B", {l: "B" for l in LANGS}),
     ("CTRL_PAD_X", {l: "X" for l in LANGS}),
@@ -242,8 +243,9 @@ STRINGS = [
     ("CTRL_PAD_RB", {l: "RB" for l in LANGS}),
     ("CTRL_PAD_BACK", {l: "BACK" for l in LANGS}),
     ("CTRL_PAD_START", {l: "START" for l in LANGS}),
-    ("CTRL_PAD_LS", {l: "LS" for l in LANGS}),
-    ("CTRL_PAD_RS", {l: "RS" for l in LANGS}),
+    # (the sticks' clicks have no label printed on the pad: named with the game's own words for them, CTRL_THUMB_LEFT/RIGHT)
+    ("CTRL_PAD_LS", {'english': 'LS', 'russian': 'левый джойстик', 'german': 'Linker Stick', 'french': 'stick gauche', 'italian': 'levetta sinistra', 'spanish': 'stick izquierdo', 'polish': 'lewy drążek', 'czech': 'levá páčka', 'hungarian': 'bal kar'}),
+    ("CTRL_PAD_RS", {'english': 'RS', 'russian': 'правый джойстик', 'german': 'Rechter Stick', 'french': 'stick droit', 'italian': 'levetta destra', 'spanish': 'stick derecho', 'polish': 'prawy drążek', 'czech': 'pravá páčka', 'hungarian': 'jobb kar'}),
     ("CTRL_PAD_LT", {l: "LT" for l in LANGS}),
     ("CTRL_PAD_RT", {l: "RT" for l in LANGS}),
     ("CTRL_PAD_DPAD_UP", {'english': 'D-pad up', 'russian': 'крестовина вверх', 'german': 'Steuerkreuz oben', 'french': 'croix haut', 'italian': 'croce su', 'spanish': 'cruceta arriba', 'polish': 'krzyżak w górę', 'czech': 'kříž nahoru', 'hungarian': 'iránypad fel'}),
@@ -372,22 +374,22 @@ STRINGS = [
     }),
     ("COOP_HINT_GATE_HOST", {   # hint on the host while a gate waits; {STRING} 1 = players missing
         "english": "Waiting for {STRING} more player(s) here. If one is stuck: pause menu, Regroup.",
-        "russian": "Здесь ждут ещё игроков: {STRING}. Если кто-то застрял: меню паузы, «Собраться».",
-        "german": "Hier wird auf {STRING} weitere(n) Spieler gewartet. Steckt jemand fest: Pausenmenü, «Zusammenführen».",
-        "french": "On attend {STRING} joueur(s) de plus ici. Si l'un est bloqué : menu pause, « Se rassembler ».",
-        "italian": "Qui si aspettano altri {STRING} giocatori. Se qualcuno è bloccato: menu di pausa, «Riunisciti».",
-        "spanish": "Aquí se espera a {STRING} jugador(es) más. Si alguien se atasca: menú de pausa, «Reagrupar».",
+        "russian": "Здесь ждут ещё игроков: {STRING}. Если кто-то застрял: меню паузы, \"Собраться\".",
+        "german": "Hier wird auf {STRING} weitere(n) Spieler gewartet. Steckt jemand fest: Pausenmenü, \"Zusammenführen\".",
+        "french": "On attend {STRING} joueur(s) de plus ici. Si l'un est bloqué : menu pause, \"Se rassembler\".",
+        "italian": "Qui si aspettano altri {STRING} giocatori. Se qualcuno è bloccato: menu di pausa, \"Riunisciti\".",
+        "spanish": "Aquí se espera a {STRING} jugador(es) más. Si alguien se atasca: menú de pausa, \"Reagrupar\".",
         "polish": "Czekamy tu jeszcze na graczy: {STRING}. Jeśli ktoś utknął: menu pauzy, „Zbiórka”.",
         "czech": "Tady se čeká ještě na hráče: {STRING}. Pokud někdo uvízl: nabídka pauzy, „Shromáždit“.",
         "hungarian": "Itt még {STRING} játékosra várunk. Ha valaki elakadt: szünet menü, „Összegyűlés”.",
     }),
     ("COOP_HINT_GATE_CLIENT", {   # hint on clients while the host waits at a gate; {STRING} 1 = players missing
         "english": "The host waits at a gate for {STRING} player(s): go to the host, or pause menu, Regroup.",
-        "russian": "Хост ждёт у прохода игроков: {STRING}. Идите к хосту или выберите в меню паузы «Собраться».",
-        "german": "Der Host wartet an einem Durchgang auf {STRING} Spieler: geh zum Host oder wähle im Pausenmenü «Zusammenführen».",
-        "french": "L'hôte attend {STRING} joueur(s) à un passage : rejoignez-le ou utilisez « Se rassembler » dans le menu pause.",
-        "italian": "L'host aspetta {STRING} giocatori a un passaggio: raggiungilo o usa «Riunisciti» nel menu di pausa.",
-        "spanish": "El anfitrión espera a {STRING} jugador(es) en un paso: ve con él o usa «Reagrupar» en el menú de pausa.",
+        "russian": "Хост ждёт у прохода игроков: {STRING}. Идите к хосту или выберите в меню паузы \"Собраться\".",
+        "german": "Der Host wartet an einem Durchgang auf {STRING} Spieler: geh zum Host oder wähle im Pausenmenü \"Zusammenführen\".",
+        "french": "L'hôte attend {STRING} joueur(s) à un passage : rejoignez-le ou utilisez \"Se rassembler\" dans le menu pause.",
+        "italian": "L'host aspetta {STRING} giocatori a un passaggio: raggiungilo o usa \"Riunisciti\" nel menu di pausa.",
+        "spanish": "El anfitrión espera a {STRING} jugador(es) en un paso: ve con él o usa \"Reagrupar\" en el menú de pausa.",
         "polish": "Gospodarz czeka przy przejściu na graczy: {STRING}. Idź do niego albo wybierz „Zbiórka” w menu pauzy.",
         "czech": "Hostitel čeká u průchodu na hráče: {STRING}. Jdi k němu, nebo použij v nabídce pauzy „Shromáždit“.",
         "hungarian": "A házigazda egy átjárónál vár {STRING} játékosra: menj hozzá, vagy válaszd a szünet menü „Összegyűlés” pontját.",
