@@ -53,6 +53,8 @@
  *   42 client -> server  u8 proto, u8 0: "send me 40" (a client that runs the level and has no session info yet)
  *   43 server -> client  u8 proto, u8 missing: players are missing at a gate where the host's player waits (every 3 s
  *                        while it lasts); each machine shows its hint line (COOP_HINT_GATE_*)
+ *   44 server -> client  u8 proto, u8 on: the ready room runs (every 2 s while it does; 0 three times at its end), so a
+ *                        client holds its player and offers READY even where the warm-up state does not reach it
  * The server sends 40 once when a client's slot is joined and ready (the client may still be loading the level)
  * and answers every 42; a client asks every 3 s (20 times at most) from the moment its player exists. Blind
  * repeats to a loading client lost the connection in a test.
@@ -113,6 +115,7 @@
 #define SUB_ACK 41
 #define SUB_ASK 42                           /* client -> server: "send me the session info" (u8 proto, u8 0) */
 #define SUB_GATE 43                          /* server -> client: u8 proto, u8 missing (a gate waits for players) */
+#define SUB_ROOM 44                          /* server -> client: u8 proto, u8 on (the ready room runs; every 2 s while it does, 3 x off at its end) */
 #define SUB_LAST 49
 #define PROTO 1
 #define ASK_MS 3000                          /* client: ask again every 3 s until the info arrives */
@@ -149,6 +152,10 @@ static int n_peers;
  * (0 = none). Declared here until ts.h lists them. */
 extern int campaign_regroup(void);
 extern int campaign_gate_waiting(void);
+
+/* client: the host's "the ready room runs" message (net pump -> tick) */
+static volatile LONG room_host_on;
+static volatile DWORD room_host_at;
 
 /* client: the host's "a gate waits" message (written in the net pump, shown in the script tick) */
 static volatile LONG gate_seq, gate_missing;
@@ -383,6 +390,9 @@ static void on_message(int peer, unsigned short sub, const unsigned char *d, int
                 send_session(i, peer, k == n_peers || peers[k].sends == 2);
                 break;
             }
+    } else if (sub == SUB_ROOM && game_mode() == MODE_CLIENT && len >= 2) {
+        InterlockedExchange(&room_host_on, d[1] != 0);
+        room_host_at = GetTickCount();
     } else if (sub == SUB_GATE && game_mode() == MODE_CLIENT && len >= 2) {
         InterlockedExchange(&gate_missing, d[1]);
         InterlockedIncrement(&gate_seq);
@@ -486,7 +496,32 @@ static void gate_tick(DWORD now)
 /* ---- the ready room (each machine) ---- */
 typedef void (TSCALL *vt_bool_t)(void *self, int on);
 static rr_hold room;                         /* readyroom.h: the room on this machine and the player it holds */
-static int room_on, room_ready_mask = -1;
+static int room_on, room_ready_mask = -1, room_ui = -1, room_me_ui = -1, room_off_sends;
+static DWORD room_sent;
+
+/* host: tell the joined clients that the room runs (or, 3 times, that it is over) */
+static void room_send(int on)
+{
+    unsigned char b[2] = {PROTO, (unsigned char)on};
+    for (int i = 0; i < slot_count(); i++) {
+        char *s = slot_at(i);
+        if (!s || *(int *)s == 0 || (*(int *)(s + 8) & (SLOT_JOINED | SLOT_READY)) != (SLOT_JOINED | SLOT_READY))
+            continue;
+        coopnet_send(i, SUB_ROOM, b, 2);
+    }
+}
+
+/* the UI strings the pause menu reads where the game's ReadyType does not answer (CoopReadyRoom: the room runs,
+ * CoopReadyMe: this player is ready) */
+static void room_ui_set(int on, int me)
+{
+    char ssl[160], out[32];
+    if (on == room_ui && me == room_me_ui)
+        return;
+    room_ui = on, room_me_ui = me;
+    snprintf(ssl, sizeof ssl, "$ui.SetStr(\"CoopReadyRoom\", \"%d\")\n$ui.SetStr(\"CoopReadyMe\", \"%d\")", on, me);
+    ts_script_run(ssl, out, sizeof out);
+}
 
 static void hold_call(char *pl, int off, int on)
 {
@@ -518,16 +553,31 @@ static int ready_mask(void)
     return mask;
 }
 
+/* this machine's player is ready: the game's ReadyType says NotReady (the button then offers NOT READY), or the ready bit
+ * of its own record (its slot: the server is client id 0, a client finds its id in the network client object) */
+#define NET_CLIENT_OBJ (*(char **)0xfcab38)
 static int own_ready(void)
 {
     char out[32];
     ssl_str("return $ui.GetGameInfo(\"ReadyType\")", out, sizeof out);
-    return strcmp(out, "NotReady") == 0;   /* (the button then offers NOT READY: this player is ready) */
+    if (strcmp(out, "NotReady") == 0)
+        return 1;
+    if (strcmp(out, "Ready") == 0)
+        return 0;
+    char *nc = NET_CLIENT_OBJ;
+    int myid = game_mode() == MODE_CLIENT ? (nc && !IsBadReadPtr(nc + 0x2c, 4) ? *(int *)(nc + 0x2c) : -1) : 0, m = ready_mask();
+    for (int i = 0; m >= 0 && myid >= 0 && i < slot_count() && i < 16; i++) {
+        char *s = slot_at(i);
+        if (s && *(int *)s == myid)
+            return (m >> i) & 1;
+    }
+    return 0;
 }
 
 static void room_tick(DWORD now)
 {
-    int in_room = rules_off && ts_coop_active() && warmup_running(), act, ev;
+    int host_says = game_mode() == MODE_CLIENT && room_host_on && now - room_host_at < 6000;
+    int in_room = rules_off && ts_coop_active() && (warmup_running() || host_says), act, ev;
     char *pl = OWN_PLAYER;
     unsigned since = room.since;
     const void *was_held = room.held;
@@ -547,14 +597,21 @@ static void room_tick(DWORD now)
     if (ev & RR_EV_HELD)
         CLOG("coopsession: ready room: own player %p held (no movement, no input) until the start", (void *)pl);
     if (room.on) {
-        int m = ready_mask();
+        int m = ready_mask(), me = own_ready();
         if (m != room_ready_mask) {
             room_ready_mask = m;
-            CLOG("coopsession: ready room: ready players (slot bits) %#x of %d slot(s)", m, slot_count());
+            CLOG("coopsession: ready room: ready players (slot bits) %#x of %d slot(s); this machine %s (warm-up state %s)", m, slot_count(),
+                 me ? "READY" : "not ready", warmup_running() ? "here" : "from the host's message");
         }
-        if ((ev & RR_EV_HINT) && !own_ready())
+        room_ui_set(1, me);
+        if ((ev & RR_EV_HINT) && !me)
             show_hint("GAME_MP_DESC_NOT_READY");
-    }
+        if (game_mode() != MODE_CLIENT && now - room_sent >= 2000)
+            room_sent = now, room_send(1), room_off_sends = 3;
+    } else if (room_ui == 1)
+        room_ui_set(0, 0);
+    if (!room.on && room_off_sends > 0 && game_mode() != MODE_CLIENT && now - room_sent >= 500)
+        room_sent = now, room_send(0), room_off_sends--;
     if (ev & RR_EV_LEAVE)
         CLOG("coopsession: ready room over after %u s (%s): the mission starts%s", (now - since) / 1000,
              ts_coop_active() ? "every player is ready" : "the session ended",
@@ -709,6 +766,7 @@ static void frame(float dt)
             CLOG("coopsession: joined a co-op server on \"%.80s\", waiting for its session info", LEVEL_NAME);
         if (!role) {
             ready_levels = 0, ready_room_host = 0;   /* (the next hosted session's first level is a ready room again) */
+            InterlockedExchange(&room_host_on, 0);
             InterlockedExchange(&got_session, 0);
             handled_seq = session_seq;
             client_applied = client_left = client_warned = client_asks = 0;

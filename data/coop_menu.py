@@ -259,7 +259,8 @@ def build(ctx):
     # host's player; client: itself to the host's player) and shows a hint line.
     # The ready room (the first level of a co-op session starts in the game's warm-up with its ready system, see
     # native/coopsession.c): while the game's ReadyType says "Ready" / "NotReady", the game's own READY / NOT READY button
-    # (the stock code of InGameMultiTeam: $mp_rules_sys.Ready()) stands in Regroup's place.
+    # (the stock code of InGameMultiTeam: $mp_rules_sys.Ready()) stands in Regroup's place; where ReadyType does not answer
+    # the DLL's UI strings CoopReadyRoom / CoopReadyMe decide.
     ctx.edit("CacheBlock/ps/ingamemulti.ui", [
         ('''            name        = QuitToMenu
             posX        = center, 100%
@@ -306,6 +307,14 @@ def build(ctx):
          else if $ui.GetGameInfo("ReadyType") == "NotReady"
             Element("Regroup").Show(false)
             Element("CoopReady").SetText("UI_BTN_NOT_READY")
+         else if $ui.GetStr("CoopReadyRoom") == "1"
+            // (the DLL's word where the game's ReadyType does not answer on this machine)
+            Element("Regroup").Show(false)
+            if $ui.GetStr("CoopReadyMe") == "1"
+               Element("CoopReady").SetText("UI_BTN_NOT_READY")
+            else
+               Element("CoopReady").SetText("UI_BTN_READY")
+            end
          else
             Element("CoopReady").Show(false)
          end
