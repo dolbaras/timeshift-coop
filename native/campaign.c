@@ -2406,6 +2406,8 @@ int campaign_console(const char *text, char *out, int size)
         }
         return 1;
     }
+    if (!strcmp(cmd, "radar"))   /* "!cp radar" (lab): the player table and the players among the radar's records (coopsession.c) */
+        return coopsession_radar_report(out, size), 1;
     if (!strcmp(cmd, "regroup")) {
         int n = campaign_regroup();
         if (n < 0)

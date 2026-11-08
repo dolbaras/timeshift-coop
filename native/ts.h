@@ -38,6 +38,9 @@ int coopnet_listen(unsigned short first, unsigned short last, coopnet_recv fn); 
 /* coopsession.c: the co-op session (network game on a campaign level), its settings, the version check */
 void coopsession_install(void);   /* before timesync_install: sets the TS_TIMESYNC default */
 int ts_coop_active(void);         /* 1 = co-op session now (any thread; reads game state only) */
+extern volatile int ts_radar_force;   /* split.c sets it around its own FUN_005F8820 call: RadarType answers ShowAll (radarmate.h) */
+int ts_radar_ready(void);          /* 1 = the RadarType read of FUN_005F8820 is hooked */
+int coopsession_radar_report(char *out, int size);   /* "!cp radar" (lab) */
 int ts_coop_feature(int flag);    /* COOP_F_* of this session: the host's settings (clients get them on join) */
 #define COOP_F_ACTIVE 1
 #define COOP_F_TIMESYNC 2
@@ -95,6 +98,7 @@ void gamepad_poll_player2(int on);   /* split.c: the next input polls read pad 2
 /* split.c: local split screen, player 2 on pad 2 (TS_SPLIT=1, prototype) */
 void split_install(void);
 unsigned char *split_player2(void);   /* the second player run on this machine (split screen, a client's player 2), or NULL */
+void *split_radar_record(void);       /* the split screen's shared radar record (radarmate.h), or NULL */
 void gamepad_set_player2_pad(const void *xinput_gamepad);   /* gamepad.c: player 2's pad state from elsewhere (NULL: pad 2) */
 void gamepad_mask_player2(unsigned short buttons, int triggers);   /* gamepad.c: buttons (and both triggers) player 2's commands do not get */
 

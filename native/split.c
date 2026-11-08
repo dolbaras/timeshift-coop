@@ -24,6 +24,8 @@
  *   first-person weapons (template in-use mark lifted at its spawn), the script name `player2`, no damage
  *   from player 1 and none to it, and a respawn next to player 1 instead of the single-player death.
  * - Sound: the listener update runs in the game update, outside the render span, so it follows player 1.
+ * - Radar: each half's HUD radar shows the other player (one radar record of the mod's own whose object is the other
+ *   player while a view is drawn, NULL otherwise; radarmate.h). TS_SPLIT_RADAR=0: off.
  *
  *   TS_SPLIT=1           on (prototype; off unless set)
  *   TS_SPLIT_STAGE=n     1: the normal frame in one half only; 2: + a second camera (an offset copy of
@@ -47,6 +49,7 @@
 
 #include "ts.h"
 #include "p2axes.h"
+#include "radarmate.h"
 
 #define TSCALL __attribute__((thiscall))
 
@@ -494,6 +497,13 @@ static BYTE *rc;                /* the render camera: a copy of the view's camer
 static BYTE *cam2;              /* player 2's camera (stage 2: an offset copy of player 1's) */
 
 static BYTE *p2;                /* player 2 */
+/* The other player on the HUD radar (radarmate.h): one record of the mod's own, made by the stock FUN_005F8820 on a one-entry list of the
+ * mod's own (its cell names player 2); its object is set only while a view is drawn (sr_view) and is NULL at any other moment. */
+static DWORD sr_list[0x108 / 4], sr_entry[RM_ENTRY_SIZE / 4];
+static BYTE *sr_cell;
+static BYTE *sr_rec;
+static int sr_off, sr_made, sr_logged_view;
+static DWORD sr_last;
 static BYTE *p1_seen;           /* the player 1 object p2 was made next to (a new one: new level) */
 static DWORD p1_since;
 static BYTE *ctx2;              /* player 2's command context (a copy of GAME with its own entries) */
@@ -646,6 +656,8 @@ __attribute__((naked)) static void fp_proj_stub(void)
 
 static void restore_globals(void)
 {
+    if (sr_rec)   /* (the radar record names a player only while a view is drawn) */
+        *(BYTE **)(sr_rec + RM_REC_OBJ) = NULL;
     if (!swapped)
         return;
     CAM = saved_cam;
@@ -690,6 +702,20 @@ static void restore_globals(void)
  * Present: its flag word 1). Each half then updates as often as the game does, not every second frame. */
 static int both_mode, in_pass2, force_view = -1;
 static void second_pass(void *r);
+
+/* The radar record's object for view v: player 1's view shows player 2, player 2's view shows player 1 (each half's radar is drawn
+ * relative to [0xfc8180], swapped to the view's player). */
+static void sr_view(int v)
+{
+    if (!sr_rec)
+        return;
+    unsigned o = rm_view_obj(v, (unsigned)(uintptr_t)saved_pb, p2 && *(DWORD *)p2 == PLAYER_VTBL ? (unsigned)(uintptr_t)p2 : 0);
+    *(BYTE **)(sr_rec + RM_REC_OBJ) = (BYTE *)(uintptr_t)o;
+    if (o && sr_logged_view < 4) {
+        sr_logged_view++;
+        ts_log("split: radar: view %d draws the other player (%08x) on its radar (record %p)", v, o, (void *)sr_rec);
+    }
+}
 
 static void TSCALL hook_fstart(void *r)
 {
@@ -740,6 +766,7 @@ static void TSCALL hook_fstart(void *r)
                 geo_swapped = 1;
             }
         }
+        sr_view(view);
         fx_apply_view(view);
         /* The other player's body is drawn in this view. The render prep skips nodes with +4 bit 0x10000 in the
          * main view (view entry flags 0, 0x9a1389): the local player's body has it, and both players are local
@@ -3760,10 +3787,46 @@ static void mem_log(void)
            (double)largest / 1048576, (double)m.ullAvailVirtual / 1048576);
 }
 
+/* The split screen's radar record (radarmate.h): made while both players are in play, again when the radar has dropped it (a new HUD). */
+static void split_radar_tick(void)
+{
+    if (sr_off || stage < 3 || !p2 || *(DWORD *)p2 != PLAYER_VTBL || swapped || as2.depth || !PLAYER_B || PLAYER_B == p2 || remote_host
+        || !in_play())
+        return;
+    if (!rm_split_need((unsigned)(uintptr_t)sr_rec, sr_rec ? (int)*(volatile LONG *)(sr_rec + RM_REC_REFS) : 0))
+        return;
+    DWORD now = GetTickCount();
+    if (now - sr_last < 2000 || sr_made >= 16 || !ts_radar_ready() || !*(void **)RM_HUD_CELL)
+        return;
+    sr_last = now;
+    BYTE *old = sr_rec;
+    memset(sr_entry, 0, sizeof sr_entry);   /* (an old record keeps the mod's reference: never released, its object NULL) */
+    sr_cell = p2;
+    sr_entry[RM_ENTRY_OBJ / 4] = (DWORD)(uintptr_t)&sr_cell;
+    sr_list[0xfc / 4] = (DWORD)(uintptr_t)sr_entry;
+    sr_list[0x100 / 4] = 1;
+    ts_radar_force = 1;
+    ((void (__stdcall *)(void *, int))RM_REGISTER)(sr_list, 0);
+    ts_radar_force = 0;
+    sr_rec = (BYTE *)(uintptr_t)sr_entry[RM_ENTRY_REC / 4];
+    if (sr_rec)
+        *(BYTE **)(sr_rec + RM_REC_OBJ) = NULL;
+    sr_made++;
+    sr_logged_view = 0;
+    ts_log("split: radar: a record for the other player made: %p (refs %ld; the previous %p), %d so far", (void *)sr_rec,
+           sr_rec ? (long)*(LONG *)(sr_rec + RM_REC_REFS) : 0L, (void *)old, sr_made);
+}
+
+void *split_radar_record(void)
+{
+    return sr_rec;
+}
+
 static void split_tick(float dt)
 {
     (void)dt;
     coopsave_tick();
+    split_radar_tick();
     mem_log();
     split_choice();
     if (walklog && p2) {   /* (tests, TS_SPLIT_WALKLOG=1: both players' camera positions and walk values each 500 ms) */
@@ -4026,6 +4089,7 @@ void split_install(void)
             ts_log("split: both views are drawn in every frame (TS_SPLIT_BOTH / ts_coop.ini [Split] BothViews)");
     }
     walklog = ts_env("TS_SPLIT_WALKLOG", v, sizeof v) && v[0] == '1';
+    sr_off = ts_env("TS_SPLIT_RADAR", v, sizeof v) && v[0] == '0';   /* (TS_SPLIT_RADAR=0: no radar record for the other player) */
     shared_axes = ts_env("TS_SPLIT_SHAREDAXES", v, sizeof v) && v[0] == '1';   /* (tests: the engine's shared walk smoothing) */
     no_geo_owner = ts_env("TS_SPLIT_NOGEO", v, sizeof v) && v[0] == '1';   /* (tests: without the owner swap) */
     fp_share = ts_env("TS_SPLIT_FPSHARE", v, sizeof v) && v[0] == '1';
