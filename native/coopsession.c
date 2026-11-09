@@ -28,6 +28,9 @@
  *   wrapper that reads 0. TS_COOP_MPRULES=1 keeps them.
  *   (Minimum players, time and score limit are profile keys: the co-op menu sets them for its server and
  *   puts the player's own values back at the main menu; see mod/docs/building.md.)
+ * - The partner on the HUD radar (radarmate.h): the RadarType read of the player-blip registration FUN_005F8820 (call at 0x5f8900) answers 2
+ *   (ShowAll) in a co-op session, and every 2 s a player of the multiplayer list without a radar record gets FUN_005F8820. TS_COOP_RADAR=0 keeps
+ *   the stock radar (no player blips with the shipped game type). The split screen's player 2 has its own record (split.c). "!cp radar": lab report.
  * - No multiplayer score bar (match time, frags) on the HUD: the HUD element (type scoreBar) hides itself when
  *   its check 0x5b2b90, called at 0x5b2c80, returns 0; in a co-op session it does. (A hud.ui script cannot
  *   do it: the element sets its own visibility every frame.)
@@ -52,6 +55,7 @@
 #include <string.h>
 
 #include "ts.h"
+#include "radarmate.h"
 
 #define TSCALL __attribute__((thiscall))
 
@@ -94,7 +98,7 @@
 #define MAX_PEERS 32
 #define VER_MAX 40
 
-static int enabled, ff_off = 1, rules_off = 1;
+static int enabled, ff_off = 1, rules_off = 1, radar_on = 1;
 static char my_version[VER_MAX + 1] = TS_VERSION;   /* (TS_COOP_VERSION: lab test of the version check) */
 static int host_flags, host_difficulty = 255, host_maxplayers;
 static int last_role = -1;
@@ -195,6 +199,153 @@ static int TSCALL opt_rule_off(void *store, int index, int *out)
     if (r && out && rules_off && ts_coop_active())
         *out = 0;
     return r;
+}
+
+/* The partner on the radar: FUN_005F8820's RadarType read answers ShowAll in a co-op session, and for the split screen's own call
+ * (ts_radar_force, split.c) (radarmate.h). */
+volatile int ts_radar_force;
+static int radar_hooked;
+int ts_radar_ready(void) { return radar_hooked; }
+typedef void *(TSCALL *optget_t)(void *option, void *a1, int *value);
+static void *TSCALL opt_radar_all(void *option, void *a1, int *value)
+{
+    void *r = ((optget_t)RM_OPT_GET)(option, a1, value);
+    if (value)
+        *value = rm_radar_type(*value, ts_coop_active(), radar_on, ts_radar_force);
+    return r;
+}
+
+static unsigned radar_regs, radar_painted;
+/* The radar's own list can hold an OLDER record of the partner than the player table's entry (a later registration makes a new record, which the
+ * radar's add drops because the object is already listed, FUN_005B07E0): live n100pair-20261109-055401 painted the entries' records and the blip stayed
+ * red. So the records the radar draws are painted: its list (R = [0x1095ec8]->vf 0x1c, nodes at R +0x140), every record whose object is a partner. */
+static void radar_paint_listed(const rm_entry *e, int n, unsigned local)
+{
+    void *hud = *(void **)RM_HUD_CELL;
+    if (!hud || IsBadReadPtr(hud, 4))
+        return;
+    char *r = ((char *(TSCALL *)(void *))(*(void ***)hud)[RM_HUD_RADAR / 4])(hud);
+    if (!r || IsBadReadPtr(r + RM_R_LIST, 4))
+        return;
+    int k = 0;
+    for (unsigned *node = *(unsigned **)(r + RM_R_LIST); node && !IsBadReadPtr(node, 8) && k < 256; node = (unsigned *)(uintptr_t)node[1], k++) {
+        unsigned rec = node[0];
+        if (!rec || IsBadWritePtr((void *)(uintptr_t)(rec + RM_REC_COLOUR), 16) || IsBadReadPtr((void *)(uintptr_t)(rec + RM_REC_OBJ), 4))
+            continue;
+        unsigned obj = *(unsigned *)(uintptr_t)(rec + RM_REC_OBJ);
+        if (!obj || obj == local)
+            continue;
+        for (int i = 0; i < n; i++) {
+            float *c = (float *)(uintptr_t)(rec + RM_REC_COLOUR);
+            if (e[i].obj == obj && rm_colour_differs(c)) {
+                memcpy(c, rm_partner_colour, sizeof rm_partner_colour);
+                radar_painted++;
+                CLOG("coopsession: radar: the partner's blip on the radar (player entry %d, object %08x, listed record %08x) painted the co-op colour (%u so far)", i,
+                     obj, rec, radar_painted);
+            }
+        }
+    }
+}
+static DWORD radar_last;
+static unsigned radar_obj[64];
+static unsigned char radar_tries[64];
+/* every 2 s in a co-op session: a player of the multiplayer list without a radar record gets one (the stock registration, FUN_005F8820);
+ * an object that got none after RM_MAX_TRIES calls is left alone */
+static void radar_tick(DWORD now)
+{
+    if (!radar_on || !radar_hooked || now - radar_last < 2000)
+        return;
+    radar_last = now;
+    char *list = *(char **)RM_LIST_CELL;
+    if (!list)
+        return;
+    int n = *(int *)(list + 0x100);
+    char *ents = *(char **)(list + 0xfc);
+    if (!ents || n <= 0 || n > 64)
+        return;
+    rm_entry e[64];
+    for (int i = 0; i < n; i++) {
+        char *en = ents + i * RM_ENTRY_SIZE;
+        unsigned *op = *(unsigned **)(en + RM_ENTRY_OBJ);
+        e[i].obj = op ? *op : 0;
+        e[i].flags = *(unsigned *)(en + RM_ENTRY_FLAGS);
+        e[i].rec = *(unsigned *)(en + RM_ENTRY_REC);
+        if (radar_obj[i] != e[i].obj)
+            radar_obj[i] = e[i].obj, radar_tries[i] = 0;
+        e[i].tries = radar_tries[i];
+    }
+    unsigned local = *(unsigned *)RM_LOCAL_CELL;
+    for (int k = 0; k < n; k++) {   /* the partners' blips in the co-op colour (the records the stock team join made included) */
+        float *c = e[k].rec && e[k].obj != local && !IsBadWritePtr((void *)(uintptr_t)(e[k].rec + RM_REC_COLOUR), 16) ? (float *)(uintptr_t)(e[k].rec + RM_REC_COLOUR) : NULL;
+        if (c && rm_colour_differs(c)) {
+            memcpy(c, rm_partner_colour, sizeof rm_partner_colour);
+            radar_painted++;
+            CLOG("coopsession: radar: the partner's blip (player entry %d, object %08x, record %08x) painted the co-op colour (%u so far)", k, e[k].obj, e[k].rec,
+                 radar_painted);
+        }
+    }
+    radar_paint_listed(e, n, local);
+    int i = rm_next(e, n, local);
+    if (i < 0)
+        return;
+    ((void (__stdcall *)(void *, int))RM_REGISTER)(list, i);
+    unsigned rec = *(unsigned *)(ents + i * RM_ENTRY_SIZE + RM_ENTRY_REC);
+    radar_tries[i]++;
+    radar_regs++;
+    CLOG("coopsession: radar: the partner (player entry %d, object %08x, flags %08x) put on the HUD radar: record %08x (try %d, %u so far)", i,
+         e[i].obj, e[i].flags, rec, radar_tries[i], radar_regs);
+}
+
+/* "!cp radar" (lab): the player table's entries and the players among the radar's records */
+int coopsession_radar_report(char *out, int size)
+{
+    unsigned local = *(unsigned *)RM_LOCAL_CELL, srec = (unsigned)(uintptr_t)split_radar_record();
+    int n = snprintf(out, size, "radar: hook %d, co-op %d, local player %08x, split record %08x", radar_hooked, ts_coop_active(), local, srec);
+    if (srec && !IsBadReadPtr((void *)(uintptr_t)srec, 0x30))
+        n += snprintf(out + n, size - n, " (refs %d, object %08x)", *(int *)(uintptr_t)(srec + RM_REC_REFS), *(unsigned *)(uintptr_t)(srec + RM_REC_OBJ));
+    char *list = *(char **)RM_LIST_CELL;
+    unsigned tobj[16];
+    int nt = 0;
+    if (list && !IsBadReadPtr(list, 0x104)) {
+        int c = *(int *)(list + 0x100);
+        char *ents = *(char **)(list + 0xfc);
+        n += snprintf(out + n, size - n, "; player table %d:", c);
+        for (int i = 0; ents && i < c && i < 16 && n < size - 120 && !IsBadReadPtr(ents + i * RM_ENTRY_SIZE, RM_ENTRY_SIZE); i++) {
+            char *en = ents + i * RM_ENTRY_SIZE;
+            unsigned *op = *(unsigned **)(en + RM_ENTRY_OBJ), rec = *(unsigned *)(en + RM_ENTRY_REC);
+            unsigned obj = op && !IsBadReadPtr(op, 4) ? *op : 0;
+            if (obj && nt < 16)
+                tobj[nt++] = obj;
+            unsigned robj = rec && !IsBadReadPtr((void *)(uintptr_t)rec, 0x30) ? *(unsigned *)(uintptr_t)(rec + RM_REC_OBJ) : 0;
+            n += snprintf(out + n, size - n, " [%d obj %08x%s flags %08x rec %08x -> %08x]", i, obj, obj && obj == local ? " (local)" : "",
+                          *(unsigned *)(en + RM_ENTRY_FLAGS), rec, robj);
+        }
+    } else {
+        n += snprintf(out + n, size - n, "; no player table");
+    }
+    void *hud = *(void **)RM_HUD_CELL;
+    if (hud && !IsBadReadPtr(hud, 4) && n < size - 120) {
+        char *r = ((char *(TSCALL *)(void *))(*(void ***)hud)[RM_HUD_RADAR / 4])(hud);
+        int k = 0, np = 0;
+        if (r && !IsBadReadPtr(r + RM_R_LIST, 4))
+            for (unsigned *node = *(unsigned **)(r + RM_R_LIST); node && !IsBadReadPtr(node, 8) && k < 256; node = (unsigned *)(uintptr_t)node[1], k++) {
+                unsigned rec = node[0];
+                unsigned obj = rec && !IsBadReadPtr((void *)(uintptr_t)rec, 0x30) ? *(unsigned *)(uintptr_t)(rec + RM_REC_OBJ) : 0;
+                unsigned vt = obj && !IsBadReadPtr((void *)(uintptr_t)obj, 4) ? *(unsigned *)(uintptr_t)obj : 0;
+                int player = 0;
+                for (int t = 0; t < nt; t++)
+                    if (obj && obj == tobj[t])
+                        player = 1;
+                if (rec && (player || vt == RM_PLAYER_VTBL || rec == srec || obj == local) && n < size - 80) {
+                    np++;
+                    const float *c = (const float *)(uintptr_t)(rec + RM_REC_COLOUR);
+                    n += snprintf(out + n, size - n, " {rec %08x obj %08x vt %08x refs %d colour %.0f,%.0f,%.0f}", rec, obj, vt, *(int *)(uintptr_t)(rec + RM_REC_REFS),
+                                  c[0], c[1], c[2]);
+                }
+            }
+        n += snprintf(out + n, size - n, "; radar %p: %d records, %d of players listed", (void *)r, k, np);
+    }
+    return n;
 }
 
 /* The HUD score bar is wanted outside co-op only. */
@@ -560,8 +711,10 @@ static void frame(float dt)
         gate_tick(GetTickCount());
     } else if (role == MODE_CLIENT)
         client_tick();
-    if (role)
+    if (role) {
         regroup_tick(GetTickCount());
+        radar_tick(GetTickCount());
+    }
 }
 
 void coopsession_install(void)
@@ -595,6 +748,7 @@ void coopsession_install(void)
     }
     ff_off = !env_on("TS_COOP_FF", 0);
     rules_off = !env_on("TS_COOP_MPRULES", 0);
+    radar_on = env_on("TS_COOP_RADAR", 1);
     enabled = 1;
     static const unsigned char ff_want[6] = {0x0f, 0x85, 0x93, 0x00, 0x00, 0x00};
     unsigned char ff_rep[6] = {0x0f, 0x85};
@@ -604,8 +758,9 @@ void coopsession_install(void)
                    + patch_call(SITE_READY, OPT_GETINT, (void *)opt_rule_off)
                    + patch_call(SITE_READY_HINT, OPT_GETINT, (void *)opt_rule_off);
     int ok_hud = patch_call(SITE_SCOREBAR, SCOREBAR_WANTED, (void *)score_bar_wanted);
+    int ok_radar = radar_hooked = radar_on ? patch_call(RM_OPT_SITE, RM_OPT_GET, (void *)opt_radar_all) : 0;
     int ok_tick = ts_frame_add(frame), ok_net = coopnet_listen(SUB_SESSION, SUB_LAST, on_message);
-    ts_log("coopsession: on, version %s (friendly fire %s %d, warm-up/ready %s %d/3, score bar off %d, session messages %s)",
-           my_version, ff_off ? "off" : "stock", ok_ff, rules_off ? "off" : "stock", ok_rules, ok_hud,
+    ts_log("coopsession: on, version %s (friendly fire %s %d, warm-up/ready %s %d/3, score bar off %d, partner on the radar %s %d, session messages %s)",
+           my_version, ff_off ? "off" : "stock", ok_ff, rules_off ? "off" : "stock", ok_rules, ok_hud, radar_on ? "on" : "off (TS_COOP_RADAR=0)", ok_radar,
            ok_tick && ok_net ? "on" : "OFF: no script tick or mod messages");
 }

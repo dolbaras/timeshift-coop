@@ -13,3 +13,5 @@ mkdir -p ../build
 "$ZIG" cc -O1 -o ../build/rewindfollow_test.exe rewindfollow_test.c
 ../build/rewindfollow_test.exe
 sh ual_test.sh
+"$ZIG" cc -O1 -o ../build/radarmate_test.exe radarmate_test.c
+../build/radarmate_test.exe
