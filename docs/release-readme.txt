@@ -61,7 +61,22 @@ What the mod does
   join as usual. On a host both halves of its screen play in the session and the other players see
   both bodies. On a client the second player is supported in basic form (experimental).
 
-New in 0.1.3
+New in 0.1.4
+- Radar: the other players are blue blips on the HUD radar, in a network game and in split screen.
+  Before, the radar never showed them.
+- Ready step: the first chapter of a co-op game waits until every player picked READY in the pause
+  menu (see "What the mod does").
+- Other mods' ASI loaders: on PCs with more than 8 CPU threads the game crashed at the start when
+  an ASI loader of another mod (Ultimate ASI Loader as bin\winmm.dll, ddraw.dll or d3d9.dll) started
+  before co-op, because the loader undid co-op's CPU fix. Fixed; checked in the game
+  with Ultimate ASI Loader 10.0.2 (as bin\winmm.dll) and a test plugin on a PC with 12 threads. The installer
+  keeps such a loader that was bin\dinput8.dll running as bin\winmm.dll (see "Install").
+- Languages: the installer, the shortcut's update messages and the setup exe are also in Polish,
+  Czech and Hungarian. The controls screen names the stick directions as the game does ("Forward on
+  Left Stick", in the game's language) instead of PAD_LSTICK (Forw); the stick clicks (LS / RS) in
+  the hints are named in every language.
+
+Changes in 0.1.3
 - Level 2 (City, part 2), the covered walkway the robot wrecks, in a network game: when a player
   reversed time during the collapse, the host's walkway came back but the other players' games let
   the collapse run on (one player saw the walkway and another did not; most of its kill zones never
@@ -80,6 +95,8 @@ New in 0.1.3
 - 0.1.2 fixed the slow walk of player 1 in split screen while player 2 stood still.
 
 Not finished / known limits
+- Ready step: a second player on pad 2 in a network game (split screen on a host or a client) is not
+  held while the others wait and is not counted by the ready check.
 - Quads on the quad levels (9 and 12): the enemies' quads follow the host's positions on the clients'
   screens (checked by coordinates on level 9); a client driving a quad was run on level 12 only, and
   how a third machine sees it is not tested. The truck ride at the start of level 9 works: a client
@@ -179,8 +196,8 @@ so its plugins (bin\scripts, bin\plugins) stay on. Any other mod's dinput8.dll i
 and is off while co-op is installed. Removing co-op puts it back. A dinput8.dll another mod puts over
 co-op's later is kept too: the next install or update of co-op keeps it as the original, the
 uninstaller leaves it in place. Other DLLs such mods use (d3d9.dll, ddraw.dll, dsound.dll,
-version.dll, winmm.dll) are not touched. Not checked in the game with a real ASI plugin (none is
-known for TimeShift).
+version.dll, winmm.dll) are not touched. Checked in the game with Ultimate ASI Loader 10.0.2 and a
+test plugin (no ASI plugin made for TimeShift is known).
 Good to know about the installer:
 - A game folder under C:\Program Files (x86) makes Windows ask for administrator rights (once for the
   installer; the shortcut's update asks each time it installs a new version).

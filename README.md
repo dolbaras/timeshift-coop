@@ -4,11 +4,12 @@ A co-op mod for **TimeShift** (2007, Saber Interactive / Sierra): play the whole
 players over a local network or the Internet, on the game's **own netcode**, plus local **split screen** on one PC,
 and the stock multiplayer brought back to life without GameSpy.
 
-**Status: [version 0.1.1](https://github.com/dolbaras/timeshift-coop/releases/latest) is out** — it adds the Steam edition (with
-your consent and a community update package), a one-file setup exe, a fuller Continue (real loadout), Regroup and gate hints,
-the zeppelin-intro voices and client-driven quad, better split screen and an easy bug-report collector; every player needs the
-same version. ✅ below means checked in the game on test PCs (the whole campaign was run host + client by an automatic bot,
-24 of 24 levels, again for 0.1.1); 🟨 is written and checked only partly. Not yet done: a whole campaign played by people,
+**Status: [version 0.1.4](https://github.com/dolbaras/timeshift-coop/releases/latest) is out** — the other players on the HUD
+radar (network and split screen), a Ready step before the first chapter of a co-op game, co-op next to other mods' ASI loaders
+(Ultimate ASI Loader), and the installer and texts in all nine languages of the game; 0.1.1 added the Steam edition (with your
+consent and a community update package), a one-file setup exe and a fuller Continue. Every player needs the same version. ✅
+below means checked in the game on test PCs (the whole campaign was run host + client by an automatic bot, 24 of 24 levels);
+🟨 is written and checked only partly. Not yet done: a whole campaign played by people,
 play over the Internet (LAN, virtual LAN and emulated bad links were tested), sound judged by ear (soldiers' voices and gibbing
 sounds are still host-only), a real Steam installation. The full list is in the release notes. Please report what goes wrong
 in the [issues](https://github.com/dolbaras/timeshift-coop/issues).
@@ -30,6 +31,8 @@ updates the mod by itself, from the zip). Details: `README-COOP.txt` in the arch
 | Gamepad (XInput) in game and menus | ✅ |
 | Co-op menu in the main menu: host a campaign chapter (difficulty, 2-4 players, LAN/Internet, password), join by LAN list, Internet list or address; version check | ✅ |
 | Story on the host, replayed on clients: story zones, checkpoints, level exits, team restart; joining a level already in progress | ✅ |
+| Ready step before the first chapter of a co-op game (the game's own READY / NOT READY in the pause menu, nobody moves until all are ready) | ✅ |
+| The other players on the HUD radar (blue blips; network and split screen) | ✅ |
 | Time powers in co-op: slow and stop for everyone, one power at a time, each player's own energy | ✅ |
 | Reverse in co-op (the game's own time recorder on the host; puzzle actors, force fields, container trap) | ✅ |
 | Continue: the host's checkpoint of a co-op game is saved per profile with the real loadout (weapons, ammunition, grenades; clients' too), Co-op -> Continue hosts it again | ✅ |
@@ -76,11 +79,12 @@ License: MIT (see `LICENSE`). TimeShift is a trademark of its owners; this proje
 по локальной сети или через Интернет, на **родном сетевом коде** игры, а также **разделённый экран** на одном ПК и
 ожившая стандартная сетевая игра без GameSpy.
 
-**Статус: [версия 0.1.1](https://github.com/dolbaras/timeshift-coop/releases/latest) вышла** — издание Steam (с вашего согласия и
-пакетом обновления от сообщества), установщик одним файлом, более полное «Продолжить» (настоящее снаряжение), «Собраться» и
-подсказки у ворот, голоса вступлений на дирижабле и езда клиента на квадроцикле, лучший разделённый экран и простой сбор
-журналов для отчёта; у всех игроков должна быть одна версия. ✅ ниже — проверено в игре на тестовых ПК (всю кампанию
-автоматический бот прошёл хостом и клиентом, 24 уровня из 24, снова для 0.1.1); 🟨 — написано и проверено частично. Ещё не
+**Статус: [версия 0.1.4](https://github.com/dolbaras/timeshift-coop/releases/latest) вышла** — остальные игроки на радаре
+(по сети и на разделённом экране), шаг «Готов» перед первой главой кооп-игры, кооп рядом с загрузчиками ASI других модов
+(Ultimate ASI Loader), установщик и тексты на всех девяти языках игры; в 0.1.1 появились издание Steam (с вашего согласия и
+пакетом обновления от сообщества), установщик одним файлом и более полное «Продолжить». У всех игроков должна быть одна
+версия. ✅ ниже — проверено в игре на тестовых ПК (всю кампанию автоматический бот прошёл хостом и клиентом, 24 уровня из 24);
+🟨 — написано и проверено частично. Ещё не
 сделано: полное прохождение кампании живыми людьми, игра через Интернет (проверены LAN, виртуальная LAN и эмулируемые плохие
 каналы), оценка звука на слух (голоса солдат и звуки расчленения пока только у хоста), настоящая установка Steam. Полный
 список — в описании релиза. О проблемах пишите в [issues](https://github.com/dolbaras/timeshift-coop/issues).
@@ -100,6 +104,8 @@ License: MIT (see `LICENSE`). TimeShift is a trademark of its owners; this proje
 | Геймпад (XInput) в игре и меню | ✅ |
 | Меню «Кооператив»: создание игры на главе кампании (сложность, 2-4 игрока, LAN/Интернет, пароль), подключение из списка или по адресу; проверка версии | ✅ |
 | Сюжет ведёт хост, клиенты повторяют: сюжетные зоны, чекпоинты, переходы, общий рестарт; подключение к уже идущему уровню | ✅ |
+| Шаг «Готов» перед первой главой кооп-игры (собственные «ГОТОВ» / «НЕ ГОТОВ» игры в меню паузы, никто не двигается, пока не готовы все) | ✅ |
+| Остальные игроки на радаре (синие отметки; по сети и на разделённом экране) | ✅ |
 | Способности времени в кооперативе: замедление и остановка для всех, одна способность за раз, у каждого своя энергия | ✅ |
 | Перемотка в кооперативе (встроенная запись времени игры на хосте; объекты головоломок, силовые поля, ловушка контейнера) | ✅ |
 | Продолжить: контрольная точка хоста кооп-игры сохраняется для профиля с настоящим снаряжением (оружие, патроны, гранаты; у клиентов тоже), «Кооператив» -> «Продолжить» запускает её снова | ✅ |
