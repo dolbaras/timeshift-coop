@@ -111,6 +111,6 @@ int main(void)
     CHECK(act == RR_NONE && (ev & RR_EV_ENTER) && !(ev & RR_EV_HELD), "no player yet: no call");
     rr_step(&h, 0, 0, 200, &act, &ev);
     CHECK(act == RR_NONE && (ev & RR_EV_LEAVE), "the room ends without a player: nothing to release");
-    printf("readyroom: %d checks, %d failed%s\n", checks, fails, fails == 1 ? " (expected: the 0.1.3 rules' line)" : "");
-    return fails == 1 ? 0 : 1;   /* exactly the one deliberate failure of the old rules */
+    printf("readyroom: %d checks, %d failed\n", checks, fails);
+    return fails ? 1 : 0;   /* (the 0.1.3 rules' check above passes only when the room differs from them) */
 }
