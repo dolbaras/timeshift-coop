@@ -20,6 +20,8 @@
  * record gets FUN_005F8820(list, i) (in case no team join ran for it in this mode), at most RM_MAX_TRIES times per object. The record's lifetime
  * stays the game's (entry +0x80, taken out with the entry).
  *
+ * Both fixes paint the partner's record blue (rm_partner_colour).
+ *
  * The fix, split screen (split.c): player 2 is a second local `player`, in no list. One record is made by the stock FUN_005F8820 on a list of
  * the mod's own (one entry whose cell names player 2, RadarType answered 2 for that call); its object is set only while a view is drawn (view 0,
  * player 1's: player 2; view 1, player 2's: player 1 - each half's radar is drawn relative to its own player, [0xfc8180] being swapped) and is
@@ -47,6 +49,19 @@
 #define RM_REC_REFS    4
 #define RM_REC_OBJ     0x2c
 #define RM_PLAYER_VTBL 0x00d72f78u /* the campaign class `player` */
+#define RM_REC_COLOUR  0x34        /* 4 floats r g b a (0..255): the ctor copies its colour argument there, the blip draw reads it (0x5b0ab8) */
+/* FUN_005F8820's colours (0x5f89bb..): red (255,64,64,255) = an enemy player (every player in the co-op session's game type, where no team sets the
+ * friendly ones), green (70,211,70,255) = the friendly team, blue (78,93,255,255) = entry +0x54 == 1. Live (n100pair-20261109-034448): the partner's
+ * blip was RED, the colour of the enemy soldiers in the campaign. The co-op partner is drawn blue: neither an enemy (red) nor a rebel (green). */
+static const float rm_partner_colour[4] = {78.0f, 93.0f, 255.0f, 255.0f};
+/* does a record need the partner colour? (its colour differs from it) */
+static inline int rm_colour_differs(const float c[4])
+{
+    for (int k = 0; k < 4; k++)
+        if (c[k] != rm_partner_colour[k])
+            return 1;
+    return 0;
+}
 
 typedef struct { unsigned obj, flags, rec, tries; } rm_entry;
 

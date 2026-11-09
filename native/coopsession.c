@@ -215,7 +215,7 @@ static void *TSCALL opt_radar_all(void *option, void *a1, int *value)
     return r;
 }
 
-static unsigned radar_regs;
+static unsigned radar_regs, radar_painted;
 static DWORD radar_last;
 static unsigned radar_obj[64];
 static unsigned char radar_tries[64];
@@ -244,7 +244,17 @@ static void radar_tick(DWORD now)
             radar_obj[i] = e[i].obj, radar_tries[i] = 0;
         e[i].tries = radar_tries[i];
     }
-    int i = rm_next(e, n, *(unsigned *)RM_LOCAL_CELL);
+    unsigned local = *(unsigned *)RM_LOCAL_CELL;
+    for (int k = 0; k < n; k++) {   /* the partners' blips in the co-op colour (the records the stock team join made included) */
+        float *c = e[k].rec && e[k].obj != local && !IsBadWritePtr((void *)(uintptr_t)(e[k].rec + RM_REC_COLOUR), 16) ? (float *)(uintptr_t)(e[k].rec + RM_REC_COLOUR) : NULL;
+        if (c && rm_colour_differs(c)) {
+            memcpy(c, rm_partner_colour, sizeof rm_partner_colour);
+            radar_painted++;
+            CLOG("coopsession: radar: the partner's blip (player entry %d, object %08x, record %08x) painted the co-op colour (%u so far)", k, e[k].obj, e[k].rec,
+                 radar_painted);
+        }
+    }
+    int i = rm_next(e, n, local);
     if (i < 0)
         return;
     ((void (__stdcall *)(void *, int))RM_REGISTER)(list, i);

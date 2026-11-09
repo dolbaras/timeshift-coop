@@ -56,6 +56,10 @@ int main(void)
     e[0].rec = 0;
     CHECK(rm_next(e, 5, 0x200) == 0, "a record lost (e.g. after a level change): registered again");
 
+    /* the co-op colour */
+    float red[4] = {255, 64, 64, 255}, blue[4] = {78, 93, 255, 255};
+    CHECK(rm_colour_differs(red) && !rm_colour_differs(blue), "a red (enemy) blip is repainted, a blue one is left alone");
+
     /* split screen */
     CHECK(rm_view_obj(0, 0x1000, 0x2000) == 0x2000 && rm_view_obj(1, 0x1000, 0x2000) == 0x1000, "player 1's view: player 2; player 2's view: player 1");
     CHECK(!rm_view_obj(-1, 0x1000, 0x2000) && !rm_view_obj(0, 0x1000, 0) && !rm_view_obj(1, 0, 0x2000) && !rm_view_obj(0, 0x1000, 0x1000),
@@ -103,11 +107,25 @@ int main(void)
                 {0x5b0a52, "\x8b\x4b\x2c\x85\xc9\x0f\x84", 7, "blip draw: a record whose object is NULL is skipped"},
                 {0x5b09d4, "\x8b\x0d\x80\x81\xfc\x00", 6, "blip draw: relative to the local player [0xfc8180]"},
                 {0x5b0962, "\x39\x56\x2c", 3, "radar remove FUN_005B0950: by object"},
+                {0x6aefe1, "\x89\x56\x34", 3, "record ctor: the colour argument goes to +0x34 (+0x38, +0x3c, +0x40 follow)"},
+                {0x5b0ab8, "\xf3\x0f\x10\x43\x34", 5, "blip draw: the colour read from the record +0x34"},
             };
             for (unsigned k = 0; k < sizeof f / sizeof f[0]; k++) {
                 long q = va_off(d, n, f[k].va);
                 CHECK(q >= 0 && !memcmp(d + q, f[k].b, (size_t)f[k].n), "exe: %s (%08x)", f[k].what, f[k].va);
             }
+            /* FUN_005F8820's colour constants: the blue set (0xdc97f8 78, 0xdc97f4 93, 0xdc8e3c 255) is the one the co-op partner gets */
+            unsigned cv[3] = {0xdc97f8u, 0xdc97f4u, 0xdc8e3cu};
+            float want[3] = {78.0f, 93.0f, 255.0f};
+            int cok = 1;
+            for (int k = 0; k < 3; k++) {
+                long q = va_off(d, n, cv[k]);
+                float v = 0;
+                if (q >= 0) memcpy(&v, d + q, 4);
+                if (q < 0 || v != want[k]) cok = 0;
+            }
+            CHECK(cok && rm_partner_colour[0] == 78.0f && rm_partner_colour[1] == 93.0f && rm_partner_colour[2] == 255.0f,
+                  "exe: the co-op colour is the game's own blue of FUN_005F8820 (78, 93, 255)");
         } else {
             CHECK(0, "exe read");
         }

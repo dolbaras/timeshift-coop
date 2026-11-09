@@ -3809,8 +3809,10 @@ static void split_radar_tick(void)
     ((void (__stdcall *)(void *, int))RM_REGISTER)(sr_list, 0);
     ts_radar_force = 0;
     sr_rec = (BYTE *)(uintptr_t)sr_entry[RM_ENTRY_REC / 4];
-    if (sr_rec)
+    if (sr_rec) {
         *(BYTE **)(sr_rec + RM_REC_OBJ) = NULL;
+        memcpy(sr_rec + RM_REC_COLOUR, rm_partner_colour, sizeof rm_partner_colour);   /* (the co-op colour, radarmate.h) */
+    }
     sr_made++;
     sr_logged_view = 0;
     ts_log("split: radar: a record for the other player made: %p (refs %ld; the previous %p), %d so far", (void *)sr_rec,
