@@ -216,6 +216,36 @@ static void *TSCALL opt_radar_all(void *option, void *a1, int *value)
 }
 
 static unsigned radar_regs, radar_painted;
+/* The radar's own list can hold an OLDER record of the partner than the player table's entry (a later registration makes a new record, which the
+ * radar's add drops because the object is already listed, FUN_005B07E0): live n100pair-20261109-055401 painted the entries' records and the blip stayed
+ * red. So the records the radar draws are painted: its list (R = [0x1095ec8]->vf 0x1c, nodes at R +0x140), every record whose object is a partner. */
+static void radar_paint_listed(const rm_entry *e, int n, unsigned local)
+{
+    void *hud = *(void **)RM_HUD_CELL;
+    if (!hud || IsBadReadPtr(hud, 4))
+        return;
+    char *r = ((char *(TSCALL *)(void *))(*(void ***)hud)[RM_HUD_RADAR / 4])(hud);
+    if (!r || IsBadReadPtr(r + RM_R_LIST, 4))
+        return;
+    int k = 0;
+    for (unsigned *node = *(unsigned **)(r + RM_R_LIST); node && !IsBadReadPtr(node, 8) && k < 256; node = (unsigned *)(uintptr_t)node[1], k++) {
+        unsigned rec = node[0];
+        if (!rec || IsBadWritePtr((void *)(uintptr_t)(rec + RM_REC_COLOUR), 16) || IsBadReadPtr((void *)(uintptr_t)(rec + RM_REC_OBJ), 4))
+            continue;
+        unsigned obj = *(unsigned *)(uintptr_t)(rec + RM_REC_OBJ);
+        if (!obj || obj == local)
+            continue;
+        for (int i = 0; i < n; i++) {
+            float *c = (float *)(uintptr_t)(rec + RM_REC_COLOUR);
+            if (e[i].obj == obj && rm_colour_differs(c)) {
+                memcpy(c, rm_partner_colour, sizeof rm_partner_colour);
+                radar_painted++;
+                CLOG("coopsession: radar: the partner's blip on the radar (player entry %d, object %08x, listed record %08x) painted the co-op colour (%u so far)", i,
+                     obj, rec, radar_painted);
+            }
+        }
+    }
+}
 static DWORD radar_last;
 static unsigned radar_obj[64];
 static unsigned char radar_tries[64];
@@ -254,6 +284,7 @@ static void radar_tick(DWORD now)
                  radar_painted);
         }
     }
+    radar_paint_listed(e, n, local);
     int i = rm_next(e, n, local);
     if (i < 0)
         return;
@@ -273,6 +304,8 @@ int coopsession_radar_report(char *out, int size)
     if (srec && !IsBadReadPtr((void *)(uintptr_t)srec, 0x30))
         n += snprintf(out + n, size - n, " (refs %d, object %08x)", *(int *)(uintptr_t)(srec + RM_REC_REFS), *(unsigned *)(uintptr_t)(srec + RM_REC_OBJ));
     char *list = *(char **)RM_LIST_CELL;
+    unsigned tobj[16];
+    int nt = 0;
     if (list && !IsBadReadPtr(list, 0x104)) {
         int c = *(int *)(list + 0x100);
         char *ents = *(char **)(list + 0xfc);
@@ -281,6 +314,8 @@ int coopsession_radar_report(char *out, int size)
             char *en = ents + i * RM_ENTRY_SIZE;
             unsigned *op = *(unsigned **)(en + RM_ENTRY_OBJ), rec = *(unsigned *)(en + RM_ENTRY_REC);
             unsigned obj = op && !IsBadReadPtr(op, 4) ? *op : 0;
+            if (obj && nt < 16)
+                tobj[nt++] = obj;
             unsigned robj = rec && !IsBadReadPtr((void *)(uintptr_t)rec, 0x30) ? *(unsigned *)(uintptr_t)(rec + RM_REC_OBJ) : 0;
             n += snprintf(out + n, size - n, " [%d obj %08x%s flags %08x rec %08x -> %08x]", i, obj, obj && obj == local ? " (local)" : "",
                           *(unsigned *)(en + RM_ENTRY_FLAGS), rec, robj);
@@ -297,9 +332,15 @@ int coopsession_radar_report(char *out, int size)
                 unsigned rec = node[0];
                 unsigned obj = rec && !IsBadReadPtr((void *)(uintptr_t)rec, 0x30) ? *(unsigned *)(uintptr_t)(rec + RM_REC_OBJ) : 0;
                 unsigned vt = obj && !IsBadReadPtr((void *)(uintptr_t)obj, 4) ? *(unsigned *)(uintptr_t)obj : 0;
-                if (rec && (vt == RM_PLAYER_VTBL || rec == srec || obj == local) && n < size - 60) {
+                int player = 0;
+                for (int t = 0; t < nt; t++)
+                    if (obj && obj == tobj[t])
+                        player = 1;
+                if (rec && (player || vt == RM_PLAYER_VTBL || rec == srec || obj == local) && n < size - 80) {
                     np++;
-                    n += snprintf(out + n, size - n, " {rec %08x obj %08x vt %08x refs %d}", rec, obj, vt, *(int *)(uintptr_t)(rec + RM_REC_REFS));
+                    const float *c = (const float *)(uintptr_t)(rec + RM_REC_COLOUR);
+                    n += snprintf(out + n, size - n, " {rec %08x obj %08x vt %08x refs %d colour %.0f,%.0f,%.0f}", rec, obj, vt, *(int *)(uintptr_t)(rec + RM_REC_REFS),
+                                  c[0], c[1], c[2]);
                 }
             }
         n += snprintf(out + n, size - n, "; radar %p: %d records, %d of players listed", (void *)r, k, np);
