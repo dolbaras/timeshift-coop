@@ -15,3 +15,5 @@ mkdir -p ../build
 sh ual_test.sh
 "$ZIG" cc -O1 -o ../build/radarmate_test.exe radarmate_test.c
 ../build/radarmate_test.exe
+"$ZIG" cc -O1 -o ../build/readyroom_test.exe readyroom_test.c
+../build/readyroom_test.exe

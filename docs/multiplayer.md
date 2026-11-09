@@ -79,7 +79,8 @@ through the stock server set-up of sections 2 and 8 (CreateGame, CommSettings an
 step by themselves while the UI string `CoopStage` says so); CommSettings then points the server at the
 campaign level (`ServerLocation`, `ServerMapId`) with co-op limits and the player's own multiplayer
 settings are put back at the main menu. The stock map list stays as shipped. In the session the DLL
-(`native/coopsession.c`) switches off warm-up, ready system and friendly fire on campaign levels only and
+(`native/coopsession.c`) switches off friendly fire on campaign levels only (the warm-up and ready system run
+only as the ready room of a session's first level, section 9c) and
 checks the mod version of every joining client (section 9c). Not yet run in the game.
 
 ## 4. Automation for tests (no keyboard or mouse)
@@ -998,12 +999,24 @@ direct connection); results at the end of this section.
   | Rule | Where | What the mod does |
   |---|---|---|
   | Friendly fire | MP damage factor `0x4e3fe0` (stdcall victim, attacker id; ret 8; float): same player -> `SelfDamageScale`, other player -> team game and same team -> `bFriendlyFire` | the "other player" branch (`jne 0x4e4142` at `0x4e40a9`) goes through a stub that returns 0.0 through the function's epilogue (`0x4e42fc`): players never hurt each other; self damage stays |
-  | Warm-up | `bWarmUp` read at `0x5ee949` in the server's level start `0x5ee870` (modes 2/4; 0 = start the round at once, `0x5eea40`) | the call to the option store's int getter `0x4027f0` (thiscall store, index, int *out; ret 8) goes through a wrapper that returns 0 |
-  | Ready system | `bReadySystem` read at `0x596cbb` (rules) and `0x5ff66a` (HUD hint "not ready") | same wrapper |
+  | Warm-up (the ready room) | `bWarmUp` read at `0x5ee949` in the server's level start `0x5ee870` (modes 2/4; 0 = start the round at once, `0x5eea40`); `WarmUpTime` at `0x5ee9d5` (`0x4149c0`: eax index, ecx store, float *out, ret 4) | the call to the option store's int getter `0x4027f0` (thiscall store, index, int *out; ret 8) goes through a wrapper: 1 for the first level of a hosted session, 0 for its later levels; WarmUpTime 1e7 s (no limit) for that level |
+  | Ready system | `bReadySystem` read at `0x596cbb` (rules: `GetGameInfo("ReadyType")`) and `0x5ff66a` (HUD hint "not ready") | 1 while the warm-up runs (rules `[0xfcab18]+0xf8`, state `+0x10` = 0). The game's toggle `FUN_005e9e70` (`$mp_rules_sys.Ready()`) sets bit `0x10` of the player's record (`+0xfc` + slot * `0x84` + `0x68`), prints "<name> is ready" / "is no longer ready" everywhere and lets the warm-up check start the mission when every player is ready |
   | Minimum players, time and score limit | profile keys, read again at every check | set by the Co-op menu for its server, put back at the main menu (`building.md`) |
 
-  `TS_COOP_FF=1` keeps the stock friendly fire rule, `TS_COOP_MPRULES=1` the warm-up and ready system,
-  `TS_COOP=0` switches the whole file off.
+  `TS_COOP_FF=1` keeps the stock friendly fire rule, `TS_COOP_MPRULES=1` the warm-up and ready system on every
+  level, `TS_COOP_READY=0` no ready room (lab copies with `TS_CONSOLE`: none unless `TS_COOP_READY=1`),
+  `TS_COOP=0` switches the whole file off. In the ready room each machine holds its own player (DisableMove /
+  DisableInput through the player's vtable `+0x34c` / `+0x348`, re-asserted every second as release + set,
+  released once at the start; `native/readyroom.h`); the game's HUD shows `GAME_MP_DESC_NOT_READY` to a player who
+  is not ready and `GAME_MP_DESC_WARMUP` to one who is; the host sends message 44 (u8 proto, u8 on) every 2 s so that clients hold and
+  offer READY even where the warm-up state does not reach them (UI strings `CoopReadyRoom`, `CoopReadyMe`).
+  Live 2026-11-09 (N100 loopback pair, `ts2_city_part02`; runs `n100pair-20261109-012510`, `-012833`, `-025151`): the room on the
+  first level, both players held (positions unchanged through 4 s walks, free and moving after the start), the pause menu's
+  READY / ГОТОВ and NOT READY / НЕ ГОТОВ in Regroup's place (Regroup back after the start), the feed "Client2 is ready" /
+  "Client2 is no longer ready" on the host 1 s after the client's press, the HUD "Select READY in Menu To End Warm-Up" on a player
+  not ready, no start for 38 s while the host was not ready, the host's READY starting the mission ("The Game Has Begun", the
+  players put back at the start), and a client who quits while the host is ready ending the room at once. The stock warm-up
+  timer ("Game start in 30 seconds") would start the mission without the WarmUpTime fix (probe `n100pair-20261109-012132`).
 - **Session settings** (`ts_coop_feature(COOP_F_*)`): the host's. Its co-op menu leaves them in UI strings
   (`CoopSession = host`, `CoopDifficulty`, `CoopMaxPlayers`), read by the DLL when the server's level starts;
   time powers (`TS_TIMESYNC`) and story (`TS_STORYSYNC`) from the environment, both `1` by default since
