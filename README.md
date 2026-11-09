@@ -51,8 +51,8 @@ updates the mod by itself, from the zip). Details: `README-COOP.txt` in the arch
   no game files and no such package, and the mod downloads nothing for this. Tested on a simulated Steam folder and with
   the package's files, not on a real Steam installation. An exe of another version is refused, changing nothing.
 - Windows 10/11. No Python or other tools: the installer brings what it needs.
-- Languages: the installer and the shortcut's launcher follow Windows' language (English, Russian, German, French, Spanish,
-  Italian); the game's menus have the game's nine languages.
+- Languages: the game's nine (English, Russian, German, French, Italian, Spanish, Polish, Czech, Hungarian): the co-op
+  menus and hints follow the game's language, the installer, the shortcut's launcher and the setup exe Windows' one.
 
 ## For developers
 
