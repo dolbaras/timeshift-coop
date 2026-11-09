@@ -691,27 +691,97 @@ static void THISCALL hook_rumble(void *raw, float low, float high, float force)
     last_slot = slot;
 }
 
-/* Names of the pad codes on the controls screen (it shows the first two bound slots of a command, so a
- * command with one key also shows its pad binding). The engine asks the DirectInput device for joystick
- * names, and there is none. */
+/* The game's own text for a string id (its string table [0x1095ff0]: FUN_0068fe60 (eax = table, ecx = id) gives the index or 0; the
+ * text is the table's pool +0x10 at the index's offset +0x1c, in wide characters), copied into out (at most max - 1 characters). 0: no
+ * such id (or no table yet). */
+static int game_text(const char *id, wchar_t *out, int max)
+{
+    char *t = *(char **)0x1095ff0;
+    if (!t || IsBadReadPtr(t, 0x20))
+        return 0;
+    int idx;
+    __asm__ volatile("call *%3" : "=a"(idx) : "a"(t), "c"(id), "r"(0x0068fe60) : "edx", "memory", "cc");
+    wchar_t *pool = *(wchar_t **)(t + 0x10);
+    int *offs = *(int **)(t + 0x1c);
+    if (idx <= 0 || !pool || !offs || IsBadReadPtr(offs + idx, 8))
+        return 0;
+    const wchar_t *s = pool + offs[idx];
+    int n = 0, lim = max - 1;
+    if (offs[idx + 1] > offs[idx] && offs[idx + 1] - offs[idx] < lim)
+        lim = offs[idx + 1] - offs[idx];
+    while (n < lim && !IsBadReadPtr(s + n, 2) && s[n])
+        out[n] = s[n], n++;
+    out[n] = 0;
+    return n > 0;
+}
+
+/* Names of the pad codes. The engine asks the DirectInput device for joystick names, and there is none.
+ * - The controls screen (it shows the first two bound slots of a command, so a command with one key also shows its pad binding) gets the
+ *   game's own names of the pad's buttons, the Xbox 360 version's string ids, in all nine tables ("A Button" / "Кнопка А", "Forward on
+ *   Left Stick" / "Левый джойстик: вперед", "D-pad Up Button" ...). Before 0.1.4 it showed the code names (PAD_A, PAD_LSTICK (Forw)).
+ * - The HUD's "press <button>" prompts name a key as the text of "CTRL_<name>" (FUN_00709bf0 -> FUN_00785c80 -> this slot): the buttons
+ *   keep their PAD_* names there, so the short CTRL_PAD_* texts of data/coop_strings.py ("RT", "RB", "X", "D-pad up") stay as before;
+ *   a stick direction (no CTRL_PAD_ text) gets the game's name there too. */
+#define KN_HUD_RET    0x00785cfc   /* return address of FUN_00785c80's call of this slot (0x785cfa) */
+#define KN_HUD_OUTER  0x00709ce6   /* return address of FUN_00709bf0's call of FUN_00785c80 (0x709ce1) */
+#define KN_OUTER_SLOT 0x7f8        /* FUN_00785c80's return address, from this call's return-address slot (0x7dc locals, 4 registers, 2 args) */
 static int THISCALL hook_key_name(void *raw, unsigned code, wchar_t *out)
 {
     static const wchar_t *btn[] = {L"PAD_A", L"PAD_B", L"PAD_X", L"PAD_Y", L"PAD_LB", L"PAD_RB", L"PAD_BACK",
                                    L"PAD_START", L"PAD_LS", L"PAD_RS", L"PAD_LT", L"PAD_RT"};
-    static const wchar_t *axis[] = {L"PAD_LSTICK (Right)", L"PAD_LSTICK (Left)", L"PAD_LSTICK (Back)",
-                                    L"PAD_LSTICK (Forw)", L"PAD_LT", L"PAD_RT", L"PAD_RSTICK (Right)",
-                                    L"PAD_RSTICK (Left)", L"PAD_RSTICK (Down)", L"PAD_RSTICK (Up)"};
     static const wchar_t *pov[] = {L"PAD_DPAD_UP", L"PAD_DPAD_DOWN", L"PAD_DPAD_RIGHT", L"PAD_DPAD_LEFT"};
+    static const char *game_btn[] = {"CTRL_A_BUTTON", "CTRL_B_BUTTON", "CTRL_X_BUTTON", "CTRL_Y_BUTTON", "CTRL_LB", "CTRL_RB", "CTRL_BACK",
+                                     "CTRL_START", "CTRL_THUMB_LEFT", "CTRL_THUMB_RIGHT", "CTRL_TRIGGER_LEFT", "CTRL_TRIGGER_RIGHT"};
+    static const char *game_axis[] = {"CTRL_AXIS_LEFT_RIGHT", "CTRL_AXIS_LEFT_LEFT", "CTRL_AXIS_LEFT_BACKW", "CTRL_AXIS_LEFT_FORW",
+                                      "CTRL_TRIGGER_LEFT", "CTRL_TRIGGER_RIGHT", "CTRL_AXIS_RIGHT_RIGHT", "CTRL_AXIS_RIGHT_LEFT",
+                                      "CTRL_AXIS_RIGHT_BACKW", "CTRL_AXIS_RIGHT_FORW"};
+    static const char *game_pov[] = {"CTRL_DPAD_UP", "CTRL_DPAD_DOWN", "CTRL_DPAD_RIGHT", "CTRL_DPAD_LEFT"};
     const wchar_t *n = NULL;
+    const char *gid = NULL;
     if (code >= J_A && code <= J_RT)
-        n = btn[code - J_A];
+        n = btn[code - J_A], gid = game_btn[code - J_A];
     else if (code >= J_LX_R && code <= J_RY_U)
-        n = axis[code - J_LX_R];
+        gid = game_axis[code - J_LX_R];
     else if (code >= J_DUP && code <= J_DLEFT)
-        n = pov[code - J_DUP];
-    if (!n || *(void **)((BYTE *)raw + 0x1bbc) || !out)   /* (a real DirectInput joystick names its own) */
+        n = pov[code - J_DUP], gid = game_pov[code - J_DUP];
+    if (!gid || *(void **)((BYTE *)raw + 0x1bbc) || !out)   /* (a real DirectInput joystick names its own) */
         return real_key_name(raw, code, out);
-    wcscpy(out, n);
+    DWORD *slot = (DWORD *)((char *)__builtin_frame_address(0) + 4);
+    DWORD ret = (DWORD)(uintptr_t)__builtin_return_address(0), outer = 0;
+    if (ret == KN_HUD_RET && !IsBadReadPtr((char *)slot + KN_OUTER_SLOT, 4))
+        outer = *(DWORD *)((char *)slot + KN_OUTER_SLOT);
+    int hud = ret == KN_HUD_RET && outer == KN_HUD_OUTER;
+    if (n && hud)
+        wcscpy(out, n);
+    else if (!game_text(gid, out, 64)) {
+        if (!n)
+            return real_key_name(raw, code, out);   /* (no string table yet: never seen) */
+        wcscpy(out, n);
+    }
+    static DWORD seen[8][2];
+    static int nseen;
+    int k;
+    for (k = 0; k < nseen && !(seen[k][0] == ret && seen[k][1] == outer); k++)
+        ;
+    if (k == nseen && nseen < 8) {
+        seen[nseen][0] = ret, seen[nseen][1] = outer, nseen++;
+        char a[96];
+        WideCharToMultiByte(CP_UTF8, 0, out, -1, a, sizeof a, NULL, NULL);
+        ts_log("gamepad: pad key names asked from %08x (%08x): %s, e.g. code %x = \"%s\"", (unsigned)ret, (unsigned)outer,
+               hud ? "a HUD prompt (CTRL_PAD_* texts)" : "the game's own names", code, a);
+        if (padlog) {   /* (lab) more of the stack: values that are return addresses into the exe */
+            char line[400];
+            int m = snprintf(line, sizeof line, "gamepad: key name stack:");
+            for (int i = 0, f = 0; i < 0x600 && f < 10 && m < (int)sizeof line - 12; i++) {
+                DWORD v = slot[i];
+                if (v > 0x401005 && v < 0xc80000 && !IsBadReadPtr((void *)(uintptr_t)(v - 6), 6) &&
+                    (((BYTE *)(uintptr_t)v)[-5] == 0xe8 || ((BYTE *)(uintptr_t)v)[-2] == 0xff || ((BYTE *)(uintptr_t)v)[-3] == 0xff ||
+                     ((BYTE *)(uintptr_t)v)[-6] == 0xff))
+                    m += snprintf(line + m, sizeof line - m, " +%x:%08x", i * 4, (unsigned)v), f++;
+            }
+            ts_log("%s", line);
+        }
+    }
     return 1;
 }
 

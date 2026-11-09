@@ -66,12 +66,9 @@ FONT_GLYPHS = set(
     "ťŮůŰűŹźŻżŽž“”„™Ёё"
     + "".join(chr(c) for c in range(0x410, 0x450)))
 
-# gaps known and listed as open (they need a native change and a live check): printed as notes
-KNOWN_OPEN = {
-    # native/gamepad.c hook_key_name: the stick directions' names, shown raw on the controls screen (no CTRL_ text)
-    "PAD_LSTICK (Right)", "PAD_LSTICK (Left)", "PAD_LSTICK (Back)", "PAD_LSTICK (Forw)",
-    "PAD_RSTICK (Right)", "PAD_RSTICK (Left)", "PAD_RSTICK (Down)", "PAD_RSTICK (Up)",
-}
+# gaps known and listed as open (they need a native change and a live check): printed as notes. (0.1.4: the controls screen's
+# raw pad names (PAD_A, PAD_LSTICK (Forw) ...) are gone: native/gamepad.c gives the game's own names there.)
+KNOWN_OPEN = set()
 
 checks = 0
 fails = 0
@@ -203,10 +200,15 @@ def check_ids(mod_keys, stock):
                 nat.append("%s: %s" % (f, m.group(1)))
     check(bool(used) and not nat, "native: every COOP_ id the DLL shows is in coop_strings (%d used; %s)" %
           (len(used), "; ".join(nat)))
-    # the pad names the DLL gives the engine: prompts show the CTRL_<name> text
+    # the pad names the DLL gives the engine: prompts show the CTRL_<name> text; the controls screen (and a prompt naming a stick
+    # direction) shows the game's own text of the stock ids in game_btn / game_axis / game_pov (checked against the tables with --strings)
     g = read("native/gamepad.c")
     m = re.search(r"static int THISCALL hook_key_name\(.*?\n\}", g, re.S)
     names = re.findall(r"L\"([^\"]+)\"", m.group(0)) if m else []
+    game_ids = sorted(set(re.findall(r"\"(CTRL_[A-Z0-9_]+)\"", m.group(0)))) if m else []
+    check(len(game_ids) >= 24 and not any(i in mod_keys for i in game_ids),
+          "native/gamepad.c: the controls screen's pad names are the game's own ids, not mod keys (%d ids)" % len(game_ids))
+    stock_used.update(game_ids)
     raw, open_ = [], []
     for n in dict.fromkeys(names):
         if "CTRL_" + n in mod_keys:
