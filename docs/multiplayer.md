@@ -1002,9 +1002,11 @@ direct connection); results at the end of this section.
   | Warm-up (the ready room) | `bWarmUp` read at `0x5ee949` in the server's level start `0x5ee870` (modes 2/4; 0 = start the round at once, `0x5eea40`); `WarmUpTime` at `0x5ee9d5` (`0x4149c0`: eax index, ecx store, float *out, ret 4) | the call to the option store's int getter `0x4027f0` (thiscall store, index, int *out; ret 8) goes through a wrapper: 1 for the first level of a hosted session, 0 for its later levels; WarmUpTime 1e7 s (no limit) for that level |
   | Ready system | `bReadySystem` read at `0x596cbb` (rules: `GetGameInfo("ReadyType")`) and `0x5ff66a` (HUD hint "not ready") | 1 while the warm-up runs (rules `[0xfcab18]+0xf8`, state `+0x10` = 0). The game's toggle `FUN_005e9e70` (`$mp_rules_sys.Ready()`) sets bit `0x10` of the player's record (`+0xfc` + slot * `0x84` + `0x68`), prints "<name> is ready" / "is no longer ready" everywhere and lets the warm-up check start the mission when every player is ready |
   | Minimum players, time and score limit | profile keys, read again at every check | set by the Co-op menu for its server, put back at the main menu (`building.md`) |
+  | Partner on the HUD radar (0.1.4, `native/radarmate.h`) | player blips: `FUN_005F8820` (list `[0xfcab18]`, entry i) reads `RadarType` at `0x5f8900` (0 none, 1 none for an "enemy", 2 all; never the local player, never an entry with flags bit 2); the shipped game type answers 0: no partner on the radar | in a co-op session the read answers 2 (ShowAll) and every 2 s a player without a radar record gets one (`FUN_005F8820`, at most 3 tries per object); the partner's records in the game's blue (78, 93, 255), the records the radar itself draws (its list at the radar interface `+0x140`) included; split screen (`split.c`): one record of the mod's whose object is the other player while each view draws (NULL in between) |
 
   `TS_COOP_FF=1` keeps the stock friendly fire rule, `TS_COOP_MPRULES=1` the warm-up and ready system on every
-  level, `TS_COOP_READY=0` no ready room (lab copies with `TS_CONSOLE`: none unless `TS_COOP_READY=1`),
+  level, `TS_COOP_RADAR=0` the stock radar (`TS_SPLIT_RADAR=0`: no split-screen record; `!cp radar` = the lab's report of the player
+  table and the radar's records), `TS_COOP_READY=0` no ready room (lab copies with `TS_CONSOLE`: none unless `TS_COOP_READY=1`),
   `TS_COOP=0` switches the whole file off. In the ready room each machine holds its own player (DisableMove /
   DisableInput through the player's vtable `+0x34c` / `+0x348`, re-asserted every second as release + set,
   released once at the start; `native/readyroom.h`); the game's HUD shows `GAME_MP_DESC_NOT_READY` to a player who
@@ -1017,6 +1019,10 @@ direct connection); results at the end of this section.
   not ready, no start for 38 s while the host was not ready, the host's READY starting the mission ("The Game Has Begun", the
   players put back at the start), and a client who quits while the host is ready ending the room at once. The stock warm-up
   timer ("Game start in 30 seconds") would start the mission without the WarmUpTime fix (probe `n100pair-20261109-012132`).
+  The radar live 2026-11-09: network (N100 pair, `n100pair-20261109-080603`): the host's radar has a blue blip in the client's
+  direction with the client 12 m ahead, 10 m to the side and 20 m behind, the client's radar shows the host as a blue arrow among the
+  green rebels and red soldiers; the 0.1.3 build had no partner blip in the same steps (`n100pair-20261108-234915`). Split screen
+  (main PC, run `20261109-060020`): a blue dot in both halves, each relative to its own player; 0.1.3 had none (`20261109-002329`).
 - **Session settings** (`ts_coop_feature(COOP_F_*)`): the host's. Its co-op menu leaves them in UI strings
   (`CoopSession = host`, `CoopDifficulty`, `CoopMaxPlayers`), read by the DLL when the server's level starts;
   time powers (`TS_TIMESYNC`) and story (`TS_STORYSYNC`) from the environment, both `1` by default since

@@ -206,8 +206,8 @@ def check_ids(mod_keys, stock):
     m = re.search(r"static int THISCALL hook_key_name\(.*?\n\}", g, re.S)
     names = re.findall(r"L\"([^\"]+)\"", m.group(0)) if m else []
     game_ids = sorted(set(re.findall(r"\"(CTRL_[A-Z0-9_]+)\"", m.group(0)))) if m else []
-    check(len(game_ids) >= 24 and not any(i in mod_keys for i in game_ids),
-          "native/gamepad.c: the controls screen's pad names are the game's own ids, not mod keys (%d ids)" % len(game_ids))
+    check(len(game_ids) >= 8 and not any(i in mod_keys for i in game_ids),
+          "native/gamepad.c: the stick directions are named by the game's own ids, not mod keys (%d ids)" % len(game_ids))
     stock_used.update(game_ids)
     raw, open_ = [], []
     for n in dict.fromkeys(names):

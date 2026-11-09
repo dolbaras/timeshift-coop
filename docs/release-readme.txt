@@ -19,6 +19,8 @@ What the mod does
   screen shows "Select READY in Menu" until you are ready, the game's message feed names each
   player who gets ready, and the mission starts when all players are. Until then nobody can
   move. Chapters that follow in the same game start at once.
+- Radar: the other players are blue blips on the HUD radar (top right), in a network game and in
+  split screen (each half shows the other player).
 - In a co-op session: no friendly fire; the enemies move, fight and die
   the same on every machine; slow, stop and reverse time work for the players; a player who joins
   a level that is already running gets the state the host's player is in (locks, weapons).

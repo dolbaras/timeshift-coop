@@ -33,7 +33,7 @@ game loads XInput only to check pad 0's type and to send rumble to pad 0.
 |---|---|---|
 | `+0x60` keyboard poll (every frame, right before the joystick poll) | `0x7bc140` | calls the original, then writes player 1's XInput pad into the joystick codes |
 | `+0x2c` rumble (called every frame by the game's vibration mixer, which already honours `JoyVibrOff`) | `0x7bc6d0` | `XInputSetState` on player 1's pad |
-| `+0x54` key name for the controls screen | `0x786700` | names such as `PAD_A` and `PAD_LSTICK (Forw)` for the pad codes (the engine would ask a DirectInput device, and there is none) |
+| `+0x54` key name for the controls screen | `0x786700` | the pad codes' names (the engine would ask a DirectInput device, and there is none): `PAD_A` ... `PAD_RT` and `PAD_DPAD_*` for buttons and the d-pad, whose `CTRL_PAD_*` texts are the labels printed on the pad; for the stick directions (0.1.4) the game's own texts of its Xbox 360 string ids (`CTRL_AXIS_LEFT_FORW` "Forward on Left Stick" / "Левый джойстик: вперед" ..., in all nine tables; before: `PAD_LSTICK (Forw)` as it was). See "The controls screen" below |
 
 It also adds default pad bindings to the game's command tables:
 
@@ -132,8 +132,21 @@ Checked in a run (`TS_PAD=1`, `TS_PADLOG=1`):
 - The active command context switched from `GAME` to `UI` when the main menu loaded. The game reached its
   menu and loading screens with the hooks in place.
 
-Still to do: the controls screen (how the pad names look in its second column, and what happens to a pad
-binding when a key is assigned there); whether `InvertMouse` applies to the right stick.
+Still to do: what happens to a pad binding when a key is assigned on the controls screen; whether `InvertMouse` applies to the
+right stick.
+
+## The controls screen (0.1.4)
+
+The stock PC frame (`OptionsControls`) shows two keyboard slots per command; its pad page (slots 4 and 5) is behind a "Joystick" button
+the frame hides (`Element("Joystick").Show(false)`), reached when the UI string `InputType` is `JOYSTICK` (the lab sets it from the
+console). The screen names a key like the HUD's "press <button>" prompts: `FUN_00709bf0` -> `FUN_00785c80` -> the input's slot `+0x54`
+(both return through `0x709ce6`, logged live), then the text of `"CTRL_%s"` (`FUN_0068fee0`) if there is one, else the name as it is
+(keyboard: `ARROW_LEFT` -> "Стрелка влево"). So the buttons keep their `PAD_*` names (their `CTRL_PAD_*` texts "A", "B", "RB", "LT", the
+d-pad's directions), and the stick directions get the game's own texts directly (there is no `CTRL_PAD_LSTICK*` id): the game's
+string table `[0x1095ff0]`, `FUN_0068fe60` (eax = table, ecx = id) gives the index, the text is at the pool `+0x10` plus the index's
+offset `+0x1c` (wide characters). Live 2026-11-09 (main PC test copy, Russian, `work\runs\rel014-20261109-094205`): 0.1.3 showed
+`PAD_LSTICK (Forw)` ... `PAD_RSTICK (Down)` on the pad page (run `20261109-094808`), 0.1.4 shows "Левый джойстик: вперед" ...
+"Правый джойстик: назад" with "A" and "B" for jump and crouch (run `20261109-094918`). The keyboard page never names a pad code.
 
 ## Live test (2026-10-25, virtual Xbox 360 pad, main PC)
 
