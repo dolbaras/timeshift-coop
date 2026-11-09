@@ -1010,6 +1010,13 @@ direct connection); results at the end of this section.
   released once at the start; `native/readyroom.h`); the game's HUD shows `GAME_MP_DESC_NOT_READY` to a player who
   is not ready and `GAME_MP_DESC_WARMUP` to one who is; the host sends message 44 (u8 proto, u8 on) every 2 s so that clients hold and
   offer READY even where the warm-up state does not reach them (UI strings `CoopReadyRoom`, `CoopReadyMe`).
+  Live 2026-11-09 (N100 loopback pair, `ts2_city_part02`; runs `n100pair-20261109-012510`, `-012833`, `-025151`): the room on the
+  first level, both players held (positions unchanged through 4 s walks, free and moving after the start), the pause menu's
+  READY / ГОТОВ and NOT READY / НЕ ГОТОВ in Regroup's place (Regroup back after the start), the feed "Client2 is ready" /
+  "Client2 is no longer ready" on the host 1 s after the client's press, the HUD "Select READY in Menu To End Warm-Up" on a player
+  not ready, no start for 38 s while the host was not ready, the host's READY starting the mission ("The Game Has Begun", the
+  players put back at the start), and a client who quits while the host is ready ending the room at once. The stock warm-up
+  timer ("Game start in 30 seconds") would start the mission without the WarmUpTime fix (probe `n100pair-20261109-012132`).
 - **Session settings** (`ts_coop_feature(COOP_F_*)`): the host's. Its co-op menu leaves them in UI strings
   (`CoopSession = host`, `CoopDifficulty`, `CoopMaxPlayers`), read by the DLL when the server's level starts;
   time powers (`TS_TIMESYNC`) and story (`TS_STORYSYNC`) from the environment, both `1` by default since
