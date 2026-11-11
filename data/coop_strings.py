@@ -39,8 +39,7 @@ STRINGS = [
                    "Co-op servers have [COOP] in front of their name.",
         "russian": "Сюжетная кампания вместе: от 2 до 4 игроков по локальной сети или через Интернет. "
                    "Имена кооперативных серверов начинаются с [COOP].",
-        "german": "Spielt die Kampagne gemeinsam: 2 bis 4 Spieler im lokalen Netzwerk oder über das Internet. "
-                  "Koop-Server haben [COOP] vor ihrem Namen.",
+        "german": "Spielen Sie die Kampagne gemeinsam: 2 bis 4 Spieler im lokalen Netzwerk oder über das Internet. Koop-Server haben [COOP] vor ihrem Namen.",
         "french": "Jouez la campagne ensemble : 2 à 4 joueurs en réseau local ou sur Internet. "
                   "Le nom des serveurs coopératifs commence par [COOP].",
         "italian": "Giocate insieme la campagna: da 2 a 4 giocatori in rete locale o su Internet. "
@@ -49,8 +48,7 @@ STRINGS = [
                    "Los servidores cooperativos llevan [COOP] delante del nombre.",
         "polish": "Wspólna kampania: od 2 do 4 graczy w sieci lokalnej lub przez Internet. "
                   "Nazwy serwerów kooperacji zaczynają się od [COOP].",
-        "czech": "Hrajte kampaň společně: 2 až 4 hráči v místní síti nebo přes Internet. "
-                 "Kooperační servery mají před názvem [COOP].",
+        "czech": "Hrajte kampaň společně: 2 až 4 hráči v místní síti nebo přes Internet. Kooperativní servery mají před názvem [COOP].",
         "hungarian": "Játsszátok együtt a kampányt: 2-4 játékos helyi hálózaton vagy az interneten. "
                      "A kooperatív szerverek neve előtt [COOP] áll.",
     }),
@@ -68,32 +66,26 @@ STRINGS = [
     ("COOP_ERR_VERSION", {   # {STRING} 1 = the host's mod version, 2 = this player's
         "english": "The host plays with co-op mod version {STRING}, you have version {STRING}. "
                    "Install the same version as the host to join.",
-        "russian": "У сервера мод кооператива версии {STRING}, у вас версия {STRING}. "
-                   "Установите ту же версию, что у сервера.",
-        "german": "Der Host spielt mit der Koop-Mod-Version {STRING}, du hast Version {STRING}. "
-                  "Installiere dieselbe Version wie der Host.",
-        "french": "L'hôte utilise la version {STRING} du mod coopératif, vous avez la version {STRING}. "
-                  "Installez la même version que l'hôte.",
-        "italian": "L'host usa la versione {STRING} della mod cooperativa, tu hai la versione {STRING}. "
-                   "Installa la stessa versione dell'host.",
+        "russian": "У хоста кооп-мод версии {STRING}, а у вас версии {STRING}. Чтобы присоединиться, установите ту же версию, что у хоста.",
+        "german": "Der Host spielt mit der Koop-Mod-Version {STRING}, Sie haben Version {STRING}. Installieren Sie dieselbe Version wie der Host, um beizutreten.",
+        "french": "L'hôte utilise la version {STRING} du mod coop, vous avez la version {STRING}. Installez la même version que l'hôte pour le rejoindre.",
+        "italian": "L'host usa la versione {STRING} della mod co-op, tu hai la versione {STRING}. Installa la stessa versione dell'host per unirti.",
         "spanish": "El anfitrión usa la versión {STRING} del mod cooperativo, tú tienes la versión {STRING}. "
                    "Instala la misma versión que el anfitrión.",
-        "polish": "Gospodarz ma mod kooperacji w wersji {STRING}, ty masz wersję {STRING}. "
-                  "Zainstaluj tę samą wersję co gospodarz.",
-        "czech": "Hostitel hraje s kooperačním modem verze {STRING}, ty máš verzi {STRING}. "
-                 "Nainstaluj stejnou verzi jako hostitel.",
+        "polish": "Gospodarz ma mod kooperacji w wersji {STRING}, a ty w wersji {STRING}. Zainstaluj tę samą wersję co gospodarz, aby dołączyć.",
+        "czech": "Hostitel hraje s kooperativním modem verze {STRING}, ty máš verzi {STRING}. Pro připojení nainstaluj stejnou verzi jako hostitel.",
         "hungarian": "A házigazda a kooperatív mod {STRING} verzióját használja, neked a {STRING} verzió van meg. "
                      "Telepítsd ugyanazt a verziót, mint a házigazda.",
     }),
     ("COOP_MOD_VERSION", {   # {STRING} = version
         "english": "Co-op mod {STRING}",
-        "russian": "Мод кооператива {STRING}",
+        "russian": "Кооп-мод {STRING}",
         "german": "Koop-Mod {STRING}",
-        "french": "Mod coopératif {STRING}",
-        "italian": "Mod cooperativa {STRING}",
+        "french": "Mod coop {STRING}",
+        "italian": "Mod co-op {STRING}",
         "spanish": "Mod cooperativo {STRING}",
         "polish": "Mod kooperacji {STRING}",
-        "czech": "Kooperační mod {STRING}",
+        "czech": "Kooperativní mod {STRING}",
         "hungarian": "Kooperatív mod {STRING}",
     }),
     # Split screen (Co-op menu -> Split screen; native/split.c)
@@ -101,7 +93,7 @@ STRINGS = [
         "english": "SPLIT SCREEN",
         "russian": "РАЗДЕЛЁННЫЙ ЭКРАН",
         "german": "GETEILTER BILDSCHIRM",
-        "french": "ÉCRAN PARTAGÉ",
+        "french": "ECRAN PARTAGE",
         "italian": "SCHERMO CONDIVISO",
         "spanish": "PANTALLA DIVIDIDA",
         "polish": "PODZIELONY EKRAN",
@@ -122,22 +114,16 @@ STRINGS = [
     ("COOP_HINT_SPLIT", {
         "english": "Two players on this PC, the screen split in two. Connect two gamepads: player 2 plays "
                    "with the second one, player 1 with the first one or keyboard and mouse.",
-        "russian": "Два игрока на этом ПК, экран разделён на две части. Подключите два геймпада: игрок 2 "
-                   "играет на втором, игрок 1 на первом или на клавиатуре и мыши.",
-        "german": "Zwei Spieler an diesem PC, der Bildschirm wird geteilt. Schließe zwei Gamepads an: "
-                  "Spieler 2 spielt mit dem zweiten, Spieler 1 mit dem ersten oder mit Tastatur und Maus.",
+        "russian": "Два игрока на этом ПК, экран разделён на две части. Подключите два геймпада: игрок 2 играет на втором, а игрок 1 на первом или на клавиатуре с мышью.",
+        "german": "Zwei Spieler an diesem PC, der Bildschirm wird geteilt. Schließen Sie zwei Controller an: Spieler 2 spielt mit dem zweiten, Spieler 1 mit dem ersten oder mit Tastatur und Maus.",
         "french": "Deux joueurs sur ce PC, l'écran partagé en deux. Branchez deux manettes : le joueur 2 "
                   "joue avec la deuxième, le joueur 1 avec la première ou au clavier et à la souris.",
-        "italian": "Due giocatori su questo PC, lo schermo diviso in due. Collega due gamepad: il giocatore 2 "
-                   "usa il secondo, il giocatore 1 il primo oppure tastiera e mouse.",
+        "italian": "Due giocatori su questo PC, lo schermo diviso in due. Collega due controller: il giocatore 2 usa il secondo, il giocatore 1 il primo oppure tastiera e mouse.",
         "spanish": "Dos jugadores en este PC, con la pantalla dividida en dos. Conecta dos mandos: el jugador 2 "
                    "juega con el segundo y el jugador 1 con el primero o con teclado y ratón.",
-        "polish": "Dwóch graczy na tym komputerze, ekran podzielony na dwie części. Podłącz dwa pady: gracz 2 "
-                  "gra na drugim, gracz 1 na pierwszym albo na klawiaturze i myszy.",
-        "czech": "Dva hráči na tomto PC, obrazovka rozdělená na dvě části. Připoj dva gamepady: hráč 2 hraje "
-                 "na druhém, hráč 1 na prvním nebo na klávesnici a myši.",
-        "hungarian": "Két játékos ezen a gépen, a képernyő kettéosztva. Csatlakoztass két gamepadet: a 2. játékos "
-                     "a másodikkal játszik, az 1. játékos az elsővel vagy billentyűzettel és egérrel.",
+        "polish": "Dwóch graczy na tym komputerze, ekran podzielony na dwie części. Podłącz dwa kontrolery: gracz 2 gra na drugim, gracz 1 na pierwszym albo na klawiaturze i myszy.",
+        "czech": "Dva hráči na tomto PC, obrazovka rozdělená na dvě části. Připoj dva ovladače: hráč 2 hraje na druhém, hráč 1 na prvním nebo na klávesnici a myši.",
+        "hungarian": "Két játékos ezen a gépen, a képernyő kettéosztva. Csatlakoztass két irányítót: a 2. játékos a másodikkal játszik, az 1. játékos az elsővel vagy billentyűzettel és egérrel.",
     }),
     ("COOP_BTN_CONTINUE", {   # Co-op menu entry: host the last checkpoint again (upper case like the entries next to it)
         "english": "CONTINUE",
@@ -151,75 +137,72 @@ STRINGS = [
         "hungarian": "FOLYTATÁS",
     }),
     ("COOP_HINT_CONTINUE", {
-        "english": "Continue: host again from your last co-op checkpoint (chapter, position, weapons, ammunition, grenades, life).",
+        "english": "Continue: host again from your last co-op checkpoint (chapter, position, weapons, ammunition, grenades, health).",
         "russian": "Продолжить: снова создать игру с вашей последней контрольной точки (глава, место, оружие, патроны, гранаты, здоровье).",
-        "german": "Fortsetzen: erneut von deinem letzten Koop-Kontrollpunkt aus hosten (Kapitel, Position, Waffen, Munition, Granaten, Leben).",
-        "french": "Continuer : héberger à nouveau depuis votre dernier point de contrôle coop (chapitre, position, armes, munitions, grenades, vie).",
+        "german": "Fortsetzen: erneut ab Ihrem letzten Koop-Kontrollpunkt hosten (Kapitel, Position, Waffen, Munition, Granaten, Gesundheit).",
+        "french": "Continuer : héberger à nouveau depuis votre dernier point de sauvegarde coop (chapitre, position, armes, munitions, grenades, santé).",
         "italian": "Continua: ospita di nuovo dall'ultimo checkpoint co-op (capitolo, posizione, armi, munizioni, granate, salute).",
-        "spanish": "Continuar: aloja de nuevo desde tu último punto de control cooperativo (capítulo, posición, armas, munición, granadas, vida).",
-        "polish": "Kontynuuj: ponownie hostuj od ostatniego punktu kontrolnego kooperacji (rozdział, pozycja, broń, amunicja, granaty, życie).",
-        "czech": "Pokračovat: znovu hostovat od posledního kooperativního kontrolního bodu (kapitola, pozice, zbraně, munice, granáty, život).",
-        "hungarian": "Folytatás: újra hosztolás az utolsó kooperatív ellenőrzőponttól (fejezet, pozíció, fegyverek, lőszer, gránátok, élet).",
+        "spanish": "Continuar: hospeda de nuevo la partida desde tu último punto de control cooperativo (capítulo, posición, armas, munición, granadas, salud).",
+        "polish": "Kontynuuj: poprowadź grę ponownie od ostatniego punktu kontrolnego kooperacji (rozdział, pozycja, broń, amunicja, granaty, zdrowie).",
+        "czech": "Pokračovat: znovu založit hru od posledního kooperativního kontrolního bodu (kapitola, pozice, zbraně, munice, granáty, zdraví).",
+        "hungarian": "Folytatás: a játék újraindítása házigazdaként az utolsó kooperatív ellenőrzési ponttól (fejezet, pozíció, fegyverek, lőszer, gránátok, életerő).",
     }),
     ("COOP_HINT_CONTINUE_START", {
-        "english": "Continue: this chapter has no mid-chapter restore, so it starts from its beginning with your weapons, ammunition, grenades and life.",
+        "english": "Continue: this chapter has no mid-chapter restore, so it starts from its beginning with your weapons, ammunition, grenades and health.",
         "russian": "Продолжить: в этой главе нет восстановления с середины, поэтому она начнётся сначала, но с вашим оружием, патронами, гранатами и здоровьем.",
-        "german": "Fortsetzen: Dieses Kapitel kann nicht mittendrin fortgesetzt werden und beginnt von vorn, mit deinen Waffen, deiner Munition, deinen Granaten und deinem Leben.",
-        "french": "Continuer : ce chapitre n'a pas de reprise en cours de chapitre ; il recommence au début avec vos armes, munitions, grenades et votre vie.",
+        "german": "Fortsetzen: Dieses Kapitel kann nicht mittendrin fortgesetzt werden und beginnt von vorn, mit Ihren Waffen, Ihrer Munition, Ihren Granaten und Ihrer Gesundheit.",
+        "french": "Continuer : ce chapitre n'a pas de reprise en cours de chapitre ; il recommence au début avec vos armes, munitions, grenades et votre santé.",
         "italian": "Continua: questo capitolo non ha un ripristino a metà, quindi riparte dall'inizio con le tue armi, munizioni, granate e salute.",
-        "spanish": "Continuar: este capítulo no tiene reanudación a mitad, así que empieza desde el principio con tus armas, munición, granadas y vida.",
-        "polish": "Kontynuuj: ten rozdział nie ma wznowienia w środku, więc zaczyna się od początku z twoją bronią, amunicją, granatami i życiem.",
-        "czech": "Pokračovat: tato kapitola nemá obnovení uprostřed, začne tedy od začátku s tvými zbraněmi, municí, granáty a životem.",
-        "hungarian": "Folytatás: ennek a fejezetnek nincs félúton történő folytatása, ezért az elejéről indul a fegyvereiddel, lőszeroddel, gránátjaiddal és életeddel.",
+        "spanish": "Continuar: este capítulo no tiene reanudación a mitad, así que empieza desde el principio con tus armas, munición, granadas y salud.",
+        "polish": "Kontynuuj: ten rozdział nie ma wznowienia w środku, więc zaczyna się od początku z twoją bronią, amunicją, granatami i zdrowiem.",
+        "czech": "Pokračovat: tato kapitola nemá obnovení uprostřed, začne tedy od začátku s tvými zbraněmi, municí, granáty a zdravím.",
+        "hungarian": "Folytatás: ennek a fejezetnek nincs félúton történő folytatása, ezért az elejéről indul a fegyvereiddel, lőszereddel, gránátjaiddal és életerőddel.",
     }),
     ("COOP_HINT_CONTINUE_BAD", {
         "english": "The saved co-op progress is damaged or from another version of the mod. Reach a new checkpoint as the host to replace it.",
-        "russian": "Сохранённый кооперативный прогресс повреждён или создан другой версией мода. Дойдите до новой контрольной точки как хозяин, чтобы заменить его.",
-        "german": "Der gespeicherte Koop-Fortschritt ist beschädigt oder stammt von einer anderen Mod-Version. Erreiche als Host einen neuen Kontrollpunkt, um ihn zu ersetzen.",
-        "french": "La progression coop enregistrée est endommagée ou provient d'une autre version du mod. Atteignez un nouveau point de contrôle en tant qu'hôte pour la remplacer.",
+        "russian": "Сохранённый кооперативный прогресс повреждён или создан другой версией мода. Дойдите до новой контрольной точки как хост, чтобы заменить его.",
+        "german": "Der gespeicherte Koop-Fortschritt ist beschädigt oder stammt von einer anderen Mod-Version. Erreichen Sie als Host einen neuen Kontrollpunkt, um ihn zu ersetzen.",
+        "french": "La progression coop enregistrée est endommagée ou provient d'une autre version du mod. Atteignez un nouveau point de sauvegarde en tant qu'hôte pour la remplacer.",
         "italian": "I progressi co-op salvati sono danneggiati o di un'altra versione della mod. Raggiungi un nuovo checkpoint come host per sostituirli.",
         "spanish": "El progreso cooperativo guardado está dañado o es de otra versión del mod. Alcanza un nuevo punto de control como anfitrión para reemplazarlo.",
-        "polish": "Zapisany postęp kooperacji jest uszkodzony lub pochodzi z innej wersji moda. Dojdź do nowego punktu kontrolnego jako host, aby go zastąpić.",
-        "czech": "Uložený kooperativní postup je poškozený nebo pochází z jiné verze modu. Dosáhni jako hostitel nového kontrolního bodu a nahradí se.",
-        "hungarian": "A mentett kooperatív haladás sérült, vagy a mod másik verziójából származik. Érj el hosztként egy új ellenőrzőpontot, hogy lecserélje.",
+        "polish": "Zapisany postęp kooperacji jest uszkodzony lub pochodzi z innej wersji moda. Dojdź do nowego punktu kontrolnego jako gospodarz, aby go zastąpić.",
+        "czech": "Uložený kooperativní postup je poškozený nebo pochází z jiné verze modu. Jako hostitel dosáhni nového kontrolního bodu, tím ho nahradíš.",
+        "hungarian": "A mentett kooperatív haladás sérült, vagy a mod másik verziójából származik. Házigazdaként érj el egy új ellenőrzési pontot, hogy felülírd.",
     }),
     ("COOP_HINT_CONTINUE_NONE", {
         "english": "Continue becomes available once you reach a checkpoint as the host of a co-op game.",
-        "russian": "Кнопка \"Продолжить\" станет доступна, когда вы достигнете контрольной точки как хозяин кооперативной игры.",
-        "german": "Fortsetzen ist verfügbar, sobald du als Host eines Koop-Spiels einen Kontrollpunkt erreicht hast.",
-        "french": "Continuer sera disponible dès que vous aurez atteint un point de contrôle en hébergeant une partie coop.",
-        "italian": "Continua sarà disponibile quando raggiungerai un checkpoint come host di una partita co-op.",
-        "spanish": "Continuar estará disponible cuando alcances un punto de control como anfitrión de una partida cooperativa.",
-        "polish": "Kontynuuj będzie dostępne, gdy jako host gry kooperacyjnej dojdziesz do punktu kontrolnego.",
-        "czech": "Pokračovat bude dostupné, až jako hostitel kooperativní hry dosáhneš kontrolního bodu.",
-        "hungarian": "A Folytatás akkor válik elérhetővé, ha egy kooperatív játék hosztjaként elérsz egy ellenőrzőpontot.",
+        "russian": "Кнопка \"Продолжить\" станет доступна, когда вы достигнете контрольной точки как хост кооперативной игры.",
+        "german": "„Fortsetzen“ ist verfügbar, sobald Sie als Host eines Koop-Spiels einen Kontrollpunkt erreicht haben.",
+        "french": "\"Continuer\" sera disponible dès que vous aurez atteint un point de sauvegarde en hébergeant une partie coop.",
+        "italian": "\"Continua\" sarà disponibile quando raggiungerai un checkpoint come host di una partita cooperativa.",
+        "spanish": "\"Continuar\" estará disponible cuando alcances un punto de control como anfitrión de una partida cooperativa.",
+        "polish": "„Kontynuuj” będzie dostępne, gdy jako gospodarz gry w kooperacji dojdziesz do punktu kontrolnego.",
+        "czech": "„Pokračovat“ bude dostupné, až jako hostitel kooperativní hry dosáhneš kontrolního bodu.",
+        "hungarian": "A „Folytatás” akkor válik elérhetővé, ha egy kooperatív játék házigazdájaként elérsz egy ellenőrzési pontot.",
     }),
     ("COOP_OPT_SPLITJOIN", {   # Co-op frame option: joining with split screen
         "english": "Second player on pad 2",
         "russian": "Второй игрок на геймпаде 2",
-        "german": "Zweiter Spieler an Gamepad 2",
+        "german": "Zweiter Spieler an Controller 2",
         "french": "Deuxième joueur sur la manette 2",
-        "italian": "Secondo giocatore sul gamepad 2",
+        "italian": "Secondo giocatore sul controller 2",
         "spanish": "Segundo jugador en el mando 2",
-        "polish": "Drugi gracz na padzie 2",
-        "czech": "Druhý hráč na gamepadu 2",
-        "hungarian": "Második játékos a 2. gamepaden",
+        "polish": "Drugi gracz na kontrolerze 2",
+        "czech": "Druhý hráč na ovladači 2",
+        "hungarian": "Második játékos a 2. irányítón",
     }),
     ("COOP_ERR_PAD2", {
         "english": "Split screen needs a second gamepad for player 2. Connect two gamepads and try again.",
         "russian": "Для разделённого экрана нужен второй геймпад для игрока 2. Подключите два геймпада и попробуйте снова.",
-        "german": "Der geteilte Bildschirm braucht ein zweites Gamepad für Spieler 2. Schließe zwei Gamepads an "
-                  "und versuche es erneut.",
+        "german": "Der geteilte Bildschirm braucht einen zweiten Controller für Spieler 2. Schließen Sie zwei Controller an und versuchen Sie es erneut.",
         "french": "L'écran partagé a besoin d'une deuxième manette pour le joueur 2. Branchez deux manettes et "
                   "réessayez.",
-        "italian": "Lo schermo condiviso richiede un secondo gamepad per il giocatore 2. Collega due gamepad e "
-                   "riprova.",
+        "italian": "Lo schermo condiviso richiede un secondo controller per il giocatore 2. Collega due controller e riprova.",
         "spanish": "La pantalla dividida necesita un segundo mando para el jugador 2. Conecta dos mandos y "
                    "vuelve a intentarlo.",
-        "polish": "Podzielony ekran wymaga drugiego pada dla gracza 2. Podłącz dwa pady i spróbuj ponownie.",
-        "czech": "Rozdělená obrazovka potřebuje druhý gamepad pro hráče 2. Připoj dva gamepady a zkus to znovu.",
-        "hungarian": "Az osztott képernyőhöz kell egy második gamepad a 2. játékosnak. Csatlakoztass két "
-                     "gamepadet, és próbáld újra.",
+        "polish": "Podzielony ekran wymaga drugiego kontrolera dla gracza 2. Podłącz dwa kontrolery i spróbuj ponownie.",
+        "czech": "Rozdělená obrazovka potřebuje druhý ovladač pro hráče 2. Připoj dva ovladače a zkus to znovu.",
+        "hungarian": "Az osztott képernyőhöz kell egy második irányító a 2. játékosnak. Csatlakoztass két irányítót, és próbáld újra.",
     }),
     ("COOP_BTN_START", {   # starts the chosen level (upper case like the stock buttons)
         "english": "START",
@@ -331,9 +314,9 @@ STRINGS = [
     ("COOP_MSG_REGROUP_HOST", {   # hint after Regroup on the host; {STRING} 1 = players moved
         "english": "{STRING} player(s) moved to you.",
         "russian": "Игроков перемещено к вам: {STRING}.",
-        "german": "{STRING} Spieler zu dir versetzt.",
-        "french": "{STRING} joueur(s) amené(s) vers vous.",
-        "italian": "Giocatori spostati da te: {STRING}.",
+        "german": "{STRING} Spieler zu Ihnen versetzt.",
+        "french": "{STRING} joueur(s) amené(s) auprès de vous.",
+        "italian": "Giocatori spostati vicino a te: {STRING}.",
         "spanish": "Jugadores movidos hasta ti: {STRING}.",
         "polish": "Przeniesiono do ciebie graczy: {STRING}.",
         "czech": "K tobě přesunuto hráčů: {STRING}.",
@@ -341,10 +324,10 @@ STRINGS = [
     }),
     ("COOP_MSG_REGROUP_CLIENT", {   # hint after Regroup on a client
         "english": "You were moved to the host.",
-        "russian": "Вас переместило к хосту.",
-        "german": "Du wurdest zum Host versetzt.",
+        "russian": "Вы перемещены к хосту.",
+        "german": "Sie wurden zum Host versetzt.",
         "french": "Vous avez été amené auprès de l'hôte.",
-        "italian": "Sei stato spostato dall'host.",
+        "italian": "Sei stato spostato vicino all'host.",
         "spanish": "Te han movido hasta el anfitrión.",
         "polish": "Przeniesiono cię do gospodarza.",
         "czech": "Byl jsi přesunut k hostiteli.",
@@ -375,24 +358,24 @@ STRINGS = [
     ("COOP_HINT_GATE_HOST", {   # hint on the host while a gate waits; {STRING} 1 = players missing
         "english": "Waiting for {STRING} more player(s) here. If one is stuck: pause menu, Regroup.",
         "russian": "Здесь ждут ещё игроков: {STRING}. Если кто-то застрял: меню паузы, \"Собраться\".",
-        "german": "Hier wird auf {STRING} weitere(n) Spieler gewartet. Steckt jemand fest: Pausenmenü, \"Zusammenführen\".",
+        "german": "Hier wird auf {STRING} weitere(n) Spieler gewartet. Steckt jemand fest: Pausenmenü, „Zusammenführen“.",
         "french": "On attend {STRING} joueur(s) de plus ici. Si l'un est bloqué : menu pause, \"Se rassembler\".",
         "italian": "Qui si aspettano altri {STRING} giocatori. Se qualcuno è bloccato: menu di pausa, \"Riunisciti\".",
         "spanish": "Aquí se espera a {STRING} jugador(es) más. Si alguien se atasca: menú de pausa, \"Reagrupar\".",
         "polish": "Czekamy tu jeszcze na graczy: {STRING}. Jeśli ktoś utknął: menu pauzy, „Zbiórka”.",
-        "czech": "Tady se čeká ještě na hráče: {STRING}. Pokud někdo uvízl: nabídka pauzy, „Shromáždit“.",
-        "hungarian": "Itt még {STRING} játékosra várunk. Ha valaki elakadt: szünet menü, „Összegyűlés”.",
+        "czech": "Tady se čeká ještě na hráče: {STRING}. Pokud někdo uvízl: menu pauzy, „Shromáždit“.",
+        "hungarian": "Itt még {STRING} játékosra várunk. Ha valaki elakadt: szünetmenü, „Összegyűlés”.",
     }),
     ("COOP_HINT_GATE_CLIENT", {   # hint on clients while the host waits at a gate; {STRING} 1 = players missing
         "english": "The host waits at a gate for {STRING} player(s): go to the host, or pause menu, Regroup.",
         "russian": "Хост ждёт у прохода игроков: {STRING}. Идите к хосту или выберите в меню паузы \"Собраться\".",
-        "german": "Der Host wartet an einem Durchgang auf {STRING} Spieler: geh zum Host oder wähle im Pausenmenü \"Zusammenführen\".",
+        "german": "Der Host wartet an einem Durchgang auf {STRING} Spieler: Gehen Sie zum Host oder wählen Sie im Pausenmenü „Zusammenführen“.",
         "french": "L'hôte attend {STRING} joueur(s) à un passage : rejoignez-le ou utilisez \"Se rassembler\" dans le menu pause.",
         "italian": "L'host aspetta {STRING} giocatori a un passaggio: raggiungilo o usa \"Riunisciti\" nel menu di pausa.",
         "spanish": "El anfitrión espera a {STRING} jugador(es) en un paso: ve con él o usa \"Reagrupar\" en el menú de pausa.",
         "polish": "Gospodarz czeka przy przejściu na graczy: {STRING}. Idź do niego albo wybierz „Zbiórka” w menu pauzy.",
-        "czech": "Hostitel čeká u průchodu na hráče: {STRING}. Jdi k němu, nebo použij v nabídce pauzy „Shromáždit“.",
-        "hungarian": "A házigazda egy átjárónál vár {STRING} játékosra: menj hozzá, vagy válaszd a szünet menü „Összegyűlés” pontját.",
+        "czech": "Hostitel čeká u průchodu na hráče: {STRING}. Jdi k němu, nebo použij v menu pauzy „Shromáždit“.",
+        "hungarian": "A házigazda egy átjárónál vár {STRING} játékosra: menj hozzá, vagy válaszd a szünetmenü „Összegyűlés” pontját.",
     }),
 ]
 
