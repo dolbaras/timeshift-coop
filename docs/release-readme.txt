@@ -61,7 +61,16 @@ What the mod does
   join as usual. On a host both halves of its screen play in the session and the other players see
   both bodies. On a client the second player is supported in basic form (experimental).
 
-New in 0.1.4
+New in 0.1.5
+- Texts: every text of the mod reviewed in the nine languages: the game's own words where the game
+  has them ("health", the game's word for the checkpoint, the controller), one word for the host and
+  for the mod in each language, one form of address per language, each language's quotes; the
+  Italian Regroup lines no longer read as if you or the host had moved the others.
+- Bug reports: the window of Collect logs.bat (in <game>\coop) now speaks your language (the game's
+  language from bin\steamwars.ini, else Windows'; 16 languages). The zip's report stays in English.
+- The setup exe's message boxes follow Windows' language in 16 languages.
+
+Changes in 0.1.4
 - Radar: the other players are blue blips on the HUD radar, in a network game and in split screen.
   Before, the radar never showed them.
 - Ready step: the first chapter of a co-op game waits until every player picked READY in the pause
@@ -75,24 +84,10 @@ New in 0.1.4
   Czech and Hungarian. The controls screen names the stick directions as the game does ("Forward on
   Left Stick", in the game's language) instead of PAD_LSTICK (Forw); the stick clicks (LS / RS) in
   the hints are named in every language.
-
-Changes in 0.1.3
-- Level 2 (City, part 2), the covered walkway the robot wrecks, in a network game: when a player
-  reversed time during the collapse, the host's walkway came back but the other players' games let
-  the collapse run on (one player saw the walkway and another did not; most of its kill zones never
-  opened there). The clients now take the collapse, its collision pieces and its kill zones from the
-  host during and after the rewind. A client that was still loading when the story allowed the
-  reverse kept it locked for the whole level; the host now sends its time-power permissions to every
-  client whenever they change. Checked with a host and a client on one test PC.
-- Split screen: player 2 now has the same time-power locks as player 1 (before, it could use a
-  power the story had not given yet, such as the reverse at the start of level 2). A player who dies
-  again right after coming back beside the partner (on the level 2 walkway the comeback spot was
-  inside the same kill zone, then a spot without floor) now gets the game's own restart from the
-  checkpoint, as in the single-player game; before, both players could end alive in the water below
-  the walkway.
-- Bug reports: Collect logs.bat (in <game>\coop) now also packs the launcher's and the installer's
-  logs and removes more personal data (see "Troubleshooting and reports").
-- 0.1.2 fixed the slow walk of player 1 in split screen while player 2 stood still.
+- 0.1.3: on level 2 (the walkway the robot wrecks) the clients of a network game follow the host's
+  rewind; split screen player 2 has the story's time-power locks and no longer loops between deaths
+  in the walkway's water; Collect logs.bat also packs the launcher's and the installer's logs.
+  0.1.2 fixed the slow walk of player 1 in split screen while player 2 stood still.
 
 Not finished / known limits
 - Ready step: a second player on pad 2 in a network game (split screen on a host or a client) is not
