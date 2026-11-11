@@ -304,6 +304,13 @@ def check_table(name, tables, same_tab, used_keys):
           (name, len(used_keys), ", ".join(undefined)))
 
 
+def check_smart_quotes(name, t):
+    """PowerShell reads the typographic quotes as its own: „ “ ” end a "..." string and ‘ ’ ‚ a '...' one. A language's
+    quotes in a PowerShell text need a backtick in front (`„files`“), else the script does not even parse."""
+    bad = sorted({ln.strip()[:70] for ln in t.split("\n") if re.search("(?<!`)[„“”‘’‚]", ln)})
+    check(not bad, "%s: every typographic quote has its backtick (%s)" % (name, "; ".join(bad)))
+
+
 def check_tools():
     t = read("tools/installer.ps1")
     tables, bad = ps_blocks(t, "$script:TEXTS = @{")
@@ -315,6 +322,7 @@ def check_tools():
           (m.group(1) if m else "none"))
     lits = [x for x in re.findall(r"\bthrow \"([^\"]*)\"", t) if x not in INSTALLER_LOG_ONLY]
     check(not lits, "installer: no hard-coded text in errors (%s)" % "; ".join(lits))
+    check_smart_quotes("installer", t)
 
     t = read("tools/launcher.ps1")
     tables, bad = ps_inline_blocks(t, "$T = @{")
@@ -323,6 +331,7 @@ def check_tools():
     check_table("launcher", tables, SAME_OK_LAUNCHER, used)
     lits = [ln.strip() for ln in t.split("\n") if re.search(r"\bthrow \"", ln) or re.search(r"MessageBox\]::Show\(\"", ln)]
     check(not lits, "launcher: no hard-coded text in errors and message boxes (%s)" % "; ".join(lits))
+    check_smart_quotes("launcher", t)
 
     t = read("tools/mkinstaller/stub.c")
     m = re.search(r"TEXTS\[(\d+)\]\[M_COUNT\] = \{(.*?)\n\};", t, re.S)
