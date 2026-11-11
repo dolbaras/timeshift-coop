@@ -53,7 +53,7 @@ function Shoot($exe, $title, [hashtable] $env = @{}) {
     $bmp
 }
 $pics = @()
-$labels = @("en", "ru", "de", "fr", "es", "it", "pl", "cs", "hu")
+$labels = @("en", "ru", "de", "fr", "es", "it", "pl", "cs", "hu", "pt", "pt-br", "nl", "ja", "ko", "zh-cn", "zh-tw")
 for ($l = 0; $l -lt $labels.Count; $l++) {
     $exe = Join-Path $Work "box-$l.exe"
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here "mkinstaller.ps1") -Zip $zip -Out $exe -Product "Test Co-op" -Version 1.0.0 -TempPrefix "mkinstaller-test" -CFlags "-DFORCE_LANG=$l" | Out-Null

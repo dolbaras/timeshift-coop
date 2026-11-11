@@ -333,13 +333,18 @@ def check_tools():
     check(not lits, "launcher: no hard-coded text in errors and message boxes (%s)" % "; ".join(lits))
     check_smart_quotes("launcher", t)
 
+    # The setup exe is the workspace's shared stub (from 0.1.5): the 16 languages of the four co-op mods, the first nine
+    # TimeShift's in its order.
     t = read("tools/mkinstaller/stub.c")
-    m = re.search(r"TEXTS\[(\d+)\]\[M_COUNT\] = \{(.*?)\n\};", t, re.S)
-    blocks = re.findall(r"\{ /\* (\w+) \*/\n(.*?)\n    \},", m.group(2), re.S) if m else []
-    stub = {lg: re.findall(r'L"((?:[^"\\]|\\.)*)"', body) for lg, body in blocks}
+    m = re.search(r"TEXTS\[(\w+)\]\[M_COUNT\] = \{(.*?)\n\};", t, re.S)
+    n_rows = None
+    if m:
+        n_rows = int(m.group(1)) if m.group(1).isdigit() else int(re.search(r"#define %s (\d+)" % m.group(1), t).group(1))
+    blocks = re.findall(r"\{ /\* ([\w-]+) \*/\n(.*?)\n    \},", m.group(2), re.S) if m else []
+    stub = {lg.lower(): re.findall(r'L"((?:[^"\\]|\\.)*)"', body) for lg, body in blocks}
     n_msg = len(re.search(r"enum \{ (M_[A-Z_, ]+), M_COUNT \}", t).group(1).split(","))
-    check(m is not None and int(m.group(1)) == len(blocks) and [lg for lg, _ in blocks] == WIN_LANGS,
-          "setup exe (stub.c): the nine languages in order (%s)" % ", ".join(lg for lg, _ in blocks))
+    check(m is not None and n_rows == len(blocks) and [lg for lg, _ in blocks][:len(WIN_LANGS)] == WIN_LANGS,
+          "setup exe (stub.c): the nine languages first, in order (%s)" % ", ".join(lg for lg, _ in blocks))
     short = [lg for lg, v in stub.items() if len(v) != n_msg]
     check(not short, "setup exe (stub.c): %d messages in every language (%s)" % (n_msg, ", ".join(short)))
     same = ["%s/%d" % (lg, i) for lg, v in stub.items() if lg != "en" for i, s in enumerate(v)
@@ -347,7 +352,7 @@ def check_tools():
     check(not same, "setup exe (stub.c): no message equal to English (%s)" % ", ".join(same))
     sw = dict((c, int(i)) for c, i in re.findall(r"case LANG_(\w+): l = (\d+);", t))
     want = {"RUSSIAN": 1, "GERMAN": 2, "FRENCH": 3, "SPANISH": 4, "ITALIAN": 5, "POLISH": 6, "CZECH": 7, "HUNGARIAN": 8}
-    check(sw == want, "setup exe (stub.c): Windows' language picks its row (%s)" % sw)
+    check(all(sw.get(k) == v for k, v in want.items()), "setup exe (stub.c): Windows' language picks its row (%s)" % sw)
 
     readmes = sorted(f for f in os.listdir(os.path.join(ROOT, "docs")) if f.startswith("release-readme"))
     note("players' readmes shipped: %s (the installer opens the Russian one on Russian Windows, else the English one)" %

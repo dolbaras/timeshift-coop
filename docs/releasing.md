@@ -73,7 +73,9 @@ What the exe does when a player runs it:
 option works as before: `-Game`, `-Uninstall`, `-Quiet`, `-Lang`, `-AutoClose`, `-NoShortcut`, `-ShortcutDir`, `-SteamUpdate <zip|folder>` and `-AcceptSteamUpdate` (the Steam update flow with its consent works from the exe: tested with the real community package on a simulated Steam copy).
 Only the exe's own `--extract <folder>` is extra (unpack only, run nothing; for audits and tests). The installer still copies
 `coop-installer.ps1` and writes `Uninstall Co-op.bat` into the game folder, so removal is the same with or without the exe.
-Error boxes are in English, Russian, German, French, Spanish and Italian (Windows' UI language).
+Error boxes follow Windows' UI language in the 16 languages of the four co-op mods' texts together (from 0.1.5: English,
+Russian, German, French, Spanish, Italian, Polish, Czech, Hungarian, Portuguese, Brazilian Portuguese, Dutch, Japanese, Korean,
+Simplified and Traditional Chinese; `tools/mkinstaller` is the workspace's shared stub, copied here as it is).
 
 Honest limits: the exe is NOT code-signed (no certificate), so SmartScreen will probably warn "Windows protected your PC" and
 an antivirus may flag a self-extracting program that starts PowerShell; the README texts say so, offer the zip as the
@@ -284,7 +286,7 @@ taken before; never on the owner's install, never beside a running game from tha
   plugin folders (backup, the `winmm.dll` + `winmm.ini` copies, the record, the result text, every other file unchanged, reinstall
   + update keep it all once, uninstall byte for byte); a copy the player changed stays; no copy next to a foreign `winmm.dll`, for
   a 64-bit loader, another mod's DLL; another mod's DLL put over the co-op one, then uninstall / update + uninstall; with `-OldZip`
-  that release over a loader, updated by this tree's installer; the new texts in six languages; the result texts fit the result
+  that release over a loader, updated by this tree's installer; the new texts in nine languages (six before 0.1.5); the result texts fit the result
   page (measured, no window), Fit-Result itself on controls of the page's geometry (none shown). 2026-11-08: this tree 45/45 with `-OldZip` 0.1.3; the published 0.1.3 zip (`-Zip`) fails 23 of 41.
 - Exe classes: retail, large-address-aware, community pre-patched, Steam package exe, a variant, one code byte changed, a changed
   entry point, padding changed, a truncated file: the first five are accepted, the rest refused with nothing changed.
@@ -299,7 +301,7 @@ taken before; never on the owner's install, never beside a running game from tha
   UAC click on a player's PC): the elevated copy for `Program Files (x86)`.
 - `Install Co-op.bat` / `Uninstall Co-op.bat`: a positive start (returns in about 1 s) and a negative one (a flag that never
   appears: the message after 25 s, exit 1).
-- Texts: every key exists in all six languages with the same placeholders (the installer and the launcher), and a picture of the
+- Texts: every key exists in all nine languages with the same placeholders (the installer and the launcher), and a picture of the
   installer window in each language (Steam page and plain page) has no clipped text.
 - Game running: a renamed `ping.exe` in the copy's `bin` with `-GameProcess <its name>`: install and
   uninstall refused; the same process in another folder does not count.

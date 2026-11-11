@@ -12,7 +12,7 @@ body:
     attributes:
       label: Mod version
       description: The installer's title bar, or `coop\version.txt` in the game folder. Every player of the session should have the same version.
-      placeholder: "0.1.4"
+      placeholder: "0.1.5"
     validations:
       required: true
   - type: dropdown

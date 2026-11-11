@@ -235,9 +235,9 @@ if ($OldZip) {
     Check ($script:exit -eq 0 -and $d.Count -eq 0) "old release + update + uninstall: byte for byte ($($d -join ', '))"
 }
 
-# 8. texts: the new keys in all six languages, translated; the result texts fit the result page (measured, no window).
+# 8. texts: the new keys in all nine languages, translated; the result texts fit the result page (measured, no window).
 #    Fit-Result's rooms at 96 DPI (the label at y 66): 140 px, 190 without the progress bar, 270 without the log (success).
-$langs = "en", "ru", "de", "fr", "es", "it"
+$langs = "en", "ru", "de", "fr", "es", "it", "pl", "cs", "hu"
 $newKeys = "asi_copy", "asi_note", "off_note", "winmm_taken", "left_alone", "foreign_over_coop", "left_in_place", "left_note"
 foreach ($lg in $langs) {
     $missing = @($newKeys | Where-Object { -not $TX[$lg][$_] })
