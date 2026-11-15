@@ -1553,6 +1553,9 @@ static void latejoin_step(DWORD now)
     if (running && !was_running) {   /* a level (or the same level after a team restart) is up */
         level_start = now;
         CLOG("campaign: level run starts (%s)", LEVEL_NAME);
+        if (host_ride[0])   /* (parity-016: the ride of the last level stayed set: "unknown object name 'Bronevik'" every 100 ms in the next level, p016-A) */
+            CLOG("campaign: ride on %s ended (level change)", host_ride);
+        host_ride[0] = 0;
         memset(&hst, 0, sizeof hst);
         hst_tc_seq = 0;
         n_known = 0;
