@@ -834,13 +834,20 @@ static rr_hold barrier;
 static int barrier_on_here, barrier_off_sends, barrier_missing_last = -1;
 static DWORD barrier_since, barrier_sent, barrier_hint_at, barrier_all_at;
 static unsigned barrier_seen_clear;   /* slot bits: the client's flag was clear at some time since the level start */
+static int barrier_waited[32], n_barrier_waited, barrier_left;   /* the clients waited for; how many of them left */
 
-static void barrier_name_add(int id)
+static const char *peer_name(int id)
 {
     const char *nm = "?";
     for (int k = 0; k < n_peer_names; k++)
         if (peer_names[k].id == id && peer_names[k].name[0])
             nm = peer_names[k].name;
+    return nm;
+}
+
+static void barrier_name_add(int id)
+{
+    const char *nm = peer_name(id);
     size_t used = strlen(barrier_names);
     if (used + strlen(nm) + 4 < sizeof barrier_names)
         snprintf(barrier_names + used, sizeof barrier_names - used, "%s%s", used ? " / " : "", nm);
@@ -857,8 +864,36 @@ static int barrier_missing(DWORD now)
         int in = (*(int *)(s + 8) & SLOT_INGAME) != 0;
         if (!in)
             barrier_seen_clear |= 1u << i;
-        if (!in || (!(barrier_seen_clear & (1u << i)) && now - barrier_since < 8000))
-            n++, barrier_name_add(*(int *)s);
+        if (!in || (!(barrier_seen_clear & (1u << i)) && now - barrier_since < 8000)) {
+            int id = *(int *)s, k = 0;
+            n++, barrier_name_add(id);
+            while (k < n_barrier_waited && barrier_waited[k] != id)
+                k++;
+            if (k == n_barrier_waited && k < 32)
+                barrier_waited[n_barrier_waited++] = id;
+        }
+    }
+    for (int k = 0; k < n_barrier_waited; k++) {   /* (a client waited for whose slot is gone: it left, dropped or was closed) */
+        int id = barrier_waited[k], here = 0;
+        for (int i = 0; i < slot_count() && i < 32; i++) {
+            char *s = slot_at(i);
+            here |= s && *(int *)s == id && (*(int *)(s + 8) & SLOT_JOINED);
+        }
+        if (!here) {
+            barrier_left++;
+            CLOG("coopsession: level barrier: client %d (%s) left the session while it was loading", id, peer_name(id));
+            barrier_waited[k--] = barrier_waited[--n_barrier_waited];
+        }
+    }
+    return n;
+}
+
+static int barrier_joined(void)
+{
+    int n = 0;
+    for (int i = 0; i < slot_count() && i < 32; i++) {
+        char *s = slot_at(i);
+        n += s && *(int *)s != 0 && (*(int *)(s + 8) & SLOT_JOINED) != 0;
     }
     return n;
 }
@@ -885,6 +920,7 @@ static void barrier_tick(DWORD now)
         if (barrier_want && pl && ts_coop_active() && !room_on) {   /* (the level runs here: the barrier begins) */
             barrier_want = 0;
             barrier_on_here = 1, barrier_since = now, barrier_seen_clear = 0, barrier_all_at = 0, barrier_missing_last = -1;
+            n_barrier_waited = 0, barrier_left = 0;
             CLOG("coopsession: level barrier on \"%.80s\" (%u ms after the server level start): every player waits until the"
                  " clients run the level (at most %d s)", LEVEL_NAME, now - barrier_asked, barrier_secs);
         }
@@ -900,7 +936,10 @@ static void barrier_tick(DWORD now)
             if (missing)
                 barrier_all_at = 0;
             const char *why = !ts_coop_active() ? "the session ended"
-                            : barrier_all_at && now - barrier_all_at >= 1000 ? "every client runs the level"
+                            : barrier_all_at && now - barrier_all_at >= 1000
+                                  ? (!barrier_left ? "every client runs the level"
+                                     : barrier_joined() ? "a client left while loading, every other client runs the level"
+                                     : "the loading client left, no client in the session")
                             : now - barrier_since >= (DWORD)barrier_secs * 1000 ? "time limit" : NULL;
             if (why) {
                 barrier_on_here = 0, barrier_off_sends = 3;

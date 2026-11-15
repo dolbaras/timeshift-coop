@@ -522,11 +522,101 @@ static void queue_set(int lim)
     }
 }
 
+/* ---- the silence limit for loading peers in co-op sessions (parity-016) ----
+ * GameSpy Transport closes a connection that received nothing for its timeout (GT2 connection +0x24 in ms, last receive
+ * time +0x90, GetTickCount; the check in the connection think 0x7d06a5 closes with reason 5 = timed out). The game sets
+ * that timeout per peer through the transport's SetPeerTimeout (vtable 0xdb6514 +0x44 = 0x7805e0, (peer, ms), connected
+ * peers only): 10 s for a peer that runs the level (message 0x42f with flag 1: 0x63aee0 -> 0x64ea60 on the host, 0x64f590
+ * on a client), 15 s on the host / 20 s on a client for a peer that loads (flag 0, and every slot at a level change,
+ * 0x63b040). A loading client pumps the network only now and then (from the loader), so a load phase without a pump longer
+ * than 15 s dropped it: level 19 -> level 1, the client loaded 23 s, the host closed it 11 s after its own level start
+ * ("transport connection closed: ? (5)", runs p016-H15 with the published 0.1.5 DLL and p016-H; level 1 is not special,
+ * its load after level 19 is long). In co-op sessions the "loading" limit is 120 s on both sides (TS_NETIDLE=<ms>, 0 =
+ * stock): the four constants are patched while a co-op session runs, and a connection that still has a stock loading
+ * value (set before the patch) is raised. A peer that runs the level keeps the game's 10 s. */
+#define GT2_TRANSPORT_VT 0x00db6514
+#define TRANSPORT_PTR(pn) (*(char **)((pn) + 0xb90))
+static int idle_coop = 120000, idle_now;   /* idle_now: the loading limit now in the code, 0 = the stock constants */
+static const struct { DWORD at; int stock, plus_run; } idle_sites[] = {
+    {0x0064ea7e, 15000 - 10000, 1},   /* host, 0x64ea60: and eax, 5000; add eax, 10000 */
+    {0x0064f5bf, 20000 - 10000, 1},   /* client, 0x64f590: and esi, 10000; add esi, 10000 */
+    {0x0063b162, 15000, 0},           /* host, 0x63b040 (level change): push 15000 */
+    {0x0063b19c, 20000, 0},           /* client, 0x63b040: push 20000 */
+};
+#define N_IDLE_SITES (int)(sizeof idle_sites / sizeof idle_sites[0])
+
+static int idle_imm(int k, int lim)
+{
+    return !lim ? idle_sites[k].stock : idle_sites[k].plus_run ? lim - 10000 : lim;
+}
+
+static void idle_set(int lim)
+{
+    static int broken;
+    if (lim == idle_now || broken)
+        return;
+    int ok = 1;
+    for (int k = 0; k < N_IDLE_SITES; k++) {   /* (all four as expected first: never a half-patched set) */
+        int cur = idle_imm(k, idle_now);
+        ok &= memcmp((void *)idle_sites[k].at, &cur, 4) == 0;
+    }
+    for (int k = 0; ok && k < N_IDLE_SITES; k++) {
+        int cur = idle_imm(k, idle_now), want = idle_imm(k, lim);
+        ok &= ts_patch_bytes(idle_sites[k].at, &cur, &want, 4);
+    }
+    if (ok) {
+        idle_now = lim;
+        if (lim)
+            ts_log("net: silence limit of a loading peer %d ms (co-op session; stock 15 s host, 20 s client)", lim);
+        else
+            ts_log("net: silence limit of a loading peer stock (15 s host, 20 s client)");
+    } else {
+        ts_log("net: silence limit of a loading peer not found (other exe): slow loads may drop");
+        broken = 1, idle_coop = 0;   /* (never again) */
+    }
+}
+
+static void idle_frame(void)
+{
+    char *pn = PEER_NETWORK_PTR;
+    int on = idle_coop > 0 && ts_coop_active();
+    idle_set(on ? idle_coop : 0);
+    if (!on || !pn)
+        return;
+    char *t = TRANSPORT_PTR(pn);
+    if (!t || IsBadReadPtr(t, 0x210) || *(DWORD *)t != GT2_TRANSPORT_VT)
+        return;
+    for (int i = 0; i < 32; i++) {
+        int *e = (int *)(t + 0x10 * (i + 1));
+        char *c = (char *)e[3];
+        if (e[0] != 3 || !c)
+            continue;
+        int *lim = (int *)(c + 0x24);
+        if (*lim == 15000 || *lim == 20000) {
+            static LONG n_raised;
+            if (InterlockedIncrement(&n_raised) <= 20)
+                ts_log("net: peer %d: silence limit %d ms (stock, loading) raised to %d ms", i, *lim, idle_coop);
+            *lim = idle_coop;
+        }
+    }
+}
+
+/* (TS_NETDEBUG) every SetPeerTimeout call */
+typedef void (__attribute__((thiscall)) *settimeout_t)(void *, int, int);
+static void __attribute__((thiscall)) hook_settimeout(void *t, int peer, int ms)
+{
+    static LONG n;
+    if (InterlockedIncrement(&n) <= 200)
+        ts_log("netdebug: peer %d silence limit %d ms (caller %p)", peer, ms, __builtin_return_address(0));
+    ((settimeout_t)0x007805e0)(t, peer, ms);
+}
+
 static void rate_frame(void)
 {
     char *pn = PEER_NETWORK_PTR;
     if (!queue_fixed)
         queue_set(ts_coop_active() ? queue_coop : 500);
+    idle_frame();
     if (!rate_min || !pn || !ts_coop_active())
         return;
     for (int i = 0; i < 32; i++) {
@@ -583,6 +673,15 @@ static void netfix_frame(float dt)
                  *(unsigned short *)(ch + 0x19a), *(unsigned short *)(ch + 0x19c), *(unsigned short *)(ch + 0x19e),
                  *(int *)(ch + 0x1a0), *(unsigned *)(ch + 0x1a4));
     }
+    char *t = TRANSPORT_PTR(pn);   /* (the GT2 connections: silence limit and the time since the last receive) */
+    if (line[0] && t && !IsBadReadPtr(t, 0x210) && *(DWORD *)t == GT2_TRANSPORT_VT)
+        for (int i = 0; i < 32; i++) {
+            int *e = (int *)(t + 0x10 * (i + 1));
+            char *c = (char *)e[3];
+            if (e[0] == 3 && c && !IsBadReadPtr(c, 0x94))
+                snprintf(line + strlen(line), sizeof line - strlen(line), " gt2[%d] limit %d silent %lu", i, *(int *)(c + 0x24),
+                         now - *(DWORD *)(c + 0x90));
+        }
     if (line[0])
         ts_log("netdebug: connections%s; received %d packets, seq %d-%d, latency %d", line, rx_n, rx_min, rx_max, rx_lat);
     rx_n = 0, rx_min = 1 << 30, rx_max = -1;
@@ -617,10 +716,16 @@ static void held_install(void)
         if (!ok)
             ts_log("net: per-peer sender not found (other exe): joins into running levels may drop");
         if (netdebug) {
-            void *o = (void *)0x79f390, *h = (void *)hook_chrecv;
-            ts_log("net: TS_NETDEBUG %s, receive count %s", ok ? "on" : "failed",
-                   ts_patch_bytes(0xdb573c, &o, &h, 4) ? "on" : "failed");
+            void *o = (void *)0x79f390, *h = (void *)hook_chrecv, *o2 = (void *)0x7805e0, *h2 = (void *)hook_settimeout;
+            ts_log("net: TS_NETDEBUG %s, receive count %s, silence limits %s", ok ? "on" : "failed",
+                   ts_patch_bytes(0xdb573c, &o, &h, 4) ? "on" : "failed",
+                   ts_patch_bytes(GT2_TRANSPORT_VT + 0x44, &o2, &h2, 4) ? "on" : "failed");
         }
+    }
+    if (ts_env("TS_NETIDLE", v, sizeof v)) {
+        int ms = atoi(v);
+        idle_coop = ms <= 0 ? 0 : ms < 20000 ? 20000 : ms;
+        ts_log("net: TS_NETIDLE: silence limit of a loading peer in co-op sessions %d ms (0 = stock)", idle_coop);
     }
     if (ts_env("TS_NETQUEUE", v, sizeof v) && atoi(v) > 0) {
         queue_set(atoi(v));

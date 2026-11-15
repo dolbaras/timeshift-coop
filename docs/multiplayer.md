@@ -1115,9 +1115,31 @@ the mod's own messages (already only to clients that run the level), AI replicat
 
 | **Two PCs over the LAN** (host N100, client main PC `work\game_mp`, client 45 s after the host, 30-43 s load), causes 1-5 fixed | **part03 10 of 10, part02 10 of 10** stay, no crash; client runs the level 0-2 s after its load; 40 AI shots shown on the client in each | `work\runs\20261025-202534` .. `-205012` (part03), `-205256` .. `-211736` (part02); host logs in `<run>\host` |
 
+**6. A load with a long silent phase (2026-11-16, parity-016).** A server level change from level 19
+(`ts2_zep_factory_part1`) into level 1 (`ts2_city_part01`) dropped the main-PC client every time, also with the published
+0.1.5 DLL (runs `p016-A`, `p016-H15`, `p016-H`): the host logged "transport connection closed: ? (5)" 11 s after its own
+level start, the client "UI_NET_ERR_CLOSED_BY_THE_HOST" while it still loaded (23 s). Reason 5 is GameSpy Transport's
+"timed out": the connection think (`0x7d06a5`) closes a connection that received nothing for longer than its timeout
+(connection `+0x24` ms, last receive `+0x90`, GetTickCount). The game sets that timeout per peer through the transport's
+SetPeerTimeout (vtable `0xdb6514` `+0x44` = `0x7805e0`): 10 s while the peer runs the level (message `0x42f` flag 1:
+`0x63aee0` -> `0x64ea60` on the host, `0x64f590` on a client), 15 s (host) / 20 s (client) while it loads (flag 0, and every
+slot at a level change, `0x63b040`). A loading client pumps the network only now and then from the loader, so a load phase
+without a pump longer than 15 s is fatal; the load after level 19 has one (the host saw the client silent for 17.5 s), the
+loads from levels 2 and 5 (about 11 s) do not. Level 1's opening film is not involved (the stack's `0x7b8182` was a stale
+return address of another function). Fix: in co-op sessions the "loading" limit is 120 s on both sides (the four constants
+`0x64ea7e`, `0x64f5bf`, `0x63b162`, `0x63b19c` patched while a co-op session runs; a connection that still has a stock
+loading value is raised; `TS_NETIDLE=<ms>`, 0 = stock); a peer that runs the level keeps the game's 10 s.
+Proof `p016-K` (work\runs\20261116-004503): the same 19 -> 1 change, the host's silence counter for the loading client
+reached 17.5 s under the 120 s limit, no close, the client ran level 1 and the level barrier released after 16 s; then a
+team restart of level 1 with the client stopped 25 s without the network at the level's end (lab `TS_LOADSTALL=25@city_part01`):
+silent 24.4 s, no close, barrier released after 26 s; both machines showed the opening film (frames host `shot197/226`,
+client `shot201/230`, after the restart client `shot301`).
+
 Test tools: `TS_NETDEBUG=1` logs every second each connection's state, rate and limits, unacknowledged packets,
-sequence numbers and the packets received, and the messages sent to loading slots by id; `TS_NETQUEUE=<n>` moves the
-500 limit (lab).
+sequence numbers and the packets received, the GameSpy connections' silence limit and time since the last receive
+(`gt2[i] limit L silent S`), every SetPeerTimeout call with its caller, and the messages sent to loading slots by id;
+`TS_NETQUEUE=<n>` moves the 500 limit (lab); `TS_LOADSTALL=<s>[@<level>]` stops this machine for `<s>` seconds without the
+network when it leaves a level (a slow PC's load; needs `TS_CONSOLE` or `TS_SSLLOG=1`; lab).
 
 ## 10. Open questions
 

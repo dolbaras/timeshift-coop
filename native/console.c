@@ -227,9 +227,31 @@ static void TSCALL hook_update_delayed(void *mgr, float dt)
 }
 
 /* ---- script log ---- */
+/* (lab) TS_LOADSTALL=<seconds>[@<level>]: at each "Level terminated" of a level (not the menu; with @<level> only of a
+ * level whose name contains <level>) this machine stops for <seconds> without the network, as a slow PC's load does
+ * (parity-016: the silence limit of a loading peer, netfix.c). Needs the script log (TS_CONSOLE or TS_SSLLOG=1). */
+static int stall_ms;
+static char stall_level[48], cur_level[64];
+
 static void __cdecl script_log(int level, const char *msg)
 {
     ts_log("ssl%s: %s", level ? " error" : "", msg ? msg : "");
+    if (!stall_ms || !msg)
+        return;
+    const char *p = strstr(msg, "New level started ");
+    if (p) {
+        p += strlen("New level started ");
+        int n = 0;
+        while (p[n] && p[n] != ' ' && n < (int)sizeof cur_level - 1)
+            n++;
+        memcpy(cur_level, p, n);
+        cur_level[n] = 0;
+    } else if (strstr(msg, "Level terminated") && cur_level[0] && _strnicmp(cur_level, "menu", 4) != 0
+               && (!stall_level[0] || strstr(cur_level, stall_level))) {
+        ts_log("lab: TS_LOADSTALL: %d ms without the network after %s (a slow load)", stall_ms, cur_level);
+        Sleep(stall_ms);
+        ts_log("lab: TS_LOADSTALL over");
+    }
 }
 
 #define SCRIPT_LOG_CB 0x00ecb100
@@ -266,8 +288,15 @@ int ts_tick_install(void)
 
 void console_install(void)
 {
-    char v[16];
+    char v[16], st[64];
     probes_install();   /* (TS_PROBES only; needs the script tick, which it installs itself) */
+    if (ts_env("TS_LOADSTALL", st, sizeof st) && atoi(st) > 0) {
+        const char *at = strchr(st, '@');
+        stall_ms = atoi(st) * 1000;
+        if (at)
+            snprintf(stall_level, sizeof stall_level, "%s", at + 1);
+        ts_log("lab: TS_LOADSTALL %d s%s%s", stall_ms / 1000, at ? " after levels named *" : "", at ? stall_level : "");
+    }
     /* (until checked in the game: only with TS_CONSOLE or TS_SSLLOG=1) */
     if (!ts_env("TS_CONSOLE", v, sizeof v) && !(ts_env("TS_SSLLOG", v, sizeof v) && v[0] == '1'))
         return;
