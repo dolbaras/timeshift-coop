@@ -3105,6 +3105,19 @@ static void p2_carry_step(void)
     }
 }
 
+/* campaign.c (split screen, an all-players gate waited at too long): player 2 to `pos` (a spot inside the gate's domain),
+ * facing as player 1. 1 = put there. */
+int split_p2_put(const float *pos)
+{
+    BYTE *p1 = p1_now(), *n1 = p1 ? *(BYTE **)(p1 + 0x230) : NULL;
+    if (!p2 || client_split || !n1 || p1 == p2 || IsBadWritePtr(p2, 0x2b0))
+        return 0;
+    float at[3] = {pos[0], pos[1] + 0.3f, pos[2]}, *fw = (float *)(n1 + 0x58), dir[3] = {fw[0], fw[1], fw[2]};
+    put_player(p2, at, dir);
+    ts_log("split: player 2 put into a gate at %.2f %.2f %.2f (asked %.2f %.2f %.2f)", at[0], at[1], at[2], pos[0], pos[1], pos[2]);
+    return 1;
+}
+
 /* "!sp carry" (lab): the counters */
 int split_carry_report(char *out, int size)
 {

@@ -333,10 +333,18 @@ static int clients_inside(char *dom, int *missing)
 
 /* storysync.c (host, domain test of a domain the players' shared object is watched by): -1 = no co-op rule for
  * this domain, else 0 = outside / 1 = inside. */
+/* Split screen in single player (game mode 1, the local player 2 exists): the "all players" gates (R_ALL) wait for player 2
+ * too (parity-016, sync-parity top gap 4); the other rules keep the single-player game (death scenes, scanners). */
+int campaign_split_gates(void)
+{
+    return enabled && use_rules && game_mode() == 1 && split_p2() != NULL;
+}
+
 int campaign_dom_verdict(void *dom_, int host_inside)
 {
     char *dom = dom_;
-    if (role() != MODE_SERVER || !dom)
+    int split = role() != MODE_SERVER && campaign_split_gates();
+    if ((role() != MODE_SERVER && !split) || !dom)
         return -1;
     sync_level();
     if (!n_act)
@@ -344,9 +352,14 @@ int campaign_dom_verdict(void *dom_, int host_inside)
     Active *a = active_for(ent_name(dom));
     if (!a)
         return -1;
+    if (split && a->r->rule != R_ALL)
+        return -1;
     if (!a->consulted) {
         a->consulted = 1;
-        VLOG("campaign: %s: rule \"%s\" in effect", a->r->domain, rule_names[a->r->rule]);
+        if (split)
+            CLOG("campaign: %s: rule \"%s\" in effect (split screen: player 2 counts)", a->r->domain, rule_names[a->r->rule]);
+        else
+            VLOG("campaign: %s: rule \"%s\" in effect", a->r->domain, rule_names[a->r->rule]);
     }
     switch (a->r->rule) {
     case R_ALL:
@@ -2264,6 +2277,60 @@ static void dyn_step(DWORD now)
     }
 }
 
+/* ---- split screen: the all-players gates (single player, 4 Hz) ----
+ * campaign_dom_verdict() keeps a gate's domain "outside" while player 1 is inside and player 2 is not. The engine tests a
+ * domain only when its watched object moves, so the domain is tested again here when both stand inside; after
+ * TS_CAMPAIGN_GATHER seconds of waiting (default 20) player 2 is put into the domain, as the host gathers its clients. */
+static void split_gates_step(DWORD now)
+{
+    char *p2e = split_p2();
+    sync_level();
+    for (int k = 0; p2e && k < n_act; k++) {
+        Active *a = &act[k];
+        if (a->r->rule != R_ALL || !a->consulted)
+            continue;
+        char *dom = find_ent(a->r->domain);
+        if (!is_domain(dom))
+            continue;
+        unsigned st = *(unsigned *)(dom + DOM_STATE);
+        char *desc = *(char **)(dom + DOM_DESC);
+        int spent = desc && (*(unsigned char *)(desc + DESC_ACT_ONCE) & 1) && (st & 2);
+        int locked = *(int *)(dom + DOM_LOCKS) > 0, p1_in = inside(dom, PLAYER);
+        int p2_in = inside(dom, p2e) || !player_alive(p2e);
+        if (locked || spent || (st & 1) || !p1_in) {
+            if (a->wait_since)
+                CLOG("campaign: %s: the gate stopped waiting for player 2 (%s)", a->r->domain,
+                     (st & 1) ? "entered" : !p1_in ? "player 1 left it" : locked ? "locked" : "spent");
+            a->wait_since = 0, a->missing = 0;
+            continue;
+        }
+        if (p2_in) {   /* (both inside: test the domain now, it enters) */
+            ((void (TSCALL *)(void *))(*(void ***)dom)[0x134 / 4])(dom);
+            unsigned st2 = *(unsigned *)(dom + DOM_STATE);
+            if (st2 != st || a->missing)
+                CLOG("campaign: %s: players 1 and 2 inside (split screen): tested, state %x -> %x", a->r->domain, st, st2);
+            a->wait_since = 0, a->missing = 0;
+            continue;
+        }
+        a->missing = 1;
+        if (!a->wait_since) {
+            a->wait_since = now;
+            CLOG("campaign: %s waits for player 2 (split screen)", a->r->domain);
+        } else if (gather_after > 0 && now - a->wait_since >= (DWORD)gather_after * 1000) {
+            float pos[3], mn[3], mx[3];
+            float p1[3];
+            a->wait_since = now;
+            dom_point(dom, pos, mn, mx);
+            if (ent_pos(PLAYER, p1) && (p1[0] - pos[0]) * (p1[0] - pos[0]) + (p1[2] - pos[2]) * (p1[2] - pos[2]) < 0.8f * 0.8f) {
+                int ax = mx[0] - mn[0] >= mx[2] - mn[2] ? 0 : 2;   /* (player 1 on the middle: 0.9 m along the longer side) */
+                float want = p1[ax] + (p1[ax] < pos[ax] ? 0.9f : -0.9f);
+                pos[ax] = want < mn[ax] + 0.3f ? mn[ax] + 0.3f : want > mx[ax] - 0.3f ? mx[ax] - 0.3f : want;
+            }
+            CLOG("campaign: %s: player 2 not there after %d s: put in (%d)", a->r->domain, gather_after, split_p2_put(pos));
+        }
+    }
+}
+
 /* ---- per frame (host) ---- */
 static void frame(float dt)
 {
@@ -2279,6 +2346,8 @@ static void frame(float dt)
     }
     if (r != MODE_SERVER) {
         ride_vehicle[0] = 0;
+        if (campaign_split_gates() && now - last >= 250)
+            last = now, split_gates_step(now);
         return;
     }
     veh_step(now);

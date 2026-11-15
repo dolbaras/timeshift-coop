@@ -102,6 +102,8 @@ int ts_profile_value(const char *key, char *out, int size);   /* display.c: a ke
 int ts_cinematic_now(void);           /* split.c: a cinematic camera (or the level 1 opening) is on now (any game mode) */
 void split_p1_native(void *obj, int kind, int arg, const char *name);   /* campaign.c: a player native ran (1 Transport, 2 DisableMove, 3 DisableInput) */
 int split_carry_report(char *out, int size);                            /* "!cp carry" (lab) */
+int split_p2_put(const float *pos);   /* campaign.c: player 2 (split screen) to a spot inside a gate; 1 = done */
+int campaign_split_gates(void);       /* campaign.c: the all-players gates count the local player 2 (split, single player) */
 void *split_radar_record(void);       /* the split screen's shared radar record (radarmate.h), or NULL */
 void gamepad_set_player2_pad(const void *xinput_gamepad);   /* gamepad.c: player 2's pad state from elsewhere (NULL: pad 2) */
 void gamepad_mask_player2(unsigned short buttons, int triggers);   /* gamepad.c: buttons (and both triggers) player 2's commands do not get */

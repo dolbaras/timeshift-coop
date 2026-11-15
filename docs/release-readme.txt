@@ -108,8 +108,9 @@ Not finished / known limits
   is drawn every second frame, so each half runs at half of the game's frame rate (ts_coop.ini ->
   [Split] -> BothViews=1 draws both halves every frame; it only helps when the frame rate is capped,
   off by default, tried on an Intel card only, not on NVIDIA or AMD); the scripts treat player 1 as "the player": the enemies
-  aim at player 2 too, and the story's teleports and movement locks of player 1 are repeated on player 2, but the
-  all-players gates (lifts, trains) wait for player 2 only in a network game; the shot sounds of player 2 are untested. Split screen on a client is basic: player
+  aim at player 2 too, the story's teleports and movement locks of player 1 are repeated on player 2, the
+  all-players gates (lifts, trains) wait for player 2 (after 20 s it is put in), and player 2 is brought to player 1
+  when it stays more than 40 m away for 10 s; the shot sounds of player 2 are untested. Split screen on a client is basic: player
   2's pick-ups were checked in a live game, its time power and kills over the network were not.
 - Most checks of the rewind, force fields, vehicles and container traps were made by reading clip and
   time values, coordinates and the logs of both machines, not by watching the screens: the results are
