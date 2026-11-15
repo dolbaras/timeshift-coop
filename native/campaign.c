@@ -2331,6 +2331,107 @@ static void split_gates_step(DWORD now)
     }
 }
 
+/* ---- cinematics: the partner's name tag (parity-016, sync-parity top gap 5) ----
+ * Aiming at another player shows its name in the middle of the screen (0x5f9be0, stdcall (player record): HUD message
+ * GAME_MP_OPPONENT_PLAYER_NAME in the style player_name_red / player_name_blue). The aim test goes on while a film or a scene
+ * camera is on, so the partner standing in front of this machine's player had its red name over level 1's opening film on
+ * both PCs (run p016-K). While this machine shows a cinematic (ts_cinematic_now: a scene camera, the level 1 opening) the
+ * name is not shown. TS_CAMPAIGN_CINETAG=0: as the stock game. */
+#define NAME_TAG_FN 0x005f9be0
+static int cine_tag = 1;
+static LONG n_tag_hidden;
+__attribute__((used)) int coop_name_tag_hidden(void) __asm__("coop_name_tag_hidden");
+__attribute__((used)) int coop_name_tag_hidden(void)
+{
+    if (!cine_tag || !ts_cinematic_now())
+        return 0;
+    if (InterlockedIncrement(&n_tag_hidden) == 1)
+        CLOG("campaign: a player's name tag not shown during a cinematic (first time)");
+    return 1;
+}
+extern void name_tag_stub(void) __asm__("name_tag_stub");
+__asm__(".text\n"
+        ".globl name_tag_stub\n"
+        "name_tag_stub:\n"
+        "  call coop_name_tag_hidden\n"
+        "  testl %eax, %eax\n"
+        "  jnz 1f\n"
+        "  pushl %ebx\n"                 /* (the five bytes the jump replaced) */
+        "  movl 8(%esp), %ebx\n"
+        "  pushl $0x005f9be5\n"
+        "  ret\n"
+        "1:\n"
+        "  ret $4\n");
+
+/* ---- cinematics: the other players' bodies (parity-016, sync-parity top gap 5) ----
+ * Every machine plays its own copy of a scene with the scene's camera; the story teleports every player to the scene's player
+ * place, so the partners' bodies stand where the single-player game has nobody visible (the own body is never drawn in the main
+ * view: its node has +4 bit 0x10000, which the render prep skips, 0x9a1389). While this machine's cinematic camera is on
+ * (ts_cinematic_now), the remote players' bodies (slot entities' nodes) and a split-screen player 2's body get that bit too, and
+ * lose it again when the camera is back (only the bits set here). TS_CAMPAIGN_CINEHIDE=0: as before. */
+#define NODE_SKIP_MAIN 0x10000u
+static int cine_hide = 1;
+static struct { char *node; } hid[20];
+static int n_hid;
+static char hid_level[0x110];
+
+static void cine_nodes(char **out, int *n, int max)
+{
+    *n = 0;
+    for (int i = 0; *n < max; i++) {
+        char *s = slot_at(i);
+        if (!s)
+            break;
+        char *ent = *(char **)(s + 4);
+        if (!ent || ent == PLAYER || !slot_joined(s) || IsBadReadPtr(ent, 0x234))
+            continue;
+        char *node = *(char **)(ent + 0x230);
+        if (node && !IsBadWritePtr(node, 8))
+            out[(*n)++] = node;
+    }
+    char *p2e = split_p2();
+    if (p2e && *n < max && !IsBadReadPtr(p2e, 0x480)) {   /* (a local player's visible body: the "player_3d" entity, +0x47c handle) */
+        char **h = *(char ***)(p2e + 0x47c), *body = h && !IsBadReadPtr(h, 4) ? *h : NULL;
+        char *node = body && !IsBadReadPtr(body, 0x234) ? *(char **)(body + 0x230) : NULL;
+        if (node && !IsBadWritePtr(node, 8))
+            out[(*n)++] = node;
+    }
+}
+
+static void cine_hide_step(void)
+{
+    if (strncmp(hid_level, LEVEL_NAME, sizeof hid_level - 1) != 0) {   /* (a new level: the old nodes are gone) */
+        snprintf(hid_level, sizeof hid_level, "%s", LEVEL_NAME);
+        n_hid = 0;
+    }
+    int on = cine_hide && ts_cinematic_now();
+    if (!on && !n_hid)
+        return;
+    char *now[20];
+    int n;
+    cine_nodes(now, &n, 20);
+    if (on) {
+        for (int k = 0; k < n && n_hid < 20; k++) {
+            DWORD *fl = (DWORD *)(now[k] + 4);
+            int known = 0;
+            for (int j = 0; j < n_hid; j++)
+                known |= hid[j].node == now[k];
+            if (known || (*fl & NODE_SKIP_MAIN))
+                continue;
+            *fl |= NODE_SKIP_MAIN;
+            hid[n_hid++].node = now[k];
+            CLOG("campaign: cinematic on this machine: another player's body hidden (node %p)", (void *)now[k]);
+        }
+        return;
+    }
+    for (int j = 0; j < n_hid; j++)   /* (back: only nodes that still belong to a player now) */
+        for (int k = 0; k < n; k++)
+            if (now[k] == hid[j].node)
+                *(DWORD *)(now[k] + 4) &= ~NODE_SKIP_MAIN;
+    CLOG("campaign: cinematic over: %d body(ies) shown again", n_hid);
+    n_hid = 0;
+}
+
 /* ---- per frame (host) ---- */
 static void frame(float dt)
 {
@@ -2338,6 +2439,7 @@ static void frame(float dt)
     static DWORD last;
     DWORD now = GetTickCount();
     int r = role();
+    cine_hide_step();
     if (r == MODE_CLIENT) {
         client_frame();
         veh_step(now);
@@ -2884,6 +2986,15 @@ void campaign_install(void)
     if (!ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_GATHER, SUB_LAST, on_message)) {
         ts_log("campaign: off (no script tick, frame slot or mod messages)");
         return;
+    }
+    cine_hide = !(ts_env("TS_CAMPAIGN_CINEHIDE", v, sizeof v) && v[0] == '0');
+    cine_tag = !(ts_env("TS_CAMPAIGN_CINETAG", v, sizeof v) && v[0] == '0');
+    if (cine_tag) {   /* (the partner's name tag during cinematics) */
+        static const unsigned char want_tag[5] = {0x53, 0x8b, 0x5c, 0x24, 0x08};
+        unsigned char rep[5] = {0xe9};
+        *(DWORD *)(rep + 1) = (DWORD)name_tag_stub - (NAME_TAG_FN + 5);
+        if (!ts_patch_bytes(NAME_TAG_FN, want_tag, rep, 5))
+            ts_log("campaign: name tag function not as expected (other exe): tags stay during cinematics");
     }
     int n_hooked = 0;
     {
