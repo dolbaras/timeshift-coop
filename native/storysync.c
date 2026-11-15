@@ -342,6 +342,31 @@ static const char *const host_calls[] = {
     "DelayedDieRemove", "Kill", "FailMission", "AutoSave", "SaveGame", "LoadGame", "LoadLevel", "RestartLevel",
     "Reload", "StartUse", "DisableUse", "EnableUse", "SetGOD", NULL};
 
+/* (parity-016, sync-parity top gap 1) The level scripts' scripted actors (names ending in _CR or _MM: the rebels and soldiers
+ * of the level openings, e.g. ts2_city_part02's rebel_city2_play_start_rebel2_v2_CR) play their scenes as AI behaviours of type
+ * CINE started with SetBHV / PushBHV / PopBHV. Those calls are the host's only (AI control), so a client's copy stood in its
+ * idle pose (animation 175) while the host's played the scene (animation -2, the scripted sequence). Measured 2026-11-15 (run
+ * p016-D): a SetBHV("MOVE1") run on the client's own copy plays the sequence there (175 -> -2, still -2 four seconds later).
+ * So these three calls run on clients too: at each machine's own OnInit, and in the host's replays (OnBhvEnd chains them), so
+ * both copies play the same scene at about the same time. TS_STORYSYNC_CINEBHV=0: host only, as before. */
+static int cine_bhv = 1;
+
+static int scripted_bhv(const char *code, const char *c, int len, const char *self_name)
+{
+    if (!cine_bhv || !((len == 6 && strncmp(c, "SetBHV", 6) == 0) || (len == 7 && strncmp(c, "PushBHV", 7) == 0)
+                       || (len == 6 && strncmp(c, "PopBHV", 6) == 0)))
+        return 0;
+    const char *obj = self_name;
+    int olen = self_name ? (int)strlen(self_name) : 0;
+    if (code[0] == '$') {   /* "$name.SetBHV(...)": the named object */
+        if (c <= code + 2 || c[-1] != '.')
+            return 0;
+        obj = code + 1, olen = (int)(c - 1 - obj);
+    } else if (code != c)
+        return 0;   /* (another form of call: left to the host) */
+    return obj && olen > 3 && (_strnicmp(obj + olen - 3, "_CR", 3) == 0 || _strnicmp(obj + olen - 3, "_MM", 3) == 0);
+}
+
 /* Events every machine runs for its own copy of the level, never sent: set-up, and the world time events
  * (each machine's own world slows/stops; timesync.c keeps the worlds in step). */
 static const char *const always_local[] = {"OnInitLevel", "OnInit", "OnStartTStop", "OnStopTStop", "OnStartTSlow",
@@ -475,7 +500,7 @@ static int classify(const char *src, ClassRec *r, char *out, size_t cap, int *n_
                 if (campaign_wrap_call(code)) {   /* campaign.c: lines to objects the client does not have yet */
                     wrap = out != NULL;
                 } else if (len && in_list(host_calls, c, len)
-                    && !campaign_local_call(code, c, len)) {
+                    && !campaign_local_call(code, c, len) && !scripted_bhv(code, c, len, r->name)) {
                     r->authority = 1;
                     wrap = out != NULL;
                 }
@@ -1535,6 +1560,8 @@ void storysync_install(void)
         fail_restart = 0;
     verbose = ts_env("TS_STORYSYNC_LOG", v, sizeof v) && v[0] == '1';
     ts_env("TS_EVLOG", ev_log_sub, sizeof ev_log_sub);
+    if (ts_env("TS_STORYSYNC_CINEBHV", v, sizeof v) && v[0] == '0')
+        cine_bhv = 0;
     table = calloc(TABLE_SIZE, sizeof(ClassRec));
     if (!table || !ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_OCC, 39, on_message)) {
         ts_log("storysync: off (no script tick or mod messages)");

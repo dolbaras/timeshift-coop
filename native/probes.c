@@ -129,6 +129,11 @@ static void anim_track(Body *b, double t)
     if (!anim_on || (b->kind != K_SELF && b->kind != K_PLAYER))
         return;
     char *node = *(char **)(b->ent + E_NODE);
+    if (b->kind == K_SELF) {   /* (the own player's node plays nothing, -1: its third-person body "player_3d" is a separate
+                                * entity, player +0x47c holds a handle to it; that body is what the other machines get) */
+        char **h = *(char ***)(b->ent + 0x47c), *body = h && !IsBadReadPtr(h, 4) ? *h : NULL;
+        node = body && !IsBadReadPtr(body, E_NODE + 4) ? *(char **)(body + E_NODE) : NULL;
+    }
     if (!node || IsBadReadPtr(node, 0x100))
         return;
     int id = pr_anim_id(node);
