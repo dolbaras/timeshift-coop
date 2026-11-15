@@ -159,7 +159,10 @@ static int client_reask, reask_seq;          /* (after a level change in the ses
                                                 level's server records this client's answer) */
 
 /* server: one record per client id */
-static struct { int id, sends, acked, warned; DWORD at; char name[28]; } peers[MAX_PEERS];   /* (name: from its message 41) */
+static struct { int id, sends, acked, warned; DWORD at; } peers[MAX_PEERS];
+/* (host) the clients' profile names from their message 41; kept for the whole session (peers[] starts again at every level) */
+static struct { int id; char name[28]; } peer_names[MAX_PEERS];
+static int n_peer_names;
 static int n_peers;
 
 /* campaign.c: the in-game Regroup (host: every living client to its player; client: itself to the host's player;
@@ -593,11 +596,19 @@ static void on_message(int peer, unsigned short sub, const unsigned char *d, int
                 again = peers[i].acked;
                 peers[i].acked = 1;
                 sends = peers[i].sends;
-                if (nl > 0 && nl < (int)sizeof peers[i].name) {
-                    memcpy(peers[i].name, d + 4 + vl, nl);
-                    peers[i].name[nl] = 0;
-                }
             }
+        if (nl > 0 && nl < (int)sizeof peer_names[0].name) {
+            int k = 0;
+            while (k < n_peer_names && peer_names[k].id != peer)
+                k++;
+            if (k == n_peer_names && n_peer_names < MAX_PEERS)
+                n_peer_names++;
+            if (k < n_peer_names) {
+                peer_names[k].id = peer;
+                memcpy(peer_names[k].name, d + 4 + vl, nl);
+                peer_names[k].name[nl] = 0;
+            }
+        }
         if (!again)
             CLOG("coopsession: client %d answers: %s (its version %s; session info sent %d time(s))", peer,
                  d[1] == 0 ? "same version" : "OTHER VERSION, it leaves", ver, sends);
@@ -827,9 +838,9 @@ static unsigned barrier_seen_clear;   /* slot bits: the client's flag was clear 
 static void barrier_name_add(int id)
 {
     const char *nm = "?";
-    for (int k = 0; k < n_peers; k++)
-        if (peers[k].id == id && peers[k].name[0])
-            nm = peers[k].name;
+    for (int k = 0; k < n_peer_names; k++)
+        if (peer_names[k].id == id && peer_names[k].name[0])
+            nm = peer_names[k].name;
     size_t used = strlen(barrier_names);
     if (used + strlen(nm) + 4 < sizeof barrier_names)
         snprintf(barrier_names + used, sizeof barrier_names - used, "%s%s", used ? " / " : "", nm);
@@ -1081,7 +1092,7 @@ static void frame(float dt)
             handled_seq = session_seq;
             client_applied = client_left = client_warned = client_asks = 0;
             srv_version[0] = 0;
-            n_peers = 0;
+            n_peers = 0, n_peer_names = 0;
         }
     }
     if (role == MODE_SERVER || role == MODE_DEDICATED) {
