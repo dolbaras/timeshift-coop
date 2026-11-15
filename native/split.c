@@ -542,6 +542,13 @@ static int cinematic(void)
     return i >= 0 && i < *(int *)(c + 8);
 }
 
+/* (any mode) a cinematic camera (or the level 1 opening) is on now: testmode.c's TS_SHOTCINE frames, campaign.c's
+ * hiding of remote bodies during this machine's scenes */
+int ts_cinematic_now(void)
+{
+    return cinematic();
+}
+
 static void bb_size(int *w, int *h)
 {
     BYTE *desc = DRV ? *(BYTE **)(DRV + 0x10c) : NULL;

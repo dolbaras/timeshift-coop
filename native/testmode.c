@@ -5,6 +5,9 @@
  *   TS_WINPOS=x,y        create the game window with its client area at x,y (screen coordinates)
  *                        and keep it there (a test instance opens on the chosen monitor).
  *   TS_WINSIZE=w,h       keep the window's client area w x h.
+ *   TS_WINSTYLE=popup    (with TS_WINPOS) the test window has no frame at all: its outer rectangle IS the client
+ *                        rectangle, so a 1280x720 client placed at a 1280-wide test display's left edge neither
+ *                        runs past its right edge nor puts a border pixel on the monitor to its left (lab only).
  *   TS_ADAPTER=window    create the Direct3D 9 device on the adapter driving the window's monitor
  *                        (the game always asks for adapter 0); TS_ADAPTER=<n>: adapter n.
  *   TS_BACKGROUND=1      the game never takes focus and keeps running when it is not in front;
@@ -15,6 +18,9 @@
  *   TS_SHOTDIR=<dir>     rendered frames saved as <dir>\shotNNN.bmp (NNN: seconds since the start), at
  *   TS_SHOTS=s1,s2,...   these seconds and whenever a file <dir>\shot.req appears (it is deleted);
  *                        needs TS_BACKGROUND or TS_ADAPTER (the device hook).
+ *   TS_SHOTCINE=<ms>     (with TS_SHOTDIR) while a cinematic camera is on, a frame every <ms> as
+ *                        <dir>\cine<seconds>_<k>.bmp (at most 60 a session), and a log line when a cinematic
+ *                        camera comes on or goes off: the frame audit of co-op scenes (lab).
  *
  * Hooks go through the exe's import table and COM vtables; the game code is not patched.
  */
@@ -27,7 +33,7 @@
 
 #include "ts.h"
 
-static int have_pos, win_x, win_y, have_size, win_w, win_h, background;
+static int have_pos, win_x, win_y, have_size, win_w, win_h, background, popup_style;
 static char adapter_mode[16];
 static HWND game_window;
 static WNDPROC game_wndproc;
@@ -85,6 +91,8 @@ static LRESULT CALLBACK bg_wndproc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         if (msg == WM_KILLFOCUS)
             return 0;
     }
+    if (popup_style && msg == WM_STYLECHANGING && wp == (WPARAM)GWL_STYLE)   /* (the frame never comes back) */
+        ((STYLESTRUCT *)lp)->styleNew = WS_POPUP | (((STYLESTRUCT *)lp)->styleNew & WS_VISIBLE);
     if (have_pos && msg == WM_WINDOWPOSCHANGING) {
         WINDOWPOS *p = (WINDOWPOS *)lp;
         int x, y, cw, ch;
@@ -103,6 +111,10 @@ static HWND WINAPI hook_CreateWindowExA(DWORD ex, LPCSTR cls, LPCSTR name, DWORD
     int top = parent == NULL && !(style & WS_CHILD);
     if (top && have_pos)
         x = win_x, y = win_y;
+    if (top && have_pos && popup_style && !game_window && (style & (WS_CAPTION | WS_POPUP))) {
+        style = WS_POPUP | (style & WS_VISIBLE);
+        ex &= ~(DWORD)(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
+    }
     HWND hw = real_CreateWindowExA(ex, cls, name, style, x, y, w, h, parent, menu, inst, param);
     if (hw && top && !game_window && (style & (WS_CAPTION | WS_POPUP))) {
         game_window = hw;
@@ -611,15 +623,23 @@ static UINT pick_adapter(IDirect3D9 *d3d, HWND focus, UINT asked)
 typedef HRESULT (WINAPI *Present_t)(IDirect3DDevice9 *, const RECT *, const RECT *, HWND, const RGNDATA *);
 static Present_t real_Present;
 static char shot_dir[MAX_PATH];
-static int shot_secs[32], shot_count, shot_next;
+static int shot_secs[32], shot_count, shot_next, shot_cine_ms;
 static DWORD shot_t0;
 
+static void save_frame_as(IDirect3DDevice9 *dev, const char *path);
+
 static void save_frame(IDirect3DDevice9 *dev, int secs)
+{
+    char path[MAX_PATH + 32];
+    snprintf(path, sizeof path, "%s\\shot%03d.bmp", shot_dir, secs);
+    save_frame_as(dev, path);
+}
+
+static void save_frame_as(IDirect3DDevice9 *dev, const char *path)
 {
     IDirect3DSurface9 *bb = NULL, *sys = NULL;
     D3DSURFACE_DESC d;
     D3DLOCKED_RECT lr;
-    char path[MAX_PATH + 32];
     if (FAILED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)))
         return;
     IDirect3DSurface9_GetDesc(bb, &d);
@@ -646,7 +666,6 @@ static void save_frame(IDirect3DDevice9 *dev, int secs)
                d.Width, d.Height, d.Format, d.MultiSampleType);
         goto done;
     }
-    snprintf(path, sizeof path, "%s\\shot%03d.bmp", shot_dir, secs);
     FILE *f = fopen(path, "wb");
     if (f) {
         DWORD row = d.Width * 4, size = row * d.Height;
@@ -684,6 +703,26 @@ static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const
         save_frame(dev, (int)((GetTickCount() - shot_t0) / 1000) * 100 + ++asked_n % 100);
     if (shot_next < shot_count && GetTickCount() - shot_t0 >= (DWORD)shot_secs[shot_next] * 1000)
         save_frame(dev, shot_secs[shot_next++]);
+    if (shot_cine_ms && shot_dir[0]) {   /* (TS_SHOTCINE) the frame audit of cinematic scenes */
+        static int was_on, cine_k, cine_total;
+        static DWORD cine_last, cine_since;
+        int on = ts_cinematic_now();
+        DWORD now = GetTickCount();
+        if (on != was_on) {
+            if (on)
+                ts_log("shotcine: cinematic camera ON at %.1f s", (now - shot_t0) / 1000.0);
+            else
+                ts_log("shotcine: cinematic camera off at %.1f s (on for %.1f s; %d frames saved this session)",
+                       (now - shot_t0) / 1000.0, (now - cine_since) / 1000.0, cine_total);
+            was_on = on, cine_since = now, cine_last = 0;
+        }
+        if (on && cine_total < 60 && (!cine_last || now - cine_last >= (DWORD)shot_cine_ms)) {
+            char path[MAX_PATH + 32];
+            snprintf(path, sizeof path, "%s\\cine%03d_%02d.bmp", shot_dir, (int)((now - shot_t0) / 1000), ++cine_k % 100);
+            save_frame_as(dev, path);
+            cine_last = now, cine_total++;
+        }
+    }
     if (shot_dir[0] && ++frame % 30 == 0) {   /* on request: a file shot.req in the folder (deleted when taken) */
         char req[MAX_PATH + 16];
         snprintf(req, sizeof req, "%s\\shot.req", shot_dir);
@@ -839,6 +878,7 @@ void testmode_install(void)
     if (ts_env("TS_WINSIZE", v, sizeof v) && sscanf(v, "%d,%d", &win_w, &win_h) == 2 && win_w > 0 && win_h > 0)
         have_size = 1;
     background = ts_env("TS_BACKGROUND", v, sizeof v) && v[0] == '1';
+    popup_style = have_pos && ts_env("TS_WINSTYLE", v, sizeof v) && strcmp(v, "popup") == 0;
     ts_env("TS_ADAPTER", adapter_mode, sizeof adapter_mode);
     real_CreateWindowExA = (CreateWindowExA_t)ts_patch_iat("USER32.dll", "CreateWindowExA", (void *)hook_CreateWindowExA);
     real_SetWindowPos = (SetWindowPos_t)ts_patch_iat("USER32.dll", "SetWindowPos", (void *)hook_SetWindowPos);
@@ -867,12 +907,15 @@ void testmode_install(void)
     if (ts_env("TS_SHOTDIR", shot_dir, sizeof shot_dir) && ts_env("TS_SHOTS", shots, sizeof shots))
         for (char *t = strtok(shots, ","); t && shot_count < 32; t = strtok(NULL, ","))
             shot_secs[shot_count++] = atoi(t);   /* (ascending, as given) */
+    if (shot_dir[0] && ts_env("TS_SHOTCINE", v, sizeof v) && atoi(v) > 0)
+        shot_cine_ms = atoi(v) < 200 ? 200 : atoi(v);
     real_MessageBoxA = (MessageBoxA_t)ts_patch_iat("USER32.dll", "MessageBoxA", (void *)hook_MessageBoxA);
     real_MessageBoxW = (MessageBoxW_t)ts_patch_iat("USER32.dll", "MessageBoxW", (void *)hook_MessageBoxW);
     real_DialogBoxParamA = (DialogBoxParamA_t)ts_patch_iat("USER32.dll", "DialogBoxParamA", (void *)hook_DialogBoxParamA);
     real_CreateDialogParamA = (CreateDialogParamA_t)ts_patch_iat("USER32.dll", "CreateDialogParamA",
                                                                  (void *)hook_CreateDialogParamA);
     if (have_pos || background || adapter_mode[0])
-        ts_log("test mode: pos=%d,%d (%s) size=%dx%d (%s) background=%d adapter=%s", win_x, win_y, have_pos ? "on" : "off",
-               win_w, win_h, have_size ? "on" : "off", background, adapter_mode[0] ? adapter_mode : "game's");
+        ts_log("test mode: pos=%d,%d (%s) size=%dx%d (%s) background=%d adapter=%s%s", win_x, win_y, have_pos ? "on" : "off",
+               win_w, win_h, have_size ? "on" : "off", background, adapter_mode[0] ? adapter_mode : "game's",
+               popup_style ? " frameless" : "");
 }
