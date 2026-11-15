@@ -377,16 +377,16 @@ STRINGS = [
         "czech": "Hostitel čeká u průchodu na hráče: {STRING}. Jdi k němu, nebo použij v menu pauzy „Shromáždit“.",
         "hungarian": "A házigazda egy átjárónál vár {STRING} játékosra: menj hozzá, vagy válaszd a szünetmenü „Összegyűlés” pontját.",
     }),
-    ("COOP_HINT_LOADWAIT", {   # hint on every machine that waits at a level start (the level barrier); {STRING} 1 = players still loading
-        "english": "Waiting for {STRING} player(s) to load the level.",
-        "russian": "Ждём, пока загрузят уровень игроки: {STRING}.",
-        "german": "Warten, bis {STRING} Spieler den Level geladen hat/haben.",
-        "french": "En attente de {STRING} joueur(s) qui charge(nt) le niveau.",
-        "italian": "In attesa che {STRING} giocatori carichino il livello.",
-        "spanish": "Esperando a que {STRING} jugador(es) carguen el nivel.",
-        "polish": "Czekamy, aż gracze wczytają poziom: {STRING}.",
-        "czech": "Čeká se, až hráči načtou úroveň: {STRING}.",
-        "hungarian": "Várakozás {STRING} játékosra, amíg betölti a pályát.",
+    ("COOP_HINT_LOADWAIT", {   # hint on every machine that waits at a level start (the level barrier); {STRING} 1 = the names of the players still loading ("A / B")
+        "english": "Waiting for the players still loading the level: {STRING}",
+        "russian": "Ждём игроков, которые загружают уровень: {STRING}",
+        "german": "Warten auf die Spieler, die den Level noch laden: {STRING}",
+        "french": "En attente des joueurs qui chargent encore le niveau : {STRING}",
+        "italian": "In attesa dei giocatori che stanno ancora caricando il livello: {STRING}",
+        "spanish": "Esperando a los jugadores que aún cargan el nivel: {STRING}",
+        "polish": "Czekamy na graczy, którzy jeszcze wczytują poziom: {STRING}",
+        "czech": "Čeká se na hráče, kteří ještě načítají úroveň: {STRING}",
+        "hungarian": "Várakozás a pályát még betöltő játékosokra: {STRING}",
     }),
 ]
 

@@ -141,6 +141,7 @@ static int barrier_want;                     /* host: a server level started wit
 static DWORD barrier_asked;
 static volatile LONG barrier_host_on, barrier_host_missing;   /* client: the host's message 45 */
 static volatile DWORD barrier_host_at;
+static char barrier_names[96];   /* host: the loading clients' names ("A / B"); client: as the host's message 45 says */
 static int ready_room_host;                  /* host: this level started as the ready room */
 static char my_version[VER_MAX + 1] = TS_VERSION;   /* (TS_COOP_VERSION: lab test of the version check) */
 static int host_flags, host_difficulty = 255, host_maxplayers;
@@ -158,7 +159,7 @@ static int client_reask, reask_seq;          /* (after a level change in the ses
                                                 level's server records this client's answer) */
 
 /* server: one record per client id */
-static struct { int id, sends, acked, warned; DWORD at; } peers[MAX_PEERS];
+static struct { int id, sends, acked, warned; DWORD at; char name[28]; } peers[MAX_PEERS];   /* (name: from its message 41) */
 static int n_peers;
 
 /* campaign.c: the in-game Regroup (host: every living client to its player; client: itself to the host's player;
@@ -512,15 +513,25 @@ static void send_session(int slot, int id, int log)
          host_difficulty, n);
 }
 
+static void ssl_str(const char *text, char *out, int size);
+
 static void send_ack(int result)
 {
-    unsigned char b[4 + VER_MAX];
+    unsigned char b[4 + VER_MAX + 32];
     int vl = (int)strlen(my_version);
     b[0] = PROTO;
     b[1] = (unsigned char)result;
     b[2] = (unsigned char)vl;
     memcpy(b + 3, my_version, vl);
-    coopnet_send(-1, SUB_ACK, b, 3 + vl);   /* (-1 on a client = the server) */
+    /* (parity-016) then u8 len + this player's profile name, for the host's "waiting for <names>" line; older hosts ignore it */
+    char nm[64] = "";
+    ssl_str("return $ui.GetVariable(\"Multiplayer\", \"PlayerName\", \"string\")", nm, sizeof nm);
+    int nl = 0;
+    for (int i = 0; nm[i] && nl < 24; i++)
+        if ((unsigned char)nm[i] >= 32 && nm[i] != ',' && nm[i] != '"')
+            b[4 + vl + nl++] = (unsigned char)nm[i];
+    b[3 + vl] = (unsigned char)nl;
+    coopnet_send(-1, SUB_ACK, b, 4 + vl + nl);   /* (-1 on a client = the server) */
 }
 
 /* Net pump (main thread, inside the game's message handler): copy and leave the work to the tick. */
@@ -556,6 +567,13 @@ static void on_message(int peer, unsigned short sub, const unsigned char *d, int
         InterlockedExchange(&room_host_on, d[1] != 0);
         room_host_at = GetTickCount();
     } else if (sub == SUB_BARRIER && game_mode() == MODE_CLIENT && len >= 3) {
+        int nl = len >= 4 ? d[3] : 0;
+        if (nl > len - 4)
+            nl = len - 4;
+        if (nl < 0 || nl >= (int)sizeof barrier_names)
+            nl = 0;
+        memcpy(barrier_names, d + 4, nl);
+        barrier_names[nl] = 0;
         InterlockedExchange(&barrier_host_missing, d[2]);
         InterlockedExchange(&barrier_host_on, d[1] != 0);
         barrier_host_at = GetTickCount();
@@ -567,11 +585,18 @@ static void on_message(int peer, unsigned short sub, const unsigned char *d, int
         int vl = d[2] <= len - 3 ? d[2] : len - 3;
         clean_version(ver, sizeof ver, d + 3, vl);
         int sends = 0, again = 0;
+        int nl = 3 + vl < len ? d[3 + vl] : 0;
+        if (nl > len - 4 - vl)
+            nl = len - 4 - vl;
         for (int i = 0; i < n_peers; i++)
             if (peers[i].id == peer) {
                 again = peers[i].acked;
                 peers[i].acked = 1;
                 sends = peers[i].sends;
+                if (nl > 0 && nl < (int)sizeof peers[i].name) {
+                    memcpy(peers[i].name, d + 4 + vl, nl);
+                    peers[i].name[nl] = 0;
+                }
             }
         if (!again)
             CLOG("coopsession: client %d answers: %s (its version %s; session info sent %d time(s))", peer,
@@ -799,9 +824,21 @@ static int barrier_on_here, barrier_off_sends, barrier_missing_last = -1;
 static DWORD barrier_since, barrier_sent, barrier_hint_at, barrier_all_at;
 static unsigned barrier_seen_clear;   /* slot bits: the client's flag was clear at some time since the level start */
 
+static void barrier_name_add(int id)
+{
+    const char *nm = "?";
+    for (int k = 0; k < n_peers; k++)
+        if (peers[k].id == id && peers[k].name[0])
+            nm = peers[k].name;
+    size_t used = strlen(barrier_names);
+    if (used + strlen(nm) + 4 < sizeof barrier_names)
+        snprintf(barrier_names + used, sizeof barrier_names - used, "%s%s", used ? " / " : "", nm);
+}
+
 static int barrier_missing(DWORD now)
 {
     int n = 0;
+    barrier_names[0] = 0;
     for (int i = 0; i < slot_count() && i < 32; i++) {
         char *s = slot_at(i);
         if (!s || *(int *)s == 0 || (*(int *)(s + 8) & SLOT_JOINED) == 0)
@@ -810,19 +847,22 @@ static int barrier_missing(DWORD now)
         if (!in)
             barrier_seen_clear |= 1u << i;
         if (!in || (!(barrier_seen_clear & (1u << i)) && now - barrier_since < 8000))
-            n++;
+            n++, barrier_name_add(*(int *)s);
     }
     return n;
 }
 
 static void barrier_send(int on, int missing)
 {
-    unsigned char b[3] = {PROTO, (unsigned char)on, (unsigned char)(missing > 255 ? 255 : missing)};
+    unsigned char b[4 + sizeof barrier_names] = {PROTO, (unsigned char)on, (unsigned char)(missing > 255 ? 255 : missing)};
+    int nl = on ? (int)strlen(barrier_names) : 0;
+    b[3] = (unsigned char)nl;
+    memcpy(b + 4, barrier_names, nl);
     for (int i = 0; i < slot_count(); i++) {
         char *s = slot_at(i);
         if (!s || *(int *)s == 0 || (*(int *)(s + 8) & (SLOT_JOINED | SLOT_READY)) != (SLOT_JOINED | SLOT_READY))
             continue;
-        coopnet_send(i, SUB_BARRIER, b, 3);
+        coopnet_send(i, SUB_BARRIER, b, 4 + nl);
     }
 }
 
@@ -841,7 +881,8 @@ static void barrier_tick(DWORD now)
             missing = barrier_missing(now);
             if (missing != barrier_missing_last) {
                 barrier_missing_last = missing;
-                CLOG("coopsession: level barrier: %d client(s) still loading after %u s", missing, (now - barrier_since) / 1000);
+                CLOG("coopsession: level barrier: %d client(s) still loading after %u s%s%s", missing, (now - barrier_since) / 1000,
+                     missing ? ": " : "", barrier_names);
             }
             if (!missing && !barrier_all_at)
                 barrier_all_at = now;
@@ -878,9 +919,9 @@ static void barrier_tick(DWORD now)
     if (ev & RR_EV_LEAVE)
         CLOG("coopsession: level barrier: own player %s", act == RR_RELEASE ? "released" : was_held ? "gone (not released)" : "not held");
     if (barrier.on && missing > 0 && now - barrier_hint_at >= 3000) {
-        char id[48];
+        char id[160];
         barrier_hint_at = now;
-        snprintf(id, sizeof id, "COOP_HINT_LOADWAIT,%d", missing);
+        snprintf(id, sizeof id, "COOP_HINT_LOADWAIT,%s", barrier_names[0] ? barrier_names : "?");
         show_hint(id);
     }
 }
