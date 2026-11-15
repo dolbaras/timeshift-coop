@@ -348,8 +348,11 @@ static const char *const host_calls[] = {
  * idle pose (animation 175) while the host's played the scene (animation -2, the scripted sequence). Measured 2026-11-15 (run
  * p016-D): a SetBHV("MOVE1") run on the client's own copy plays the sequence there (175 -> -2, still -2 four seconds later).
  * So these three calls run on clients too: at each machine's own OnInit, and in the host's replays (OnBhvEnd chains them), so
- * both copies play the same scene at about the same time. TS_STORYSYNC_CINEBHV=0: host only, as before. */
-static int cine_bhv = 1;
+ * both copies play the same scene at about the same time. OFF by default (TS_STORYSYNC_CINEBHV=1 switches it on, lab): in
+ * run p016-E (client joined 60 s after the host's level start) the client's copies of the level 2 opening rebels still stood
+ * at 175 for 3 minutes with it on; why (the OnInit SetBHV("IDLE") on a fresh proxy, or no replay for a late joiner) is not
+ * known yet. */
+static int cine_bhv = 0;
 
 static int scripted_bhv(const char *code, const char *c, int len, const char *self_name)
 {
@@ -1560,8 +1563,8 @@ void storysync_install(void)
         fail_restart = 0;
     verbose = ts_env("TS_STORYSYNC_LOG", v, sizeof v) && v[0] == '1';
     ts_env("TS_EVLOG", ev_log_sub, sizeof ev_log_sub);
-    if (ts_env("TS_STORYSYNC_CINEBHV", v, sizeof v) && v[0] == '0')
-        cine_bhv = 0;
+    if (ts_env("TS_STORYSYNC_CINEBHV", v, sizeof v) && v[0] == '1')
+        cine_bhv = 1;
     table = calloc(TABLE_SIZE, sizeof(ClassRec));
     if (!table || !ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_OCC, 39, on_message)) {
         ts_log("storysync: off (no script tick or mod messages)");
