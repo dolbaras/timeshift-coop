@@ -99,6 +99,8 @@ void gamepad_poll_player2(int on);   /* split.c: the next input polls read pad 2
 void split_install(void);
 unsigned char *split_player2(void);   /* the second player run on this machine (split screen, a client's player 2), or NULL */
 int ts_cinematic_now(void);           /* split.c: a cinematic camera (or the level 1 opening) is on now (any game mode) */
+void split_p1_native(void *obj, int kind, int arg, const char *name);   /* campaign.c: a player native ran (1 Transport, 2 DisableMove, 3 DisableInput) */
+int split_carry_report(char *out, int size);                            /* "!cp carry" (lab) */
 void *split_radar_record(void);       /* the split screen's shared radar record (radarmate.h), or NULL */
 void gamepad_set_player2_pad(const void *xinput_gamepad);   /* gamepad.c: player 2's pad state from elsewhere (NULL: pad 2) */
 void gamepad_mask_player2(unsigned short buttons, int triggers);   /* gamepad.c: buttons (and both triggers) player 2's commands do not get */

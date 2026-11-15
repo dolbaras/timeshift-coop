@@ -869,6 +869,7 @@ static void TSCALL hk_input(void *obj, int argc, Variant *argv, Variant *res, vo
     else if (tracking_client(obj))
         mine.input = arg_bool(argc, argv, 0, 1), mine.input_at = GetTickCount();
     cp_t_input(obj, argc, argv, res, self);
+    split_p1_native(obj, 3, arg_bool(argc, argv, 0, 1), NULL);   /* (split screen: player 2 too) */
 }
 
 static void TSCALL hk_move(void *obj, int argc, Variant *argv, Variant *res, void *self)
@@ -878,6 +879,7 @@ static void TSCALL hk_move(void *obj, int argc, Variant *argv, Variant *res, voi
     else if (tracking_client(obj))
         mine.move = arg_bool(argc, argv, 0, 1), mine.move_at = GetTickCount();
     cp_t_move(obj, argc, argv, res, self);
+    split_p1_native(obj, 2, arg_bool(argc, argv, 0, 1), NULL);   /* (split screen: player 2 too) */
 }
 
 /* a teleport of this machine's player (a replayed Transport): afterwards, when it stands on another player, it steps aside */
@@ -889,6 +891,8 @@ static void TSCALL hk_transport(void *obj, int argc, Variant *argv, Variant *res
     cp_t_transport(obj, argc, argv, res, self);
     if (use_spread && obj && obj == (void *)PLAYER && role() == MODE_CLIENT)
         spread_at = GetTickCount() + 400;
+    if (argc >= 1 && argv && argv[0].type == type_str() && argv[0].data)   /* (split screen: player 2 to the same place) */
+        split_p1_native(obj, 1, 0, ((String)argv[0].data)->s);
 }
 
 static void TSCALL hk_aim(void *obj, int argc, Variant *argv, Variant *res, void *self)
@@ -1510,7 +1514,7 @@ static void loadout_step(DWORD now)
 typedef struct { DWORD addr, seh; void *hook; int group; } Hook;   /* group 1 late join / lock watchdog, 2 AI, 3 voice, 4 spread teleports */
 static const Hook hooks[] = {
     {0x647d40, 0xc7eba8, (void *)hk_showmsg, 3}, {0x6478e0, 0xc7ec28, (void *)hk_playsnd, 3},
-    {0x438a40, 0xc79190, (void *)hk_transport, 4},
+    {0x438a40, 0xc79190, (void *)hk_transport, 1},   /* (group 1 since parity-016: split screen repeats teleports on player 2; the spread part still needs TS_CAMPAIGN_SPREAD=1) */
     {0x438d40, 0xc67c78, (void *)hk_input, 1}, {0x438e90, 0xc67c48, (void *)hk_move, 1},
     {0x439040, 0xc79130, (void *)hk_tc, 1},    {0x43a140, 0xc67a38, (void *)hk_wpn, 1},
     {0x666d90, 0xc69418, (void *)hk_aim, 1},
@@ -2408,6 +2412,8 @@ int campaign_console(const char *text, char *out, int size)
     }
     if (!strcmp(cmd, "radar"))   /* "!cp radar" (lab): the player table and the players among the radar's records (coopsession.c) */
         return coopsession_radar_report(out, size), 1;
+    if (!strcmp(cmd, "carry"))   /* "!cp carry" (lab): split screen's player 2 carried with player 1 (split.c) */
+        return split_carry_report(out, size), 1;
     if (!strcmp(cmd, "regroup")) {
         int n = campaign_regroup();
         if (n < 0)

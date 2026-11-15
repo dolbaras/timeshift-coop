@@ -81,6 +81,10 @@ typedef struct {
     /* per-period results */
     int frames, stall, spike, jumps, nirr;
     double irr_sum, ydev_sum, vmax;
+    /* `!pr anim` (players only): the body's animation id changes and a histogram of the ids */
+    int an_last, an_n;
+    double an_since;
+    struct { int id, entries; double secs; } an_tab[40];
 } Body;
 
 typedef struct { double v[3], dt[3]; float step[3]; int n; } Speeds;
@@ -109,6 +113,45 @@ static double now_s(void)
     QueryPerformanceCounter(&c);
     return (double)c.QuadPart / (double)qpf.QuadPart;
 }
+
+/* ---- `!pr anim on|off|dump` (lab, parity-016): which animations the players' bodies play ----
+ * For this machine's own player (self) and every remote player body (player), every frame: the node's current animation id
+ * (0x951660, the reader aisync's `!ai pstate` uses); a change is logged as
+ *   pa: <kind>(<label>) t<ms> an <old> -> <new> after <ms held>
+ * (at most 400 lines a session) and counted per id. `!pr anim dump` logs and answers the histogram per body:
+ *   ph: <kind>(<label>) <id>x<entries>/<seconds> ...
+ * The host's "self" ids and a client's "player" ids of the same body are the same numbers when the action reaches the client. */
+static int (__attribute__((thiscall)) *pr_anim_id)(void *node) = (void *)0x951660;
+static int anim_on, anim_lines;
+
+static void anim_track(Body *b, double t)
+{
+    if (!anim_on || (b->kind != K_SELF && b->kind != K_PLAYER))
+        return;
+    char *node = *(char **)(b->ent + E_NODE);
+    if (!node || IsBadReadPtr(node, 0x100))
+        return;
+    int id = pr_anim_id(node);
+    if (b->an_n == 0 && b->an_since == 0) {   /* first sample */
+        b->an_last = id, b->an_since = t;
+    }
+    if (id == b->an_last)
+        return;
+    double held = t - b->an_since;
+    int k;
+    for (k = 0; k < b->an_n && b->an_tab[k].id != b->an_last; k++)
+        ;
+    if (k == b->an_n && b->an_n < 40)
+        b->an_tab[b->an_n].id = b->an_last, b->an_tab[b->an_n].entries = 0, b->an_tab[b->an_n].secs = 0, b->an_n++;
+    if (k < b->an_n)
+        b->an_tab[k].entries++, b->an_tab[k].secs += held;
+    if (anim_lines++ < 400)
+        ts_log("pa: %s(%s) t%.0f an %d -> %d after %.0f ms", b->kind == K_SELF ? "self" : "player", b->label, (t - t_start) * 1000,
+               b->an_last, id, held * 1000);
+    b->an_last = id, b->an_since = t;
+}
+
+static int anim_dump(char *out, int size);
 
 static int is_ai(const char *o)
 {
@@ -261,7 +304,7 @@ static void collect(double t)
     if (self && !IsBadReadPtr(self, E_NODE + 4)) {
         Body *b = body_for(self, K_SELF, "self");
         if (b)
-            sample(b, t), steps((int)(b - bodies), b);
+            sample(b, t), steps((int)(b - bodies), b), anim_track(b, t);
     }
     int mode = gm ? *(int *)(gm + MODE_OFF) : 0;
     int ns = gm ? *(int *)(gm + NSLOTS_OFF) : 0;
@@ -275,7 +318,7 @@ static void collect(double t)
             snprintf(label, sizeof label, "slot%d", i);
             Body *b = body_for(e, K_PLAYER, label);
             if (b)
-                sample(b, t), steps((int)(b - bodies), b);
+                sample(b, t), steps((int)(b - bodies), b), anim_track(b, t);
         }
     char *bk = ENT_BUCKETS;
     int nb = ENT_NBUCKETS;
@@ -547,6 +590,26 @@ void probes_install(void)
     feet_in_report = ts_env("TS_PROBES_FEET", v, sizeof v) && v[0] == '1';
     ts_env("TS_PROBES", v, sizeof v);
     probes_on(atoi(v) > 1 ? atoi(v) : 10);
+    anim_on = ts_env("TS_PROBES_ANIM", v, sizeof v) && v[0] == '1';
+}
+
+static int anim_dump(char *out, int size)
+{
+    int n = 0;
+    double t = now_s();
+    for (int i = 0; i < n_bodies && n < size - 200; i++) {
+        Body *b = &bodies[i];
+        if (b->kind != K_SELF && b->kind != K_PLAYER)
+            continue;
+        n += snprintf(out + n, size - n, "ph: %s(%s) now %d (%.1f s);", b->kind == K_SELF ? "self" : "player", b->label, b->an_last,
+                      b->an_since > 0 ? t - b->an_since : 0.0);
+        for (int k = 0; k < b->an_n && n < size - 40; k++)
+            n += snprintf(out + n, size - n, " %dx%d/%.1f", b->an_tab[k].id, b->an_tab[k].entries, b->an_tab[k].secs);
+        n += snprintf(out + n, size - n, "\n");
+    }
+    if (!n)
+        n = snprintf(out, size, "ph: no player bodies\n");
+    return n;
 }
 
 int probes_console(const char *text, char *out, int size)
@@ -568,6 +631,15 @@ int probes_console(const char *text, char *out, int size)
         return snprintf(out, size, "probes are off: `!pr on [seconds]` or TS_PROBES=<seconds>"), 1;
     if (!strcmp(cmd, "pm")) {
         pm_text(out, size, 0);
+        return 1;
+    }
+    if (!strcmp(cmd, "anim")) {   /* "!pr anim on|off|dump" (see anim_track) */
+        if (!strcmp(a1, "on") || !strcmp(a1, "off")) {
+            anim_on = a1[1] == 'n';
+            return snprintf(out, size, "animation log %s", anim_on ? "on (pa: lines)" : "off"), 1;
+        }
+        anim_dump(out, size);
+        log_lines(out);
         return 1;
     }
     if (!strcmp(cmd, "reset")) {
@@ -611,5 +683,5 @@ int probes_console(const char *text, char *out, int size)
         trace.line[0] = 0;
         return snprintf(out, size, "tracing %s for %d frames into the log (pt: lines)", trace.label, frames), 1;
     }
-    return snprintf(out, size, "!pr on [s] | off | pm | reset | feet | pairs | bumpr <m> | trace <self|player|net:<id>|name> [frames]"), 1;
+    return snprintf(out, size, "!pr on [s] | off | pm | reset | feet | pairs | bumpr <m> | trace <self|player|net:<id>|name> [frames] | anim on|off|dump"), 1;
 }

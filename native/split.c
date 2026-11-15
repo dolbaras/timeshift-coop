@@ -3008,12 +3008,119 @@ static void p2_tc_follow(void)
         }
 }
 
+/* ---- player 2 carried by the story (parity-016, sync-parity top gap 4) ----
+ * The level scripts teleport and lock `$player` (player 1) only: lifts, trains, the truck ride, button and cinematic
+ * teleports, dialogue locks. campaign.c's hooks of the player natives Transport (0x438a40), DisableMove (0x438e90) and
+ * DisableInput (0x438d40) call split_p1_native() after the native ran (main thread, script tick). When that call was on
+ * player 1 while player 2 exists here (split screen; not a client's shadow of the host's player 2), it is repeated on
+ * $player2 in the next tick, inside p2_enter / p2_leave as StartUse is: a teleport moves player 2 to the same locator
+ * (0.8 s later, when both bodies stand on one spot, player 2 is put beside player 1), a lock or release holds or frees
+ * player 2 too.
+ * Leash: player 2 more than 40 m from player 1 for 10 s in play (no cinematic, both alive, neither uses a seat or vehicle)
+ * is put beside player 1 (place_player), for the rides and gates the scripts do with player 1 alone.
+ * TS_SPLIT_CARRY=0 switches both off; TS_SPLIT_LEASH=<m> sets the distance (0 = no leash). */
+static int carry_off, leash_m = 40;
+static struct { int kind, arg; char name[96]; } carry_q[8];
+static int carry_n;
+static DWORD carry_check_at, leash_since;
+static unsigned carry_count[4], leash_count;
+
+void split_p1_native(void *obj, int kind, int arg, const char *name)
+{
+    if (carry_off || p2_follow_off || !p2 || client_split || !obj || (BYTE *)obj == p2 || (BYTE *)obj != p1_now())
+        return;
+    if (kind == 1 && (!name || !name[0]))
+        return;
+    if (carry_n < (int)(sizeof carry_q / sizeof carry_q[0])) {
+        carry_q[carry_n].kind = kind, carry_q[carry_n].arg = arg;
+        snprintf(carry_q[carry_n].name, sizeof carry_q[carry_n].name, "%s", name ? name : "");
+        carry_n++;
+    }
+}
+
+static int uses_something(BYTE *pl)
+{
+    if (!pl || IsBadReadPtr(pl, 0x400))
+        return 0;
+    return ((int (TSCALL *)(void *))(*(void ***)pl)[0x23c / 4])(pl) != 0;
+}
+
+static float players_apart(BYTE *a, BYTE *b)
+{
+    BYTE *na = a ? *(BYTE **)(a + 0x230) : NULL, *nb = b ? *(BYTE **)(b + 0x230) : NULL;
+    if (!na || !nb)
+        return -1;
+    float *pa = (float *)(na + 0x68), *pb = (float *)(nb + 0x68), dx = pa[0] - pb[0], dy = pa[1] - pb[1], dz = pa[2] - pb[2];
+    return sqrtf(dx * dx + dy * dy + dz * dz);
+}
+
+static void p2_carry_step(void)
+{
+    static const char *const what[4] = {"", "Transport", "DisableMove", "DisableInput"};
+    BYTE *p1 = p1_now();
+    char ssl[160], out[96];
+    for (int i = 0; i < carry_n; i++) {
+        int k = carry_q[i].kind;
+        if (k == 1)
+            snprintf(ssl, sizeof ssl, "$player2.Transport(\"%s\")", carry_q[i].name);
+        else
+            snprintf(ssl, sizeof ssl, "$player2.%s(%d)", what[k], carry_q[i].arg);
+        p2_enter();
+        ts_script_run(ssl, out, sizeof out);
+        p2_leave();
+        carry_count[k]++;
+        ts_log("split: player 1's %s(%s%s%s) repeated on player 2: %s", what[k], k == 1 ? "\"" : "",
+               k == 1 ? carry_q[i].name : (carry_q[i].arg ? "1" : "0"), k == 1 ? "\"" : "", out);
+        if (k == 1)
+            carry_check_at = GetTickCount() + 800;
+    }
+    carry_n = 0;
+    if (carry_check_at && (int)(GetTickCount() - carry_check_at) >= 0) {
+        carry_check_at = 0;
+        float d = players_apart(p1, p2);
+        ts_log("split: after the teleport player 2 is %.2f m from player 1%s", d, d >= 0 && d < 0.6f ? ": put beside it" : "");
+        if (d >= 0 && d < 0.6f)
+            place_player(p2, p1);
+    }
+    /* the leash */
+    if (!p1 || p1 == p2)
+        return;
+    DWORD now = GetTickCount();
+    float d = players_apart(p1, p2);
+    int away = leash_m > 0 && d > (float)leash_m && in_play() && !cinematic() && *(float *)(p1 + 0x234) > 0 && *(float *)(p2 + 0x234) > 0
+              && !uses_something(p1) && !uses_something(p2);
+    if (!away) {
+        leash_since = 0;
+        return;
+    }
+    if (!leash_since) {
+        leash_since = now;
+        return;
+    }
+    if (now - leash_since >= 10000) {
+        leash_since = 0;
+        leash_count++;
+        ts_log("split: leash: player 2 was %.1f m from player 1 for 10 s: put beside player 1", d);
+        place_player(p2, p1);
+    }
+}
+
+/* "!sp carry" (lab): the counters */
+int split_carry_report(char *out, int size)
+{
+    return snprintf(out, size, "carry %s: Transport %u, DisableMove %u, DisableInput %u repeated; leash %d m, %u pull(s); players %.1f m apart",
+                    carry_off ? "off" : "on", carry_count[1], carry_count[2], carry_count[3], leash_m, leash_count,
+                    p2 ? players_apart(p1_now(), p2) : -1.0f);
+}
+
 /* main thread, script tick, while player 2 exists on the machine that runs it */
 static void p2_follow_step(void)
 {
     if (!p2 || p2_follow_off || as2.depth)
         return;
     p2_tc_follow();
+    if (!carry_off)
+        p2_carry_step();
     char ssl[160], out[96];
     if (hol_want && !strcmp(hol_level, SP_LEVEL)) {
         hol_want = 0;
@@ -3990,7 +4097,8 @@ static void split_tick(float dt)
     int gap = now - last_tick > 500;   /* (a level load: the tick stopped) */
     static int apart;   /* (the players pulled apart at a level start) */
     if (gap)
-        placed = 0, support_tries = 0, support_check = 0, place_retry = 0, apart = 0, hud_root = NULL, n_p2_gone = 0, n_crs_gone = 0;
+        placed = 0, support_tries = 0, support_check = 0, place_retry = 0, apart = 0, hud_root = NULL, n_p2_gone = 0, n_crs_gone = 0,
+        carry_n = 0, carry_check_at = 0, leash_since = 0;
     if (!in_play() || cinematic() || gap)
         p1_since = now;
     last_tick = now;
@@ -4169,6 +4277,9 @@ void split_install(void)
     copy_free = ts_env("TS_SPLIT_COPYFREE", v, sizeof v) && v[0] == '1';
     host_items_off = ts_env("TS_SPLIT_HOSTITEMS", v, sizeof v) && v[0] == '0';
     p2_follow_off = ts_env("TS_SPLIT_FOLLOW", v, sizeof v) && v[0] == '0';
+    carry_off = ts_env("TS_SPLIT_CARRY", v, sizeof v) && v[0] == '0';
+    if (ts_env("TS_SPLIT_LEASH", v, sizeof v))
+        leash_m = atoi(v) > 0 ? atoi(v) : 0;
     if (!p2_follow_off && (stage >= 3 || !forced) && install_follow_hooks() != 2)
         ts_log("split: script native hooks not all set (player 2 does not follow player 1's turret seat or holster)");
     if (splitlog && *(DWORD *)(0xd74c28 + 0x13c) == 0x42fa90)
