@@ -79,6 +79,14 @@ static int profile_value(const char *path, const char *key, char *out, int size)
     return found;
 }
 
+/* (coopsession.c) a key of the player's profile, e.g. PlayerName: 1 = found */
+int ts_profile_value(const char *key, char *out, int size)
+{
+    char path[MAX_PATH];
+    out[0] = 0;
+    return profile_path(path, sizeof path) && profile_value(path, key, out, size);
+}
+
 #define FRAME_STYLE (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE)
 static int frame_w, frame_h;   /* window mode: the framed window's outer size */
 static DWORD subclass_at;      /* GetTickCount() when the game window was taken over */

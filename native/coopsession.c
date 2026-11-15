@@ -528,7 +528,7 @@ static void send_ack(int result)
     memcpy(b + 3, my_version, vl);
     /* (parity-016) then u8 len + this player's profile name, for the host's "waiting for <names>" line; older hosts ignore it */
     char nm[64] = "";
-    ssl_str("return $ui.GetVariable(\"Multiplayer\", \"PlayerName\", \"string\")", nm, sizeof nm);
+    ts_profile_value("PlayerName", nm, sizeof nm);   /* (the profile's PlayerName; $ui.GetVariable gave nothing, run p016-I) */
     int nl = 0;
     for (int i = 0; nm[i] && nl < 24; i++)
         if ((unsigned char)nm[i] >= 32 && nm[i] != ',' && nm[i] != '"')

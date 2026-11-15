@@ -98,6 +98,7 @@ void gamepad_poll_player2(int on);   /* split.c: the next input polls read pad 2
 /* split.c: local split screen, player 2 on pad 2 (TS_SPLIT=1, prototype) */
 void split_install(void);
 unsigned char *split_player2(void);   /* the second player run on this machine (split screen, a client's player 2), or NULL */
+int ts_profile_value(const char *key, char *out, int size);   /* display.c: a key of the player's profile (user.ini) */
 int ts_cinematic_now(void);           /* split.c: a cinematic camera (or the level 1 opening) is on now (any game mode) */
 void split_p1_native(void *obj, int kind, int arg, const char *name);   /* campaign.c: a player native ran (1 Transport, 2 DisableMove, 3 DisableInput) */
 int split_carry_report(char *out, int size);                            /* "!cp carry" (lab) */
