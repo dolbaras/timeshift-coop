@@ -1880,7 +1880,9 @@ int aisync_console(const char *text, char *out, int size)
         walk_turn = 0.f;
         char k2[16] = "", st[16] = "";
         sscanf(text + 3, "%31s %127s %f %15s %15s", cmd, a1, &walk_turn, k2, st);
-        walk_key2 = k2[0] ? (int)strtol(k2, NULL, 16) & 0xff : 0;   /* "!ai walk 20 0 2e": crouch while walking */
+        walk_key2 = k2[0] ? (int)strtol(k2, NULL, 16) : 0;   /* "!ai walk 20 0 2e": crouch while walking */
+        if (walk_key2 < 0 || walk_key2 > 0x143)   /* (keyboard 0x01-0xff, mouse buttons 0x100-0x102 and wheel 0x130/0x131 of controls.ini) */
+            walk_key2 = 0;
         walk_fwd = strcmp(st, "still") != 0;                        /* "!ai walk 20 0 2e still": hold the key only */
         walk_until = secs > 0 ? GetTickCount() + (DWORD)(secs * 1000) : 0;
         return snprintf(out, size, "walking %.0f s, turn %.2f", secs, walk_turn), 1;

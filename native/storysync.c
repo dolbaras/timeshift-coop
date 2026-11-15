@@ -860,6 +860,9 @@ static Status *ok_status(Status *out)
     return out;
 }
 
+static char ev_log_sub[48];   /* (lab) TS_EVLOG=<part of an event name>: such events are logged as they run (<= 300) */
+static int ev_logged;
+
 static Status *TSCALL hook_event(void *cls, Status *out, void *inst, int idx, int argc, Variant **argv)
 {
     int role = net_role();
@@ -870,6 +873,12 @@ static Status *TSCALL hook_event(void *cls, Status *out, void *inst, int idx, in
         return orig_event(cls, out, inst, idx, argc, argv);
     int sym = *(int *)(*(char **)((char *)cls + CLASS_MEMBERS) + idx * 12);
     int k = rec_event(r, sym);
+    if (k >= 0 && ev_log_sub[0] && strstr(r->ev_name[k], ev_log_sub) && ev_logged < 300) {   /* (lab: TS_EVLOG=<part of an event name>) */
+        ev_logged++;
+        SLOG("storysync: event %s.%s runs here (%s handler, %s)", r->name, r->ev_name[k], r->ev_story[k] ? "story" : "local",
+             role == MODE_CLIENT ? (replay_armed && inst == replay_inst && sym == replay_sym ? "client, the host's replay" : "client")
+                                 : "host");
+    }
     if (k < 0 || !r->ev_story[k])
         return orig_event(cls, out, inst, idx, argc, argv);   /* (no handler here, or a local one) */
     if (role == MODE_CLIENT) {
@@ -1525,6 +1534,7 @@ void storysync_install(void)
     if (ts_env("TS_STORYSYNC_FAIL", v, sizeof v) && _stricmp(v, "death") == 0)
         fail_restart = 0;
     verbose = ts_env("TS_STORYSYNC_LOG", v, sizeof v) && v[0] == '1';
+    ts_env("TS_EVLOG", ev_log_sub, sizeof ev_log_sub);
     table = calloc(TABLE_SIZE, sizeof(ClassRec));
     if (!table || !ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_OCC, 39, on_message)) {
         ts_log("storysync: off (no script tick or mod messages)");

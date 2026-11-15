@@ -3108,9 +3108,11 @@ static void p2_carry_step(void)
 /* "!sp carry" (lab): the counters */
 int split_carry_report(char *out, int size)
 {
-    return snprintf(out, size, "carry %s: Transport %u, DisableMove %u, DisableInput %u repeated; leash %d m, %u pull(s); players %.1f m apart",
-                    carry_off ? "off" : "on", carry_count[1], carry_count[2], carry_count[3], leash_m, leash_count,
-                    p2 ? players_apart(p1_now(), p2) : -1.0f);
+    BYTE *p1 = p1_now(), *n1 = p1 ? *(BYTE **)(p1 + 0x230) : NULL, *n2 = p2 ? *(BYTE **)(p2 + 0x230) : NULL;
+    float z[3] = {0, 0, 0}, *a = n1 ? (float *)(n1 + 0x68) : z, *b = n2 ? (float *)(n2 + 0x68) : z;
+    return snprintf(out, size, "carry %s: Transport %u, DisableMove %u, DisableInput %u repeated; leash %d m, %u pull(s); players %.1f m"
+                    " apart (p1 %.2f %.2f %.2f, p2 %.2f %.2f %.2f)", carry_off ? "off" : "on", carry_count[1], carry_count[2],
+                    carry_count[3], leash_m, leash_count, p2 ? players_apart(p1, p2) : -1.0f, a[0], a[1], a[2], b[0], b[1], b[2]);
 }
 
 /* main thread, script tick, while player 2 exists on the machine that runs it */

@@ -19,7 +19,7 @@
  *   TS_SHOTS=s1,s2,...   these seconds and whenever a file <dir>\shot.req appears (it is deleted);
  *                        needs TS_BACKGROUND or TS_ADAPTER (the device hook).
  *   TS_SHOTCINE=<ms>     (with TS_SHOTDIR) while a cinematic camera is on, a frame every <ms> as
- *                        <dir>\cine<seconds>_<k>.bmp (at most 60 a session), and a log line when a cinematic
+ *                        <dir>\cine<seconds>_<k>.bmp (at most 30 a scene, 240 a session), and a log line when a cinematic
  *                        camera comes on or goes off: the frame audit of co-op scenes (lab).
  *
  * Hooks go through the exe's import table and COM vtables; the game code is not patched.
@@ -704,7 +704,7 @@ static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const
     if (shot_next < shot_count && GetTickCount() - shot_t0 >= (DWORD)shot_secs[shot_next] * 1000)
         save_frame(dev, shot_secs[shot_next++]);
     if (shot_cine_ms && shot_dir[0]) {   /* (TS_SHOTCINE) the frame audit of cinematic scenes */
-        static int was_on, cine_k, cine_total;
+        static int was_on, cine_k, cine_total, cine_scene;
         static DWORD cine_last, cine_since;
         int on = ts_cinematic_now();
         DWORD now = GetTickCount();
@@ -714,13 +714,13 @@ static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const
             else
                 ts_log("shotcine: cinematic camera off at %.1f s (on for %.1f s; %d frames saved this session)",
                        (now - shot_t0) / 1000.0, (now - cine_since) / 1000.0, cine_total);
-            was_on = on, cine_since = now, cine_last = 0;
+            was_on = on, cine_since = now, cine_last = 0, cine_scene = 0;
         }
-        if (on && cine_total < 60 && (!cine_last || now - cine_last >= (DWORD)shot_cine_ms)) {
+        if (on && cine_scene < 30 && cine_total < 240 && (!cine_last || now - cine_last >= (DWORD)shot_cine_ms)) {
             char path[MAX_PATH + 32];
             snprintf(path, sizeof path, "%s\\cine%03d_%02d.bmp", shot_dir, (int)((now - shot_t0) / 1000), ++cine_k % 100);
             save_frame_as(dev, path);
-            cine_last = now, cine_total++;
+            cine_last = now, cine_total++, cine_scene++;
         }
     }
     if (shot_dir[0] && ++frame % 30 == 0) {   /* on request: a file shot.req in the folder (deleted when taken) */

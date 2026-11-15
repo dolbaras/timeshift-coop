@@ -59,6 +59,8 @@
  *                        while it lasts); each machine shows its hint line (COOP_HINT_GATE_*)
  *   44 server -> client  u8 proto, u8 on: the ready room runs (every 2 s while it does; 0 three times at its end), so a
  *                        client holds its player and offers READY even where the warm-up state does not reach it
+ *   45 server -> client  u8 proto, u8 on, u8 missing: the level barrier (below) runs: a client that already runs the
+ *                        level holds its player and shows the waiting line (every 2 s while it runs; 0 three times at its end)
  * The server sends 40 once when a client's slot is joined and ready (the client may still be loading the level)
  * and answers every 42; a client asks every 3 s (20 times at most) from the moment its player exists. Blind
  * repeats to a loading client lost the connection in a test.
@@ -121,6 +123,8 @@
 #define SUB_ASK 42                           /* client -> server: "send me the session info" (u8 proto, u8 0) */
 #define SUB_GATE 43                          /* server -> client: u8 proto, u8 missing (a gate waits for players) */
 #define SUB_ROOM 44                          /* server -> client: u8 proto, u8 on (the ready room runs; every 2 s while it does, 3 x off at its end) */
+#define SUB_BARRIER 45                       /* server -> client: u8 proto, u8 on, u8 missing (the level barrier runs) */
+#define SLOT_INGAME 1                        /* (slot flags: the client runs the level, as netfix.c / coopnet.c read it) */
 #define SUB_LAST 49
 #define PROTO 1
 #define ASK_MS 3000                          /* client: ask again every 3 s until the info arrives */
@@ -132,6 +136,11 @@
 static int enabled, ff_off = 1, rules_off = 1, radar_on = 1;
 static int ready_mode = 1;                   /* the ready room on (TS_COOP_READY; lab copies with TS_CONSOLE: off unless =1) */
 static int ready_levels;                     /* host: server level starts in this session (at the menu: 0) */
+static int barrier_secs = 60;                /* the level barrier's longest wait (TS_COOP_BARRIER=<s>, 0 = off) */
+static int barrier_want;                     /* host: a server level started without the ready room: hold when it runs */
+static DWORD barrier_asked;
+static volatile LONG barrier_host_on, barrier_host_missing;   /* client: the host's message 45 */
+static volatile DWORD barrier_host_at;
 static int ready_room_host;                  /* host: this level started as the ready room */
 static char my_version[VER_MAX + 1] = TS_VERSION;   /* (TS_COOP_VERSION: lab test of the version check) */
 static int host_flags, host_difficulty = 255, host_maxplayers;
@@ -251,6 +260,8 @@ static int TSCALL opt_warmup(void *store, int index, int *out)
         ready_room_host = rr_warmup(ready_mode, ready_levels, m == MODE_SERVER || m == MODE_DEDICATED);
         ready_levels++;
         *out = ready_room_host;
+        if (!ready_room_host && barrier_secs > 0 && (m == MODE_SERVER || m == MODE_DEDICATED))
+            barrier_want = 1, barrier_asked = GetTickCount();   /* (the level barrier, once this level runs) */
         CLOG("coopsession: server level start #%d of this session on \"%.80s\": %s", ready_levels, LEVEL_NAME,
              ready_room_host ? "READY ROOM (the game's warm-up with its ready system, no time limit)"
                              : ready_mode ? "starts at once (not the session's first level)" : "starts at once (TS_COOP_READY=0 or a lab copy)");
@@ -544,6 +555,10 @@ static void on_message(int peer, unsigned short sub, const unsigned char *d, int
     } else if (sub == SUB_ROOM && game_mode() == MODE_CLIENT && len >= 2) {
         InterlockedExchange(&room_host_on, d[1] != 0);
         room_host_at = GetTickCount();
+    } else if (sub == SUB_BARRIER && game_mode() == MODE_CLIENT && len >= 3) {
+        InterlockedExchange(&barrier_host_missing, d[2]);
+        InterlockedExchange(&barrier_host_on, d[1] != 0);
+        barrier_host_at = GetTickCount();
     } else if (sub == SUB_GATE && game_mode() == MODE_CLIENT && len >= 2) {
         InterlockedExchange(&gate_missing, d[1]);
         InterlockedIncrement(&gate_seq);
@@ -767,6 +782,109 @@ static void room_tick(DWORD now)
              act == RR_RELEASE ? ", own player released" : was_held ? " (the held entity is gone)" : "");
 }
 
+/* ---- the level barrier (parity-016, sync-parity top gap 3) ----
+ * A level change loads the next level on every machine, and the host's level runs while slower clients still load (30-43 s
+ * on the lab's main PC): story events the host runs meanwhile never reach them (coopnet sends only to clients that run the
+ * level). The ready room holds only the session's first level. So at every other server level start the host holds its own
+ * player (no movement, no input; readyroom.h's rr_step) once its level runs, and tells the clients that already run it
+ * (message 45) to hold theirs, until every joined client runs the level (slot flag 1, the one netfix.c and coopnet.c read),
+ * at most TS_COOP_BARRIER seconds (default 60; 0 = off). Meanwhile the waiting machines show "Waiting for N player(s) to
+ * load the level" (COOP_HINT_LOADWAIT) every 3 s. Level scripts are not stopped (OnInitLevel, timers: they run during the
+ * stock warm-up too, seen 2026-11-09: the level 2 checkpoint 20 s into the ready room); the hold keeps the players from
+ * setting off the story's domains and looks before everybody is in. A client counts as arrived when its flag is set after
+ * having been clear since the host's level start (a flag left over from the last level does not count), or after 8 s of
+ * the barrier with the flag set throughout (it loaded faster than the host). */
+static rr_hold barrier;
+static int barrier_on_here, barrier_off_sends, barrier_missing_last = -1;
+static DWORD barrier_since, barrier_sent, barrier_hint_at, barrier_all_at;
+static unsigned barrier_seen_clear;   /* slot bits: the client's flag was clear at some time since the level start */
+
+static int barrier_missing(DWORD now)
+{
+    int n = 0;
+    for (int i = 0; i < slot_count() && i < 32; i++) {
+        char *s = slot_at(i);
+        if (!s || *(int *)s == 0 || (*(int *)(s + 8) & SLOT_JOINED) == 0)
+            continue;
+        int in = (*(int *)(s + 8) & SLOT_INGAME) != 0;
+        if (!in)
+            barrier_seen_clear |= 1u << i;
+        if (!in || (!(barrier_seen_clear & (1u << i)) && now - barrier_since < 8000))
+            n++;
+    }
+    return n;
+}
+
+static void barrier_send(int on, int missing)
+{
+    unsigned char b[3] = {PROTO, (unsigned char)on, (unsigned char)(missing > 255 ? 255 : missing)};
+    for (int i = 0; i < slot_count(); i++) {
+        char *s = slot_at(i);
+        if (!s || *(int *)s == 0 || (*(int *)(s + 8) & (SLOT_JOINED | SLOT_READY)) != (SLOT_JOINED | SLOT_READY))
+            continue;
+        coopnet_send(i, SUB_BARRIER, b, 3);
+    }
+}
+
+static void barrier_tick(DWORD now)
+{
+    int host = game_mode() == MODE_SERVER || game_mode() == MODE_DEDICATED, missing = 0, want = 0;
+    char *pl = OWN_PLAYER;
+    if (host) {
+        if (barrier_want && pl && ts_coop_active() && !room_on) {   /* (the level runs here: the barrier begins) */
+            barrier_want = 0;
+            barrier_on_here = 1, barrier_since = now, barrier_seen_clear = 0, barrier_all_at = 0, barrier_missing_last = -1;
+            CLOG("coopsession: level barrier on \"%.80s\" (%u ms after the server level start): every player waits until the"
+                 " clients run the level (at most %d s)", LEVEL_NAME, now - barrier_asked, barrier_secs);
+        }
+        if (barrier_on_here) {
+            missing = barrier_missing(now);
+            if (missing != barrier_missing_last) {
+                barrier_missing_last = missing;
+                CLOG("coopsession: level barrier: %d client(s) still loading after %u s", missing, (now - barrier_since) / 1000);
+            }
+            if (!missing && !barrier_all_at)
+                barrier_all_at = now;
+            if (missing)
+                barrier_all_at = 0;
+            const char *why = !ts_coop_active() ? "the session ended"
+                            : barrier_all_at && now - barrier_all_at >= 1000 ? "every client runs the level"
+                            : now - barrier_since >= (DWORD)barrier_secs * 1000 ? "time limit" : NULL;
+            if (why) {
+                barrier_on_here = 0, barrier_off_sends = 3;
+                CLOG("coopsession: level barrier over after %u s (%s, %d still loading)", (now - barrier_since) / 1000, why, missing);
+            }
+        }
+        want = barrier_on_here;
+        if (want && now - barrier_sent >= 2000)
+            barrier_sent = now, barrier_send(1, missing);
+        if (!want && barrier_off_sends > 0 && now - barrier_sent >= 500)
+            barrier_sent = now, barrier_send(0, 0), barrier_off_sends--;
+    } else if (game_mode() == MODE_CLIENT) {
+        want = barrier_host_on && now - barrier_host_at < 6000 && ts_coop_active();
+        missing = barrier_host_missing;
+    }
+    int act, ev;
+    const void *was_held = barrier.held;
+    rr_step(&barrier, want && !room_on, pl, now, &act, &ev);
+    if (act == RR_SET)
+        hold_set(pl, 1);
+    else if (act == RR_PAIR)
+        hold_set(pl, 0), hold_set(pl, 1);
+    else if (act == RR_RELEASE)
+        hold_set(pl, 0);
+    if (ev & RR_EV_HELD)
+        CLOG("coopsession: level barrier: own player %p held until every player runs the level", (void *)pl);
+    if (ev & RR_EV_LEAVE)
+        CLOG("coopsession: level barrier: own player %s", act == RR_RELEASE ? "released" : was_held ? "gone (not released)" : "not held");
+    if (barrier.on && missing > 0 && now - barrier_hint_at >= 3000) {
+        char id[48];
+        barrier_hint_at = now;
+        snprintf(id, sizeof id, "COOP_HINT_LOADWAIT,%d", missing);
+        show_hint(id);
+    }
+}
+
 static void host_session_start(void)
 {
     char s[64], d[64], m[64];
@@ -916,6 +1034,8 @@ static void frame(float dt)
         if (!role) {
             ready_levels = 0, ready_room_host = 0;   /* (the next hosted session's first level is a ready room again) */
             InterlockedExchange(&room_host_on, 0);
+            barrier_want = 0, barrier_on_here = 0, barrier_off_sends = 0;
+            InterlockedExchange(&barrier_host_on, 0);
             InterlockedExchange(&got_session, 0);
             handled_seq = session_seq;
             client_applied = client_left = client_warned = client_asks = 0;
@@ -934,6 +1054,8 @@ static void frame(float dt)
     }
     if (role || room_on)
         room_tick(GetTickCount());
+    if (role || barrier.on)
+        barrier_tick(GetTickCount());
 }
 
 void coopsession_install(void)
@@ -972,6 +1094,8 @@ void coopsession_install(void)
         ready_mode = v[0] != '0';
     else
         ready_mode = !ts_env("TS_CONSOLE", v, sizeof v);   /* (lab copies: the pair scripts expect the level to run at once) */
+    if (ts_env("TS_COOP_BARRIER", v, sizeof v))
+        barrier_secs = atoi(v) > 0 ? (atoi(v) > 300 ? 300 : atoi(v)) : 0;
     enabled = 1;
     static const unsigned char ff_want[6] = {0x0f, 0x85, 0x93, 0x00, 0x00, 0x00};
     unsigned char ff_rep[6] = {0x0f, 0x85};

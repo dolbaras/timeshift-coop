@@ -19,6 +19,7 @@ param(
 $ErrorActionPreference = "Stop"
 $mod = Split-Path $PSScriptRoot
 $work = Join-Path (Split-Path $mod) "work"
+if ((Split-Path (Split-Path $mod) -Leaf) -eq "work") { $work = Split-Path $mod }   # (a worktree inside work\: work\wt-*\tools)
 if (-not $Game) { $Game = Join-Path $work "game" }
 $bin = Join-Path $Game "bin"
 $run = Join-Path $work ("runs\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
@@ -43,6 +44,9 @@ $text = $text -replace "(?<!\r)\n", "`r`n"   # (the game skips lines ending in a
 $set = [ordered]@{ "VIDEO_SizeX" = "$w"; "VIDEO_SizeY" = "$h"; "VIDEO_FullScr" = "yes"; "Volume" = "0.000000";
     "Sfx_Volume" = "0.000000"; "Music_Volume" = "0.000000"; "Voice_Volume" = "0.000000" }
 foreach ($kv in $Ini.Split(';')) { if ($kv -match '^([^=]+)=(.*)$') { $set[$Matches[1].Trim()] = $Matches[2].Trim() } }
+$set["VIDEO_SizeX"] = "$w"; $set["VIDEO_SizeY"] = "$h"
+# (the game's machine key: a profile made on another computer is reset to the game's defaults at the start: 800x600, volumes 1.0)
+$set["VIDEO_ScaleCompName"] = '"' + $env:COMPUTERNAME + '_SCVER_16"'
 foreach ($k in $set.Keys) {
     if ($text -match "(?m)^$k\s*=") { $text = $text -replace "(?m)^$k[ \t]*=[^\r\n]*", "$k = $($set[$k])" }
     else { $text = $text.TrimEnd() + "`r`n$k = $($set[$k])`r`n" }
