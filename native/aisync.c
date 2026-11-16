@@ -1421,8 +1421,10 @@ static void on_dead(int peer, unsigned short sub, const unsigned char *d, int le
 typedef void *(TSCALL *voice_t)(void *ai, StrHdr **name, void *params, StrHdr **bone);
 static voice_t voice_orig[N_VT];
 static int voice_on = 1, voice_sent, voice_got, voice_played, voice_missing, voice_local, voice_dup;
+static int punch_sent, punch_played;   /* (the melee-hit sound, hook_punch) */
+static void *snd_list_play(void *list, StrHdr *name);
 static int voice_in_play, voice_bufs, ex_bufs_other;   /* (lab counters, with the sound counters on: buffers started inside a +0x90 call / ex_* outside) */
-static struct { int net; DWORD at; unsigned char params[0x18]; char name[64], bone[32]; } voice_q[VOICE_Q];
+static struct { int net, kind; DWORD at; unsigned char params[0x18]; char name[64], bone[32]; } voice_q[VOICE_Q];
 static int voice_qn;
 static struct { int net; DWORD at; char name[64]; } voice_own[16];   /* (client) the copies' own calls, newest 16 */
 static int voice_own_k;
@@ -1463,7 +1465,7 @@ static void *TSCALL hook_voice(void *ai, StrHdr **name, void *params, StrHdr **b
     unsigned char m[2 + 4 + 0x18 + 1 + 63 + 1 + 31];
     int n = 0;
     m[n++] = NPROTO;
-    m[n++] = 0;
+    m[n++] = 0;   /* (kind 0: the AI sound function +0x90; 1: a sound-list key, see hook_punch) */
     memcpy(m + n, &net, 4), n += 4;
     memcpy(m + n, p_in, 0x18), n += 0x18;
     m[n++] = (unsigned char)nl;
@@ -1492,6 +1494,7 @@ static void on_voice(const unsigned char *d, int len)
     if (bl > 31 || n + 2 + nl + bl > len)
         return;
     voice_got++;
+    voice_q[voice_qn].kind = d[1];
     voice_q[voice_qn].at = GetTickCount();
     memcpy(&voice_q[voice_qn].net, d + 2, 4);
     memcpy(voice_q[voice_qn].params, d + 6, 0x18);
@@ -1525,6 +1528,24 @@ static void voice_frame(void)   /* (client, main thread) */
                        own ? "the copy started it itself" : "the copy plays a scripted sequence (its own lines)");
             continue;
         }
+        if (voice_q[k].kind == 1) {   /* (a sound-list key at the copy's body: hook_punch) */
+            char *comp = ai ? *(char **)(ai + 0x4bc) : NULL;
+            void *so = comp && !IsBadReadPtr(comp + 0x114, 4) ? *(void **)(comp + 0x114) : NULL;
+            if (!so) {
+                if (++voice_missing <= 20)
+                    ts_log("aisync: sound %s of net %d: no such soldier (or sound list) here", voice_q[k].name, voice_q[k].net);
+                continue;
+            }
+            StrHdr *nm = NULL;
+            str_ctor(&nm, voice_q[k].name, -1, 0);
+            voice_in_play++;
+            snd_list_play(so, nm);   /* (takes the string's reference) */
+            voice_in_play--;
+            punch_played++;
+            if (punch_played <= 20)
+                ts_log("aisync: sound %s of %s (net %d) played here", voice_q[k].name, ai_name(ai), voice_q[k].net);
+            continue;
+        }
         voice_t orig = NULL;
         for (unsigned i = 0; ai && i < N_VT && !orig; i++)
             if (*(DWORD *)ai == ai_vtables[i])
@@ -1551,9 +1572,64 @@ static void voice_frame(void)   /* (client, main thread) */
     voice_qn = keep;
 }
 
+/* The soldiers' melee-hit sound (sync-parity top gap 8, "gibbing": obj_gibbing_body_rnd_set). Traced (run n100pair-20261031-
+ * 223501, callers 4538ea 46d454 855dc3 855a81): a soldier that plays its "hit by a punch" animation in its authority update
+ * (0x855d90 -> class code 0x46d454 -> 0x4534b0) starts the key "recieve_punch" of its sound list ([ai+0x4bc]+0x114) through
+ * 0x642a40 (stdcall (sound list, String by value: the callee takes its reference), ret 8), call at 0x4538e5. Not through the
+ * AI sound function +0x90, and only where the soldier has authority: a client never heard it. The host hooks that call and sends
+ * {kind 1, net id, key} in the voice message (54); a client starts the same key on its copy's sound list. */
+#define PUNCH_CALL 0x4538e5
+#define SND_LIST_PLAY 0x642a40
+typedef void *(__attribute__((stdcall)) *slplay_t)(void *list, StrHdr *name);
+static void *snd_list_play(void *list, StrHdr *name) { return ((slplay_t)SND_LIST_PLAY)(list, name); }
+static void *punch_list;
+static char *punch_ai;
+static void punch_find(char *ai)
+{
+    char *comp = *(char **)(ai + 0x4bc);
+    if (!punch_ai && comp && !IsBadReadPtr(comp + 0x114, 4) && *(void **)(comp + 0x114) == punch_list)
+        punch_ai = ai;
+}
+__attribute__((stdcall)) static void *hook_punch(void *list, StrHdr *name)
+{
+    char key[64] = "";
+    if (name && !IsBadReadPtr(name, 0x10))
+        snprintf(key, sizeof key, "%.63s", name->s);
+    void *r = snd_list_play(list, name);
+    char *gm = GAME_MODE_OBJ;
+    if (!voice_on || !gm || *(int *)(gm + 0x3c) != 2 || !(GAME_FLAGS & 0x2000) || !key[0] || !ts_coop_active())
+        return r;
+    punch_list = list, punch_ai = NULL;
+    for_each_ai(punch_find);
+    int net = punch_ai ? *(int *)(punch_ai + E_NETID) : -1;
+    if (net < 0)
+        return r;
+    unsigned char m[2 + 4 + 0x18 + 1 + 63 + 1];
+    int n = 0, kl = (int)strlen(key);
+    m[n++] = NPROTO;
+    m[n++] = 1;
+    memcpy(m + n, &net, 4), n += 4;
+    memset(m + n, 0, 0x18), n += 0x18;
+    m[n++] = (unsigned char)kl;
+    memcpy(m + n, key, kl), n += kl;
+    m[n++] = 0;
+    if (coopnet_send(-1, SUB_VOICE, m, n) > 0)
+        punch_sent++;
+    if (punch_sent <= 20)
+        ts_log("aisync: sound %s of %s (net %d) sent to the clients", key, ai_name(punch_ai), net);
+    return r;
+}
+
 static int voice_install(void)
 {
     int ok = 0;
+    {
+        unsigned char want[5] = {0xe8}, rep[5] = {0xe8};
+        *(DWORD *)(want + 1) = SND_LIST_PLAY - (PUNCH_CALL + 5);
+        *(DWORD *)(rep + 1) = (DWORD)hook_punch - (PUNCH_CALL + 5);
+        if (!ts_patch_bytes(PUNCH_CALL, want, rep, 5))
+            ts_log("aisync: the soldiers' melee-hit sound call not found: host only");
+    }
     for (unsigned i = 0; i < N_VT; i++) {
         voice_orig[i] = *(voice_t *)(ai_vtables[i] + 0x90);
         DWORD o = (DWORD)voice_orig[i];
@@ -2163,8 +2239,9 @@ int aisync_console(const char *text, char *out, int size)
     }
     if (!strcmp(cmd, "voice"))   /* "!ai voice" (lab): the soldiers' voices sent (host) / got, played, missing, own calls (client) */
         return snprintf(out, size, "voices %s: sent %d, got %d, played %d, not played (the copy's own) %d, no soldier %d, own calls of"
-                        " copies %d; sound buffers started inside the AI sound function %d, ex_* outside it %d; last %s", voice_on ? "on" : "off",
-                        voice_sent, voice_got, voice_played, voice_dup, voice_missing, voice_local, voice_bufs, ex_bufs_other, voice_last), 1;
+                        " copies %d; sound buffers started inside the AI sound function %d, ex_* outside it %d; melee-hit sounds sent %d, played %d;"
+                        " last %s", voice_on ? "on" : "off", voice_sent, voice_got, voice_played, voice_dup, voice_missing, voice_local, voice_bufs,
+                        ex_bufs_other, punch_sent, punch_played, voice_last), 1;
     if (!strcmp(cmd, "snd")) {   /* "!ai snd on|off|dump|reset|trace <name part> [count]" (lab): the sound start counters above */
         if (!strcmp(a1, "trace")) {
             char part[48] = "", cnt[16] = "";
