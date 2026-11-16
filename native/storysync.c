@@ -264,6 +264,7 @@ typedef struct {
     void *cls;
     char name[64];                           /* the entity's name */
     unsigned char n_ev, rewritten, authority, dom_story, retest_logged;
+    unsigned char dom_hint, dom_tc;          /* its OnEnter/OnLeave shows a hint / sets the automatic time power (split, below) */
     int ev_sym[MAX_EV];
     unsigned char ev_story[MAX_EV];
     char ev_name[MAX_EV][EVNAME];
@@ -496,6 +497,12 @@ static int classify(const char *src, ClassRec *r, char *out, size_t cap, int *n_
                     local = 1;
                 if (cur >= 0 && !local)
                     r->ev_story[cur] = 1;
+                if (cur >= 0 && (r->ev_sym[cur] == sym_enter || r->ev_sym[cur] == sym_leave)) {
+                    if (strstr(code, "ShowTimeHint(") || strstr(code, "ShowMsg(") || strstr(code, "ShowSAMMsg("))
+                        r->dom_hint = 1;
+                    if (strstr(code, "$tc.SetMode("))
+                        r->dom_tc = 1;
+                }
                 const char *c;
                 int len = callee_of(code, &c);
                 /* campaign.c (TS_CAMPAIGN, not yet run): SetSpeed is the force-field/wind domains' only setter in the
@@ -579,10 +586,18 @@ static const char *pick_wrapper(void)
     return "";
 }
 
+/* Split screen (game mode 1, parity-017 round 2, sync-parity top gap 10): the level objects' class records are built there too
+ * (classification only, nothing rewritten: one machine runs the story), so the trigger zones below can count player 2. */
+static int split_zones_on;                   /* TS_SPLIT_ZONES=1 (lab: not run in a game yet) */
+static int split_records(void)
+{
+    return enabled && split_zones_on && game_mode() == 1 && campaign_name(LEVEL_NAME);
+}
+
 static Status *TSCALL hook_parse(ObjPtr *clsp, Status *out, const char *src, const char *hint)
 {
     int role = compile_role();
-    if (!role || !table || !src || !clsp || !*clsp)
+    if ((!role && !split_records()) || !table || !src || !clsp || !*clsp)
         return orig_parse(clsp, out, src, hint);
     if (!sym_enter) {
         sym_enter = sym_of("OnEnter");
@@ -704,6 +719,39 @@ static char *remote_inside(char *dom)
     return n_occ && occ_has(inst_name(inst)) ? PLAYER : NULL;   /* (a client's report) */
 }
 
+/* ---- split screen: player 2 in the trigger zones (parity-017 round 2, sync-parity top gap 10) ----
+ * In split screen (game mode 1) the level's trigger zones watch player 1's watched object only, so player 2 never set off a
+ * story zone, a hint or the zone that sets the automatic time power (the walkway of level 2: RB gave player 2 slow motion,
+ * mission3-tester-report.md T6). Now a story zone (dom_story), a hint zone (dom_hint) or a time-power zone (dom_tc) whose
+ * watched object is player 1's counts as entered while player 2 is inside too (IsBelong of player 2's body), as the host does
+ * for a client's body; the campaign's rule zones (all-players gates, campaign_dom_verdict) decide first as before. The engine
+ * tests a zone only when player 1 moves, so the zones player 2 is inside (or that count as entered) are tested again 4 times a
+ * second (split_retest). A zone event shows its hints in the half of the player inside (split_msg_scope).
+ * LAB, OFF by default (TS_SPLIT_ZONES=1): written and built, not run in a game yet (round 2's split slot on level 2 was refused:
+ * the main PC, where split screen is tested, was the owner's); "!ss split" and "!ss goto2 <zone>" (lab) are its test tools. */
+static void *split_watch;                    /* (mode 1) the object player 1's zones watch, learnt as the network's */
+static int split_p2_hits, split_retests, split_changes;
+static int split_here(void)
+{
+    return enabled && split_zones_on && table && game_mode() == 1 && split_p2_local() && split_player2();
+}
+
+static int split_zone(ClassRec *r)
+{
+    return r && (r->dom_story || r->dom_hint || r->dom_tc);
+}
+
+static int split_p2_inside(char *dom, void *w)
+{
+    if (!split_here() || !split_watch || w != split_watch || !is_domain(dom))
+        return 0;
+    ClassRec *r = rec_of_inst(*(void **)(dom + ENT_INST));
+    if (!split_zone(r) || !(dom_is_belong(dom, split_player2()) & 0xff))
+        return 0;
+    split_p2_hits++;
+    return 1;
+}
+
 /* Called from the domain test (0x6c2e3d) instead of "count of the watched object's points": returns the count,
  * or more than `idx` (= "a point is inside") when only a remote player is inside a story domain. */
 __attribute__((used)) int ss_dom_count(char *dom, int idx) __asm__("ss_dom_count");
@@ -720,6 +768,8 @@ __attribute__((used)) int ss_dom_count(char *dom, int idx)
         if (v >= 0)
             return v ? (idx < n ? n : idx + 1) : idx;
     }
+    if (idx >= n && split_p2_inside(dom, w))
+        return idx + 1;
     if (idx < n || w != local_watch || net_role() != MODE_SERVER)
         return n;
     return remote_inside(dom) ? idx + 1 : n;
@@ -790,6 +840,55 @@ static void retest_story_domains(void)
         VLOG("storysync: re-test pass: %d client(s), %d story domain records, %d found, %d domains, %d watch %p,"
              " %d with a client inside, %d report(s)", clients, n_story, n_found, n_dom, n_watch, local_watch, n_in,
              n_occ);
+    }
+}
+
+static void split_retest(void)
+{
+    static DWORD last;
+    DWORD now = GetTickCount();
+    if (now - last < 250)
+        return;
+    last = now;
+    char *p2 = (char *)split_player2();
+    void *cand = NULL;
+    int votes = 0;
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        ClassRec *r = &table[i];
+        if (!r->cls || !split_zone(r) || !r->name[0])
+            continue;
+        String nm = 0;
+        ObjPtr inst = 0;
+        str_ctor(&nm, r->name, -1, 0);
+        mgr_find_obj(MGR, &inst, &nm);
+        str_release(nm);
+        if (!inst)
+            continue;
+        char *ent = *(char **)((char *)inst + INST_NATIVE);
+        if (rec_of_inst(inst) == r && is_domain(ent)) {
+            void *watched = *(void **)(ent + DOM_WATCHED);
+            if (r->dom_story) {   /* (the object most story zones watch: player 1's) */
+                if (!votes)
+                    cand = watched, votes = 1;
+                else
+                    votes += cand == watched ? 1 : -1;
+            }
+            if (split_watch && watched == split_watch && ((*(unsigned *)(ent + DOM_STATE) & 1) || (dom_is_belong(ent, p2) & 0xff))) {
+                unsigned before = *(unsigned *)(ent + DOM_STATE);
+                ((void (TSCALL *)(void *))(*(void ***)ent)[0x134 / 4])(ent);
+                split_retests++;
+                if (*(unsigned *)(ent + DOM_STATE) != before) {
+                    split_changes++;
+                    SLOG("storysync: split: %s tested for player 2: state %x -> %x (story %d, hint %d, time power %d, locks %d)", r->name,
+                         before, *(unsigned *)(ent + DOM_STATE), r->dom_story, r->dom_hint, r->dom_tc, *(int *)(ent + DOM_LOCKS));
+                }
+            }
+        }
+        inst_release(&inst);
+    }
+    if (cand && votes > 0 && cand != split_watch) {
+        split_watch = cand;
+        SLOG("storysync: split: player 1's trigger zones watch %p; player 2 counts in story, hint and time-power zones", cand);
     }
 }
 
@@ -896,6 +995,21 @@ static int ev_logged;
 static Status *TSCALL hook_event(void *cls, Status *out, void *inst, int idx, int argc, Variant **argv)
 {
     int role = net_role();
+    if (!role && inst && split_here() && idx >= 0 && idx < *(int *)((char *)cls + CLASS_MEMBERS + 4)) {
+        /* (split screen: a hint or time-power zone's OnEnter shows its hints in the half of the player inside) */
+        ClassRec *sr = rec_of_inst(inst);
+        int sym = *(int *)(*(char **)((char *)cls + CLASS_MEMBERS) + idx * 12);
+        char *ent = *(char **)((char *)inst + INST_NATIVE);
+        if (sr && (sr->dom_hint || sr->dom_tc) && sym == sym_enter && is_domain(ent)) {
+            int p1in = PLAYER && (dom_is_belong(ent, PLAYER) & 0xff), p2in = dom_is_belong(ent, split_player2()) & 0xff;
+            int who = p1in && !p2in ? 1 : p2in && !p1in ? 2 : 0;
+            SLOG("storysync: split: %s.OnEnter for %s", sr->name, who == 2 ? "player 2" : who == 1 ? "player 1" : "both players");
+            split_msg_scope(who);
+            Status *st = orig_event(cls, out, inst, idx, argc, argv);
+            split_msg_scope(0);
+            return st;
+        }
+    }
     ClassRec *r = role && inst ? rec_of_inst(inst) : NULL;
     if (!r)
         return orig_event(cls, out, inst, idx, argc, argv);
@@ -1396,6 +1510,8 @@ static void frame(float dt)
     if (!role) {
         if (q_count && compile_role() == MODE_CLIENT)   /* (replays that came before the host's settings) */
             run_queue();
+        if (split_here())
+            split_retest();
         return;
     }
     if (q_count)
@@ -1523,6 +1639,34 @@ int storysync_console(const char *text, char *out, int size)
                         pos[0], pos[1], pos[2], mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], *(unsigned *)(dom + DOM_STATE),
                         *(int *)(dom + DOM_LOCKS)), 1;
     }
+    if (!strcmp(cmd, "goto2")) {   /* "!ss goto2 <domain>" (lab, split screen): player 2 into the middle of a domain */
+        String nm = 0;
+        ObjPtr inst = 0;
+        str_ctor(&nm, a1, -1, 0);
+        mgr_find_obj(MGR, &inst, &nm);
+        str_release(nm);
+        char *dom = inst ? *(char **)((char *)inst + INST_NATIVE) : NULL;
+        if (inst)
+            inst_release(&inst);
+        if (!is_domain(dom) || !split_player2())
+            return snprintf(out, size, "%s is not a domain (or no player 2)", a1), 1;
+        float *mn = (float *)(dom + 0xc8), *mx = (float *)(dom + 0xd4);
+        float pos[3] = {(mn[0] + mx[0]) / 2, mn[1] + 0.1f, (mn[2] + mx[2]) / 2};
+        int ok = split_p2_put(pos);
+        return snprintf(out, size, "player 2 %s %.2f %.2f %.2f (state %x, locks %d)", ok ? "put to" : "NOT put to", pos[0], pos[1], pos[2],
+                        *(unsigned *)(dom + DOM_STATE), *(int *)(dom + DOM_LOCKS)), 1;
+    }
+    if (!strcmp(cmd, "split")) {   /* "!ss split" (lab): player 2 in the trigger zones */
+        int ns = 0, nh = 0, nt = 0;
+        for (int i = 0; table && i < TABLE_SIZE; i++)
+            if (table[i].cls) {
+                ns += table[i].dom_story;
+                nh += table[i].dom_hint;
+                nt += table[i].dom_tc;
+            }
+        return snprintf(out, size, "split zones: here %d, watch %p, zones story %d hint %d time power %d; player 2 counted %d, retests %d,"
+                        " state changes %d", split_here(), split_watch, ns, nh, nt, split_p2_hits, split_retests, split_changes), 1;
+    }
     if (!strcmp(cmd, "exit") && role == MODE_SERVER) {
         server_change_level(a1);
         return snprintf(out, size, "level change to %s", a1), 1;
@@ -1567,6 +1711,7 @@ void storysync_install(void)
     ts_env("TS_EVLOG", ev_log_sub, sizeof ev_log_sub);
     if (ts_env("TS_STORYSYNC_CINEBHV", v, sizeof v) && v[0] == '1')
         cine_bhv = 1;
+    split_zones_on = ts_env("TS_SPLIT_ZONES", v, sizeof v) && v[0] == '1';
     table = calloc(TABLE_SIZE, sizeof(ClassRec));
     if (!table || !ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_OCC, 39, on_message)) {
         ts_log("storysync: off (no script tick or mod messages)");
