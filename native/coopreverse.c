@@ -50,7 +50,7 @@
  *
  * Switches: TS_COOP_REVERSE=1, TS_COOP_REWIND=1, TS_COOP_REVERSE_SECONDS=<s>, TS_COOP_REVERSE_COST=<energy per s>,
  * TS_COOP_REVERSE_LOG=1.
- * Test console: "!rv state", "!rv start [s]" (as if this machine's player pressed reverse), "!rv stop".
+ * Test console: "!rv state", "!rv start [s]" (as if this machine's player pressed reverse), "!rv stop", "!rv ents <tag>" (lab).
  */
 #include <windows.h>
 #include <stdio.h>
@@ -420,6 +420,51 @@ static void push_rewind_actors(void)
                          : [fn] "m"(fn_net_update)
                          : "eax", "ecx", "edx", "memory", "cc", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7");
     }
+}
+
+/* (lab, parity-017 round 2) Which entities the playback gate above stops: the entity frame's network part (0x6440cb) runs, in
+ * a network session, for an entity whose vtable +0xd4 says 0, which has role bit 1 and a net id; during a playback only when its
+ * +0x98 bit 6 is set. Measured on level 3 (p016-17H, "!rv ents" on host and client by net id, lab\p017_ents.py): of 96-169
+ * networked moving entities the host had only 2 with role bit 1 (one exempt by bit 6, one gated: net 567, vtable 0xd84440);
+ * the physics props (barrels, vtable 0xdaabe8, role 0x1046/0x1056), the soldiers and the rest have no bit 1 and ride the
+ * server's regular updates (role 0x10), which a playback does not stop: a barrel thrown 13.8 m and rewound came back on the
+ * client during the playback (13.96 m, 0.65 m from the host's 6 s after the start), and the same with only the table's actors
+ * pushed. So nothing more is pushed than the table's actors. */
+#define ENT_BUCKETS (*(char **)0xecb7fc)     /* the scheduler's objects: buckets of 12 bytes, +0 first object, next [o+8]-4 */
+#define ENT_NBUCKETS (*(int *)0xecb800)
+
+static int gated(char *o)
+{
+    unsigned role = *(unsigned *)(o + 0x2c);
+    int net = *(int *)(o + 0x18);
+    if ((role & 0x45) != 0x45 || (*(unsigned *)(o + 0x98) & 0x40) || net == -1 || net == -2 || net == -3)
+        return 0;
+    return ((int (TSCALL *)(void *))(*(void ***)o)[0xd4 / 4])(o) == 0;
+}
+
+/* (lab) "!rv ents [tag]": every entity with a motion component and a net id (players and AI too), into the log: net id, vtable,
+ * role bits, +0x98, gated now, its node's place. Host and client logs compare by net id (lab\p017_ents.py). */
+static void dump_ents(const char *tag, int *count, int *gates)
+{
+    char *b = ENT_BUCKETS;
+    int nb = ENT_NBUCKETS;
+    *count = *gates = 0;
+    for (int i = 0; b && i < nb; i++)
+        for (char *o = *(char **)(b + i * 12); o; ) {
+            char *next = *(char **)(o + 8);
+            unsigned role = *(unsigned *)(o + 0x2c);
+            int net = *(int *)(o + 0x18);
+            if ((role & 0x40) && net >= 0) {
+                char *node = *(char **)(o + 0x230);
+                float *p = node && !IsBadReadPtr(node + 0x68, 12) ? (float *)(node + 0x68) : (float *)(o + 0xb0);
+                int g = gated(o);
+                *gates += g;
+                ts_log("ents %s: net %d vt %06lx role %x f98 %x gated %d at %.3f %.3f %.3f", tag, net, *(unsigned long *)o, role,
+                       *(unsigned *)(o + 0x98), g, (double)p[0], (double)p[1], (double)p[2]);
+                ++*count;
+            }
+            o = next ? next - 4 : NULL;
+        }
 }
 
 /* Rewound animations on clients. The rewind actors are animated actors: their clip and time are not in the network
@@ -1189,6 +1234,13 @@ int coopreverse_console(const char *text, char *out, int size)
     if (!strcmp(cmd, "trapcheck")) {   /* (lab) the container trap check of the end of a rewind, now */
         trap_check();
         return snprintf(out, size, "trap check run"), 1;
+    }
+    if (!strcmp(cmd, "ents")) {   /* (lab) "!rv ents <tag>": the networked moving entities into the log (dump_ents) */
+        char tag[24] = "x";
+        sscanf(text + 3, "%15s %23s", cmd, tag);
+        int n = 0, g = 0;
+        dump_ents(tag, &n, &g);
+        return snprintf(out, size, "%d entities logged (tag %s), %d gated now", n, tag, g), 1;
     }
     if (!strcmp(cmd, "anims") && game_mode() == MODE_SERVER) {   /* (lab) send the rewind actors' clips now */
         send_anims(0);
