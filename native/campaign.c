@@ -1550,12 +1550,14 @@ static void loadout_step(DWORD now)
  * refuses one while a sequence runs: "SetBHV(%s) is in process").
  * Live (parity-016 round 4, runs p016-U, -U2, -U3, ts2_city_part02, late client and team restart): the host side, the messages,
  * the late catch-up and the chain are right; the chain of CINE behaviours (MOVE1 .. MOVE9, FALL) now plays on the client's copy
- * (animation -2 on both, U3). NOT yet: a CINE_CYCLE (VICTIM, the kneeling loop of the opening) never plays on a copy (175 for a
- * late client and after a team restart alike): probably its cycle is started by the behaviour's own update, which only an AI
- * with authority runs. So this is OFF by default: TS_CAMPAIGN_BHV=1 (lab). "!cp bhv" (lab): the table on this machine.
+ * (animation -2 on both, U3). A CINE_CYCLE (VICTIM, the opening's rebels lying on the street) stayed 175 on a copy: its SetBHV
+ * only REQUESTED it there (see bhv_activate, parity-017 run p016-17A); the client now makes the request active itself, and
+ * VICTIM plays on the copies (-2 on both, the same pose in frame pairs, late client and team restart: p016-17B). On by
+ * default since parity-017; TS_CAMPAIGN_BHV=0 off. "!cp bhv" (lab): the table on this machine; "!cp stk <actor>": its
+ * behaviour stack.
  * Message 100 (server -> client): {u8 1, u8 kind, u16 seq, u8 n, actor[n], u8 n, behaviour[n]}. */
 #define BHV_MAX 64
-static int use_bhv;   /* (OFF by default: TS_CAMPAIGN_BHV=1; see "Live" above) */
+static int use_bhv = 1;   /* (TS_CAMPAIGN_BHV=0 off; see "Live" above) */
 static int (TSCALL *bhv_anim_id)(void *node) = (void *)0x951660;   /* the node's animation id (-2: a scripted sequence) */
 static struct { char name[64], bhv[32]; char *ent; DWORD at; unsigned seq; int checks, cine, sent_cine; } bt[BHV_MAX];
 static int n_bt;
@@ -1578,6 +1580,38 @@ static int ent_anim(char *ent, const char *name)
         return 0x7fffffff;
     char *node = *(char **)(ent + 0x230);
     return node && !IsBadReadPtr(node, 0x80) ? bhv_anim_id(node) : 0x7fffffff;
+}
+
+/* (client) The AI's behaviour stack (ai +0x288) keeps two lists: the requested one (count +0x38, item i at +0x38 + 4i; SetBHV
+ * 0x841810 -> 0x873650 -> 0x870b50 puts the new behaviour there) and the active one (count +0xc, item i at +0xc + 4i, the top
+ * is the last; the animation picker and the behaviours' updates use it). The stack's rebuild 0x871260 (eax = the stack) makes
+ * the requested list active: it starts each new behaviour (its +0x14 / +0x18; a CINE_CYCLE's +0x18 0x864c70 picks one of its
+ * "seqs" and pushes a CINE (type 0x23) that plays it). Only an AI with authority runs that rebuild every frame (its update
+ * 0x855990 -> 0x855d90 -> 0x871330); a copy (0x858eb0) never does, and SetBHV makes it active at once only in some cases
+ * (0x870c44 ...: no node yet, or authority ...). So a copy's SetBHV("VICTIM") stayed requested, the active top was the
+ * copy's "no script" behaviour (type 3) and the picker gave its idle 175 (run p016-17A: "requested 1: VICTIM type 7, active 1:
+ * no script type 3"; one rebuild -> active VICTIM + its CINE, animation -2, as on the host, for a late client and after a team
+ * restart alike). The client runs that rebuild once after it ran a scripted actor's SetBHV / PopBHV on its copy. */
+static void bhv_call_eax(DWORD fn, void *arg)
+{
+    __asm__ volatile("call *%1" : "+a"(arg) : "r"(fn) : "ecx", "edx", "memory", "cc");
+}
+
+static int bhv_activate(char *ai)
+{
+    if (!ai || IsBadReadPtr(ai, 0x540) || (*(unsigned *)(ai + 0x2c) & 4))
+        return 0;
+    char *st = *(char **)(ai + 0x288);
+    if (!st || IsBadReadPtr(st, 0x90))
+        return 0;
+    int na = *(int *)(st + 0xc), nr = *(int *)(st + 0x38);
+    if (na < 0 || na > 10 || nr < 0 || nr > 10)
+        return 0;
+    void *top_a = na > 0 ? *(void **)(st + 0xc + 4 * na) : NULL, *top_r = nr > 0 ? *(void **)(st + 0x38 + 4 * nr) : NULL;
+    if (na == nr && top_a == top_r)
+        return 0;   /* (nothing requested that is not active) */
+    bhv_call_eax(0x871260, st);
+    return 1;
 }
 
 TRAMP("cp_t_setbhv", "0x83c837", "0xc7a970");
@@ -1768,9 +1802,10 @@ static void bhv_client_step(DWORD now)
             ssl[0] = 0;
         if (ssl[0])
             ts_script_run(ssl, res, sizeof res);
-        CLOG("campaign: scripted actor %s: the host's %s%s (record %u, animation %d here before)%s%s", bc[k].name,
+        int kicked = ssl[0] ? bhv_activate(ent) : 0;
+        CLOG("campaign: scripted actor %s: the host's %s%s (record %u, animation %d here before)%s%s%s (animation %d now)", bc[k].name,
              bc[k].kind == 1 ? "sequence " : "actor left its sequence: ", bc[k].kind == 1 ? bc[k].bhv : (ssl[0] ? "PopBHV" : "nothing to end"),
-             bc[k].seq, a, ssl[0] ? " -> " : "", ssl[0] ? res : "");
+             bc[k].seq, a, ssl[0] ? " -> " : "", ssl[0] ? res : "", kicked ? ", made active here" : "", ent_anim(ent, bc[k].name));
         bc[k].applied = 1;
     }
     if (!open)
@@ -1839,6 +1874,54 @@ static int bhv_report(char *out, int size)
                           bc[k].applied ? "" : "(pending)", e ? ent_anim(e, bc[k].name) : 0x7fffffff, bc[k].seq);
         }
     }
+    return n;
+}
+
+/* (lab, parity-017) "!cp stk <actor>": the AI's behaviour stack (ai +0x288): flags +8; the active list (count +0xc, item i at
+ * +0xc + 4i, the top is the last), the requested list (count +0x38, item i at +0x38 + 4i: SetBHV puts a behaviour there, the
+ * stack's rebuild 0x871260 makes it active, see bhv_activate), the list of ended ones (+0x64). A behaviour: vtable, type +8 (7 CINE_CYCLE, 0x23
+ * CINE, 4-6 ANIM_*), flags +0x4c, name +0xc. "!cp stkkick <actor>" runs 0x871260 once, "!cp stkupd <actor>" 0x871330 (the
+ * update an AI with authority runs every frame: 0x855990 -> 0x855d90). */
+static int bhv_list(char *st, int count_off, const char *what, char *out, int size)
+{
+    int c = *(int *)(st + count_off), n = snprintf(out, size, " %s %d:", what, c);
+    for (int i = 1; i <= c && i <= 50 && n < size - 120; i++) {
+        char *b = *(char **)(st + count_off + 4 * i);
+        if (!b || IsBadReadPtr(b, 0x60)) {
+            n += snprintf(out + n, size - n, " [%d] %p", i, (void *)b);
+            continue;
+        }
+        char nm[25];
+        memcpy(nm, b + 0xc, 24);
+        nm[24] = 0;
+        for (int k = 0; nm[k]; k++)
+            if ((unsigned char)nm[k] < 32 || (unsigned char)nm[k] > 126)
+                nm[k] = '?';
+        n += snprintf(out + n, size - n, " [%d] vt %08lx type %d flags %08x '%s'", i, (unsigned long)*(DWORD *)b, *(int *)(b + 8),
+                      *(unsigned *)(b + 0x4c), nm);
+    }
+    return n;
+}
+
+static int bhv_stack_report(const char *cmd, const char *name, char *out, int size)
+{
+    char *ai = find_ent(name);
+    if (!ai || IsBadReadPtr(ai, 0x540))
+        return snprintf(out, size, "%s: not found", name);
+    char *st = *(char **)(ai + 0x288), *node = *(char **)(ai + 0x230);
+    if (!st || IsBadReadPtr(st, 0x130))
+        return snprintf(out, size, "%s: no behaviour stack", name);
+    if (!strcmp(cmd, "stkkick"))
+        bhv_call_eax(0x871260, st);
+    else if (!strcmp(cmd, "stkupd"))
+        bhv_call_eax(0x871330, st);
+    int n = snprintf(out, size, "%s%s: ai +2c %x +538 %x +88 %d, anim %d, node +1c0 %x; stack flags %x", name,
+                     cmd[3] ? (cmd[3] == 'k' ? " (after 0x871260)" : " (after 0x871330)") : "", *(unsigned *)(ai + 0x2c),
+                     *(unsigned *)(ai + 0x538), *(int *)(ai + 0x88), ent_anim(ai, name),
+                     node && !IsBadReadPtr(node, 0x1c4) ? *(unsigned *)(node + 0x1c0) : 0xdeadu, *(unsigned *)(st + 8));
+    n += bhv_list(st, 0xc, "active", out + n, size - n);
+    n += bhv_list(st, 0x38, "requested", out + n, size - n);
+    n += bhv_list(st, 0x64, "ended", out + n, size - n);
     return n;
 }
 
@@ -2926,6 +3009,8 @@ int campaign_console(const char *text, char *out, int size)
     }
     if (!strcmp(cmd, "bhv"))   /* "!cp bhv" (lab): the scripted actors' records (host) / the host's records here (client) */
         return bhv_report(out, size), 1;
+    if (!strcmp(cmd, "stk") || !strcmp(cmd, "stkkick") || !strcmp(cmd, "stkupd"))   /* (lab) an AI's behaviour stack */
+        return bhv_stack_report(cmd, a1, out, size), 1;
     if (!strcmp(cmd, "radar"))   /* "!cp radar" (lab): the player table and the players among the radar's records (coopsession.c) */
         return coopsession_radar_report(out, size), 1;
     if (!strcmp(cmd, "carry"))   /* "!cp carry" (lab): split screen's player 2 carried with player 1 (split.c) */
@@ -3312,7 +3397,7 @@ void campaign_install(void)
     use_setspeed = !(ts_env("TS_CAMPAIGN_SETSPEED", v, sizeof v) && v[0] == '0');
     use_latejoin = !(ts_env("TS_CAMPAIGN_LATEJOIN", v, sizeof v) && v[0] == '0');
     use_ai = !(ts_env("TS_CAMPAIGN_AI", v, sizeof v) && v[0] == '0');
-    use_bhv = ts_env("TS_CAMPAIGN_BHV", v, sizeof v) && v[0] == '1';
+    use_bhv = !(ts_env("TS_CAMPAIGN_BHV", v, sizeof v) && v[0] == '0');
     use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
     use_voice = !(ts_env("TS_CAMPAIGN_VOICE", v, sizeof v) && v[0] == '0');
     use_digest = !(ts_env("TS_CAMPAIGN_DIGEST", v, sizeof v) && v[0] == '0');
