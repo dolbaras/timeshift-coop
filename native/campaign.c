@@ -488,8 +488,16 @@ static void locks_receive(const unsigned char *b, int len);
 static void lock_step(DWORD now);
 static void spread_step(DWORD now);
 static void loadout_step(DWORD now);
+#define SUB_BHV 100                          /* scripted actors (server -> clients), see "scripted actors on clients" */
+#define SUB_BHV_LAST 104
+static void bhv_receive(const unsigned char *b, int len);
+
 static void on_message(int peer, unsigned short sub, const unsigned char *b, int len)
 {
+    if (sub == SUB_BHV && enabled && len >= 2 && b[0] == PROTO && role() == MODE_CLIENT) {
+        bhv_receive(b, len);
+        return;
+    }
     if (sub == SUB_VEH && enabled && len >= 2 && b[0] == PROTO && (role() == MODE_CLIENT || role() == MODE_SERVER)) {
         veh_receive(peer, b, len);
         return;
@@ -1524,7 +1532,317 @@ static void loadout_step(DWORD now)
     }
 }
 
-typedef struct { DWORD addr, seh; void *hook; int group; } Hook;   /* group 1 late join / lock watchdog, 2 AI, 3 voice, 4 spread teleports */
+/* ---- scripted actors on clients (parity-016 round 4, sync-parity top gap 1) ----
+ * The level scripts play their scenes on actors named *_CR / *_MM (ts2_city_part02's opening: the rebels kneeling before the
+ * police, then their escape) with AI behaviours of type CINE / CINE_CYCLE: SetBHV("VICTIM"), SetBHV("MOVE1") and the chain of
+ * OnBhvEnd handlers (MOVE1 -> MOVE2 -> ...). SetBHV is AI control (storysync.c: host only), so a client's copy stood in its
+ * idle pose (animation 175) while the host's played the scene (animation -2 = a scripted sequence; run p016-D). Running the
+ * level's own SetBHV statements on clients (c2b4aa7, storysync TS_STORYSYNC_CINEBHV=1) worked for a client in the level from
+ * its start but not for one that joined later (p016-E): a CINE_CYCLE never ends, so no later event ever reached it.
+ * Now the host tells the clients what its actors play: its SetBHV native (0x83c830: the AI's vtable +0x200 with the name) is
+ * hooked; for an actor named *_CR / *_MM the host looks at the actor's body 0.5 / 1.0 / 1.5 s later and, when it plays a
+ * scripted sequence (animation -2), sends "<actor> plays <behaviour>" to every client (100, kind 1); when an actor that
+ * played one goes on to an ordinary behaviour (fight, walk: never run on clients, the AI's moves come from the host), kind 0.
+ * A client that starts running the level (in time or late) gets every actor's current scripted behaviour 2 s and 8 s after
+ * its start. A client runs $<actor>.SetBHV("<behaviour>") on its own copy (again every 2 s while the actor is unknown, up to
+ * 10 times); kind 0: $<actor>.PopBHV() if its copy still plays a sequence. Each record has the host's number, so a repeat
+ * is not run twice. A client waits (at most 6 s) for its copy's previous sequence to end before the next SetBHV (the engine
+ * refuses one while a sequence runs: "SetBHV(%s) is in process").
+ * Live (parity-016 round 4, runs p016-U, -U2, -U3, ts2_city_part02, late client and team restart): the host side, the messages,
+ * the late catch-up and the chain are right; the chain of CINE behaviours (MOVE1 .. MOVE9, FALL) now plays on the client's copy
+ * (animation -2 on both, U3). NOT yet: a CINE_CYCLE (VICTIM, the kneeling loop of the opening) never plays on a copy (175 for a
+ * late client and after a team restart alike): probably its cycle is started by the behaviour's own update, which only an AI
+ * with authority runs. So this is OFF by default: TS_CAMPAIGN_BHV=1 (lab). "!cp bhv" (lab): the table on this machine.
+ * Message 100 (server -> client): {u8 1, u8 kind, u16 seq, u8 n, actor[n], u8 n, behaviour[n]}. */
+#define BHV_MAX 64
+static int use_bhv;   /* (OFF by default: TS_CAMPAIGN_BHV=1; see "Live" above) */
+static int (TSCALL *bhv_anim_id)(void *node) = (void *)0x951660;   /* the node's animation id (-2: a scripted sequence) */
+static struct { char name[64], bhv[32]; char *ent; DWORD at; unsigned seq; int checks, cine, sent_cine; } bt[BHV_MAX];
+static int n_bt;
+static unsigned bt_seq;
+static struct { int id; DWORD seen; int sends; } bt_cl[16];
+static int n_bt_cl;
+static struct { char name[64], bhv[32]; unsigned seq; int kind, tries, applied; DWORD next, since; } bc[BHV_MAX];
+static int n_bc;
+static volatile LONG bc_dirty;
+
+static int scripted_name(const char *n)
+{
+    size_t l = n ? strlen(n) : 0;
+    return l > 3 && (_stricmp(n + l - 3, "_CR") == 0 || _stricmp(n + l - 3, "_MM") == 0);
+}
+
+static int ent_anim(char *ent, const char *name)
+{
+    if (!ent || IsBadReadPtr(ent, 0x240) || strcmp(ent_name(ent), name) != 0)
+        return 0x7fffffff;
+    char *node = *(char **)(ent + 0x230);
+    return node && !IsBadReadPtr(node, 0x80) ? bhv_anim_id(node) : 0x7fffffff;
+}
+
+TRAMP("cp_t_setbhv", "0x83c837", "0xc7a970");
+extern void TSCALL cp_t_setbhv(void *, int, Variant *, Variant *, void *) __asm__("cp_t_setbhv");
+static void TSCALL hk_setbhv(void *obj, int argc, Variant *argv, Variant *res, void *self)
+{
+    cp_t_setbhv(obj, argc, argv, res, self);
+    /* (recorded on any server of a network game: the level's first SetBHV calls run while it loads, before the session's
+     * settings make role() answer; only bhv_host_step sends, in a co-op session) */
+    if (!use_bhv || game_mode() != MODE_SERVER || !PEER_NETWORK || !obj || argc < 1 || !argv || argv[0].type != type_str()
+        || !argv[0].data)
+        return;
+    const char *nm = ent_name(obj), *b = ((String)argv[0].data)->s;
+    if (!scripted_name(nm) || strlen(nm) >= sizeof bt[0].name || strlen(b) >= sizeof bt[0].bhv)
+        return;
+    int k = 0;
+    while (k < n_bt && strcmp(bt[k].name, nm) != 0)
+        k++;
+    if (k == n_bt) {
+        if (n_bt >= BHV_MAX)
+            return;
+        memset(&bt[k], 0, sizeof bt[k]);
+        snprintf(bt[k].name, sizeof bt[k].name, "%s", nm);
+        n_bt++;
+    }
+    snprintf(bt[k].bhv, sizeof bt[k].bhv, "%s", b);
+    bt[k].ent = obj, bt[k].at = GetTickCount(), bt[k].seq = ++bt_seq, bt[k].checks = 0;
+    VLOG("campaign: %s.SetBHV(\"%s\") on the host (record %u)", nm, b, bt[k].seq);
+}
+
+static void bhv_send(int slot, int k, int kind)
+{
+    unsigned char m[4 + 64 + 1 + 32] = {PROTO, (unsigned char)kind, (unsigned char)(bt[k].seq & 0xff), (unsigned char)(bt[k].seq >> 8)};
+    int nl = (int)strlen(bt[k].name), bl = (int)strlen(bt[k].bhv);
+    m[4] = (unsigned char)nl;
+    memcpy(m + 5, bt[k].name, nl);
+    m[5 + nl] = (unsigned char)bl;
+    memcpy(m + 6 + nl, bt[k].bhv, bl);
+    for (int i = slot < 0 ? 0 : slot; slot_at(i); i++) {
+        char *s = slot_at(i);
+        if (*(int *)s != 0 && slot_joined(s) && (*(int *)(s + 8) & SLOT_INGAME))
+            coopnet_send(i, SUB_BHV, m, 6 + nl + bl);
+        if (slot >= 0)
+            break;
+    }
+}
+
+/* host, every frame */
+static void bhv_host_step(DWORD now)
+{
+    static int was_running;
+    int running = (GAME_FLAGS & FLAG_LEVEL_RUNNING) != 0;
+    if (!running && was_running) {   /* (the level goes: its actors with it; a team restart builds them again) */
+        if (n_bt)
+            CLOG("campaign: scripted actors: %d record(s) of the last level run dropped", n_bt);
+        n_bt = 0, n_bt_cl = 0;
+    }
+    was_running = running;
+    if (!running || !use_bhv)
+        return;
+    for (int k = 0; k < n_bt; k++) {
+        if (bt[k].checks >= 3 || now - bt[k].at < 500u * (unsigned)(bt[k].checks + 1))
+            continue;
+        int a = ent_anim(bt[k].ent, bt[k].name);
+        bt[k].checks++;
+        if (a == -2) {
+            bt[k].checks = 3, bt[k].cine = 1, bt[k].sent_cine = 1;
+            CLOG("campaign: scripted actor %s plays %s on the host (sequence): told the clients (record %u)", bt[k].name, bt[k].bhv,
+                 bt[k].seq);
+            bhv_send(-1, k, 1);
+        } else if (bt[k].checks >= 3) {
+            if (bt[k].sent_cine)
+                CLOG("campaign: scripted actor %s left its sequence on the host (%s, animation %d): told the clients", bt[k].name,
+                     bt[k].bhv, a);
+            if (bt[k].sent_cine)
+                bhv_send(-1, k, 0);
+            bt[k].cine = 0, bt[k].sent_cine = 0;
+        }
+    }
+    for (int i = 0; slot_at(i); i++) {   /* a client that starts running the level: every actor's scripted behaviour now */
+        char *s = slot_at(i);
+        int id = *(int *)s, c = 0;
+        if (id == 0 || !slot_joined(s) || !(*(int *)(s + 8) & SLOT_INGAME))
+            continue;
+        while (c < n_bt_cl && bt_cl[c].id != id)
+            c++;
+        if (c == n_bt_cl) {
+            if (n_bt_cl >= 16)
+                continue;
+            bt_cl[c].id = id, bt_cl[c].seen = now, bt_cl[c].sends = 0;
+            n_bt_cl++;
+        }
+        static const DWORD at[2] = {2000, 8000};
+        if (bt_cl[c].sends < 2 && now - bt_cl[c].seen >= at[bt_cl[c].sends]) {
+            int n = 0;
+            for (int k = 0; k < n_bt; k++)
+                if (bt[k].cine)
+                    bhv_send(i, k, 1), n++;
+            if (n || bt_cl[c].sends == 0)
+                CLOG("campaign: client %d runs the level: %d scripted actor(s) sent (catch-up %d)", id, n, bt_cl[c].sends + 1);
+            bt_cl[c].sends++;
+        }
+    }
+}
+
+/* client: the host's message (net pump: copied, the frame runs it) */
+static void bhv_receive(const unsigned char *b, int len)
+{
+    if (len < 6)
+        return;
+    int kind = b[1], nl = b[4];
+    unsigned seq = (unsigned)(b[2] | (b[3] << 8));
+    if (nl <= 0 || nl >= 64 || len < 6 + nl)
+        return;
+    int bl = b[5 + nl];
+    if (bl >= 32 || len < 6 + nl + bl)
+        return;
+    char nm[64], bh[32];
+    memcpy(nm, b + 5, nl);
+    nm[nl] = 0;
+    memcpy(bh, b + 6 + nl, bl);
+    bh[bl] = 0;
+    for (int i = 0; nm[i]; i++)
+        if (nm[i] == '"' || nm[i] == '\\' || (unsigned char)nm[i] < 32)
+            return;
+    for (int i = 0; bh[i]; i++)
+        if (bh[i] == '"' || bh[i] == '\\' || (unsigned char)bh[i] < 32)
+            return;
+    int k = 0;
+    while (k < n_bc && strcmp(bc[k].name, nm) != 0)
+        k++;
+    if (k == n_bc) {
+        if (n_bc >= BHV_MAX)
+            return;
+        memset(&bc[k], 0, sizeof bc[k]);
+        snprintf(bc[k].name, sizeof bc[k].name, "%s", nm);
+        n_bc++;
+    } else if (bc[k].seq == seq && bc[k].kind == kind)
+        return;   /* (a repeat: the catch-up of a record this machine already has) */
+    snprintf(bc[k].bhv, sizeof bc[k].bhv, "%s", bh);
+    bc[k].seq = seq, bc[k].kind = kind, bc[k].tries = 0, bc[k].applied = 0, bc[k].next = 0, bc[k].since = GetTickCount();
+    InterlockedExchange(&bc_dirty, 1);
+}
+
+static void bhv_client_step(DWORD now)
+{
+    static int was_running;
+    static char level[64];
+    int running = PLAYER != NULL && LEVEL_NAME[0];   /* (a client's game flags do not carry the host's "level runs" bit) */
+    if ((!running && was_running) || strncmp(level, LEVEL_NAME, sizeof level - 1) != 0) {
+        if (n_bc)
+            CLOG("campaign: scripted actors: %d record(s) of the last level dropped", n_bc);
+        n_bc = 0;
+        snprintf(level, sizeof level, "%.63s", LEVEL_NAME);
+    }
+    was_running = running;
+    if (!running || !use_bhv || !bc_dirty)
+        return;
+    int open = 0;
+    for (int k = 0; k < n_bc; k++) {
+        if (bc[k].applied)
+            continue;
+        open++;
+        if (bc[k].next && (int)(now - bc[k].next) < 0)
+            continue;
+        char ssl[160], res[96];
+        char *ent = find_ent(bc[k].name);
+        int a = ent ? ent_anim(ent, bc[k].name) : 0x7fffffff;
+        if (!ent) {
+            if (++bc[k].tries >= 10) {
+                CLOG("campaign: scripted actor %s unknown here after %d tries: %s not played", bc[k].name, bc[k].tries, bc[k].bhv);
+                bc[k].applied = 1;
+            } else
+                bc[k].next = now + 2000;
+            continue;
+        }
+        if (bc[k].kind == 1 && a == -2 && now - bc[k].since < 6000) {
+            /* (the copy still plays the previous sequence of the chain, which started here a little later than on the host: a
+             * SetBHV now is refused by the engine ("SetBHV(%s) is in process", run p016-U2); wait for its end, at most 6 s) */
+            bc[k].next = now + 100;
+            continue;
+        }
+        if (bc[k].kind == 1)
+            snprintf(ssl, sizeof ssl, "$%s.SetBHV(\"%s\")", bc[k].name, bc[k].bhv);
+        else if (a == -2)
+            snprintf(ssl, sizeof ssl, "$%s.PopBHV()", bc[k].name);
+        else
+            ssl[0] = 0;
+        if (ssl[0])
+            ts_script_run(ssl, res, sizeof res);
+        CLOG("campaign: scripted actor %s: the host's %s%s (record %u, animation %d here before)%s%s", bc[k].name,
+             bc[k].kind == 1 ? "sequence " : "actor left its sequence: ", bc[k].kind == 1 ? bc[k].bhv : (ssl[0] ? "PopBHV" : "nothing to end"),
+             bc[k].seq, a, ssl[0] ? " -> " : "", ssl[0] ? res : "");
+        bc[k].applied = 1;
+    }
+    if (!open)
+        InterlockedExchange(&bc_dirty, 0);
+}
+
+/* (client) The AI's animation picker 0x85a540 (one caller, 0x470f00) gives an AI with authority (role bit 4) the animation of its
+ * own top behaviour and a copy the network's (net state +8, or +0xc while flag 0x10). A copy's own SetBHV therefore started the
+ * sequence for a moment only: the next update put the network's animation back (the host's -2 cannot be played by id, the copy
+ * fell back to its idle 175; run p016-U). For a scripted actor whose host sequence this client plays (a record of kind 1, run
+ * here, and a behaviour on its stack) the picker takes the own behaviour's animation, as the host's picker does: 6 bytes at
+ * 0x85a547 (test byte [eax+0x2c], 4 / je 0x85a587) go through cp_pick_stub. */
+__attribute__((used)) int __cdecl cp_scripted_local(char *ai) __asm__("cp_scripted_local");
+__attribute__((used)) int __cdecl cp_scripted_local(char *ai)
+{
+    if (!use_bhv || !n_bc || !ai)
+        return 0;
+    char *stack = *(char **)(ai + 0x288);
+    if (!stack || IsBadReadPtr(stack, 0x10))
+        return 0;
+    int n = *(int *)(stack + 0xc);
+    if (n <= 0 || n > 64 || !*(void **)(stack + 0xc + n * 4))
+        return 0;
+    const char *nm = ent_name(ai);
+    for (int k = 0; k < n_bc; k++)
+        if (bc[k].kind == 1 && bc[k].applied && strcmp(bc[k].name, nm) == 0)
+            return 1;
+    return 0;
+}
+extern void cp_pick_stub(void) __asm__("cp_pick_stub");
+__asm__(".text\n"
+        ".globl cp_pick_stub\n"
+        "cp_pick_stub:\n"
+        "  testb $4, 0x2c(%eax)\n"
+        "  jne 1f\n"
+        "  pushl %eax\n"
+        "  pushl %ecx\n"
+        "  pushl %edx\n"
+        "  pushl %eax\n"
+        "  call cp_scripted_local\n"
+        "  addl $4, %esp\n"
+        "  testl %eax, %eax\n"
+        "  popl %edx\n"
+        "  popl %ecx\n"
+        "  popl %eax\n"
+        "  jne 1f\n"
+        "  pushl $0x85a587\n"
+        "  ret\n"
+        "1:\n"
+        "  pushl $0x85a54d\n"
+        "  ret\n");
+
+static int bhv_report(char *out, int size)
+{
+    int n = 0, r = role();
+    if (r == MODE_SERVER) {
+        n += snprintf(out + n, size - n, "host: %d scripted actor record(s):", n_bt);
+        for (int k = 0; k < n_bt && n < size - 100; k++)
+            n += snprintf(out + n, size - n, " %s=%s%s(anim %d, #%u)", bt[k].name, bt[k].bhv, bt[k].cine ? "*" : "",
+                          ent_anim(bt[k].ent, bt[k].name), bt[k].seq);
+    } else {
+        n += snprintf(out + n, size - n, "client: %d record(s) from the host:", n_bc);
+        for (int k = 0; k < n_bc && n < size - 100; k++) {
+            char *e = find_ent(bc[k].name);
+            n += snprintf(out + n, size - n, " %s=%s%s%s(anim %d, #%u)", bc[k].name, bc[k].kind ? "" : "left:", bc[k].bhv,
+                          bc[k].applied ? "" : "(pending)", e ? ent_anim(e, bc[k].name) : 0x7fffffff, bc[k].seq);
+        }
+    }
+    return n;
+}
+
+typedef struct { DWORD addr, seh; void *hook; int group; } Hook;   /* group 1 late join / lock watchdog, 2 AI, 3 voice, 4 spread teleports, 5 scripted actors */
 static const Hook hooks[] = {
     {0x647d40, 0xc7eba8, (void *)hk_showmsg, 3}, {0x6478e0, 0xc7ec28, (void *)hk_playsnd, 3},
     {0x438a40, 0xc79190, (void *)hk_transport, 1},   /* (group 1 since parity-016: split screen repeats teleports on player 2; the spread part still needs TS_CAMPAIGN_SPREAD=1) */
@@ -1533,6 +1851,7 @@ static const Hook hooks[] = {
     {0x666d90, 0xc69418, (void *)hk_aim, 1},
     {0x83d3f0, 0xc7a8b0, (void *)hk_setaim, 2}, {0x4b2ba0, 0xc82740, (void *)hk_tgt1, 2},
     {0x4cb6d0, 0xc82650, (void *)hk_tgt2, 2},   {0x51a3d0, 0xc81e90, (void *)hk_tgt3, 2},
+    {0x83c830, 0xc7a970, (void *)hk_setbhv, 5},
 };
 #define N_HOOKS ((int)(sizeof hooks / sizeof hooks[0]))
 
@@ -2463,6 +2782,7 @@ static void frame(float dt)
         client_frame();
         veh_step(now);
         dyn_step(now);
+        bhv_client_step(now);
         return;
     }
     if (r != MODE_SERVER) {
@@ -2473,6 +2793,7 @@ static void frame(float dt)
     }
     veh_step(now);
     dyn_step(now);
+    bhv_host_step(now);
     loadout_step(now);
     locks_send(now);
     if (use_latejoin)
@@ -2603,6 +2924,8 @@ int campaign_console(const char *text, char *out, int size)
         }
         return 1;
     }
+    if (!strcmp(cmd, "bhv"))   /* "!cp bhv" (lab): the scripted actors' records (host) / the host's records here (client) */
+        return bhv_report(out, size), 1;
     if (!strcmp(cmd, "radar"))   /* "!cp radar" (lab): the player table and the players among the radar's records (coopsession.c) */
         return coopsession_radar_report(out, size), 1;
     if (!strcmp(cmd, "carry"))   /* "!cp carry" (lab): split screen's player 2 carried with player 1 (split.c) */
@@ -2989,6 +3312,7 @@ void campaign_install(void)
     use_setspeed = !(ts_env("TS_CAMPAIGN_SETSPEED", v, sizeof v) && v[0] == '0');
     use_latejoin = !(ts_env("TS_CAMPAIGN_LATEJOIN", v, sizeof v) && v[0] == '0');
     use_ai = !(ts_env("TS_CAMPAIGN_AI", v, sizeof v) && v[0] == '0');
+    use_bhv = ts_env("TS_CAMPAIGN_BHV", v, sizeof v) && v[0] == '1';
     use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
     use_voice = !(ts_env("TS_CAMPAIGN_VOICE", v, sizeof v) && v[0] == '0');
     use_digest = !(ts_env("TS_CAMPAIGN_DIGEST", v, sizeof v) && v[0] == '0');
@@ -3002,7 +3326,8 @@ void campaign_install(void)
     use_vehsync = !(ts_env("TS_CAMPAIGN_VEHSYNC", v, sizeof v) && v[0] == '0');
     if (ts_env("TS_CAMPAIGN_RIDE_HEIGHT", v, sizeof v))
         ride_height = (float)atof(v);
-    if (!ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_GATHER, SUB_LAST, on_message)) {
+    if (!ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_GATHER, SUB_LAST, on_message)
+        || !coopnet_listen(SUB_BHV, SUB_BHV_LAST, on_message)) {
         ts_log("campaign: off (no script tick, frame slot or mod messages)");
         return;
     }
@@ -3031,10 +3356,17 @@ void campaign_install(void)
         if (use_syncskip && !ts_patch_bytes(0x571ad0, want_sy, r, 6))
             ts_log("campaign: node sync site not as expected (other exe)");
     }
+    if (use_bhv) {   /* (scripted actors on clients: the animation picker, see cp_scripted_local) */
+        static const unsigned char want_pk[6] = {0xf6, 0x40, 0x2c, 0x04, 0x74, 0x3a};
+        unsigned char r[6] = {0xe9, 0, 0, 0, 0, 0x90};
+        *(DWORD *)(r + 1) = (DWORD)cp_pick_stub - (0x85a547 + 5);
+        if (!ts_patch_bytes(0x85a547, want_pk, r, 6))
+            ts_log("campaign: AI animation picker not as expected (other exe): scripted actors stay idle on clients");
+    }
     for (int i = 0; i < N_HOOKS; i++) {
         const Hook *h = &hooks[i];
         if ((h->group == 1 && !use_latejoin && !use_locks) || (h->group == 2 && !use_ai) || (h->group == 3 && !use_voice)
-            || (h->group == 4 && !use_spread))
+            || (h->group == 4 && !use_spread) || (h->group == 5 && !use_bhv))
             continue;
         unsigned char want[7] = {0x6a, 0xff, 0x68}, rep[7];
         memcpy(want + 3, &h->seh, 4);
