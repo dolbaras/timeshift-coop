@@ -2853,6 +2853,74 @@ static void cine_hide_step(void)
     n_hid = 0;
 }
 
+/* ---- another player's jump, landing and crouch sounds (parity-017; parity-016 run p016-B2) ----
+ * A player's own jump / landing / crouch sounds come from its own machine's movement code (keys jump_start, jump_end,
+ * land_<surface>, crouch of the sound list of plr_comm.cls: player_jump_start, player_jump_end*, player_land_*,
+ * player_crouch); the other machines showed the remote body's animations exactly (jump 516 / 517 / 518, crouch 188,
+ * crouch-walk 89) but played none of these sounds (host 1 each, client 0). Each machine now watches every other player's body
+ * of its network game (the slot entities, player_mp: player_ghost -> plr_model -> plr_comm, so the same sound list) and, when
+ * the body's animation id turns into a jump start (516), a landing (518) or a crouch (188 from a standing id), starts the same
+ * keys at that body through the entity's sound helper 0x642bb0 (thiscall (entity, String *key, String *bone), ret 8; 3D at the
+ * body: player_mp's sounds say is2D = No). The landing uses land_ground (the surface under the remote body is not known
+ * here). Co-op sessions only. TS_CAMPAIGN_MOVESND=0 off. */
+static int use_movesnd = 1;
+static int movesnd_played, movesnd_missed;
+static void movesnd_play(char *ent, const char *key)
+{
+    String nm = 0, bone = 0;
+    str_ctor(&nm, key, -1, 0);
+    str_ctor(&bone, "", -1, 0);
+    void *r;
+    __asm__ volatile("pushl %3\n\tpushl %2\n\tcall *%4"
+                     : "=a"(r), "+c"(ent)
+                     : "r"(&nm), "r"(&bone), "r"((DWORD)0x642bb0)
+                     : "edx", "memory", "cc");
+    str_release(nm);
+    str_release(bone);
+    if (r)
+        movesnd_played++;
+    else
+        movesnd_missed++;
+    if (movesnd_played + movesnd_missed <= 20)
+        CLOG("campaign: another player's %s at its body: %s", key, r ? "started" : "not started");
+}
+
+static void movesnd_step(void)
+{
+    static struct { char *ent; int id; } last[16];
+    int m = game_mode();
+    if (!use_movesnd || (m != MODE_SERVER && m != MODE_CLIENT) || !PEER_NETWORK || !ts_coop_active())
+        return;
+    char *p2 = (char *)split_player2();
+    for (int i = 0; i < 16; i++) {
+        char *s = slot_at(i);
+        if (!s)
+            break;
+        char *ent = *(char **)(s + 4);   /* (no "joined" test: a client's slot table does not carry the host's flags) */
+        if (!ent || ent == PLAYER || ent == p2 || IsBadReadPtr(ent, 0x234)) {
+            last[i].ent = NULL;
+            continue;
+        }
+        char *node = *(char **)(ent + 0x230);
+        int id = node && !IsBadReadPtr(node, 0x80) ? bhv_anim_id(node) : -1;
+        if (last[i].ent != ent) {
+            last[i].ent = ent, last[i].id = id;
+            continue;
+        }
+        int was = last[i].id;
+        last[i].id = id;
+        if (id == was)
+            continue;
+        if (id == 516)
+            movesnd_play(ent, "jump_start");
+        else if (id == 518) {
+            movesnd_play(ent, "jump_end");
+            movesnd_play(ent, "land_ground");
+        } else if (id == 188 && was != 89 && was != 188)
+            movesnd_play(ent, "crouch");
+    }
+}
+
 /* ---- per frame (host) ---- */
 static void frame(float dt)
 {
@@ -2861,6 +2929,7 @@ static void frame(float dt)
     DWORD now = GetTickCount();
     int r = role();
     cine_hide_step();
+    movesnd_step();
     if (r == MODE_CLIENT) {
         client_frame();
         veh_step(now);
@@ -3398,6 +3467,7 @@ void campaign_install(void)
     use_latejoin = !(ts_env("TS_CAMPAIGN_LATEJOIN", v, sizeof v) && v[0] == '0');
     use_ai = !(ts_env("TS_CAMPAIGN_AI", v, sizeof v) && v[0] == '0');
     use_bhv = !(ts_env("TS_CAMPAIGN_BHV", v, sizeof v) && v[0] == '0');
+    use_movesnd = !(ts_env("TS_CAMPAIGN_MOVESND", v, sizeof v) && v[0] == '0');
     use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
     use_voice = !(ts_env("TS_CAMPAIGN_VOICE", v, sizeof v) && v[0] == '0');
     use_digest = !(ts_env("TS_CAMPAIGN_DIGEST", v, sizeof v) && v[0] == '0');
