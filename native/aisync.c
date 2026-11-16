@@ -144,7 +144,7 @@ typedef struct {
 #define NO_ANIM 0x7fffffff
 static AiState states[MAX_AI];
 static int n_states;
-static int revive_on;   /* (client) a corpse whose server soldier lives again comes back here (TS_AIREVIVE=1, lab: see revive_here) */
+static int revive_on = 1;   /* (client) a corpse whose server soldier lives again comes back here (revive_here; TS_AIREVIVE=0 off) */
 static int revive_here(char *ai, AiState *s);
 
 static AiState *state_of(char *ai)
@@ -1244,8 +1244,19 @@ static void kill_here(char *ai)
  * Live (p016-17E, level 3, the host's Die("KEEP") then a 5 s rewind): the host's soldier stood up again with the same net id
  * (fl 1, hp 45, animations); the soldiers' updates DO reach the clients during a playback (they ride the server's regular
  * updates, role 0x10, not the entity frame that a playback stops: the client read "alive" 4 s into the playback), so nothing
- * has to push them. The client's copy left the corpse state (ragdoll 1 -> 0) but played no animation afterwards (-1, fl
- * c40020, hp -10): so this is OFF by default (TS_AIREVIVE=1, lab) until a copy is proven to stand up and move again. */
+ * has to push them. Round 1 (p016-17F): the copy left the corpse state (ragdoll 1 -> 0) but played no animation
+ * afterwards (-1). Cause (static analysis, round 2): the ragdoll start (body vtbl+8 0x813c40) sets the node's animation to -1
+ * and the death puts the stance component (+0x4ec) into its ragdoll mode (+0x30 bit 0x200, 0x813510); a copy's animation
+ * step (0x859970, from the copy update 0x858eb0) returns at once in that mode, so nothing started an animation again. The
+ * engine's own get-up from a ragdoll (0x45e2e0, a class's knock-down) turns the ragdoll off (body vtbl+0xc = 0x8141d0),
+ * clears the 0x200 mode and, when no other mode is set, puts the stance into 0x80000; the copy does the same here (not
+ * 0x45e2e0 itself: it also copies the bones into the class's own +0x514 component, which the base AI makes 0x10 bytes
+ * small). The death's delayed message 0x4fa cleared +0x53c bit 0x200 (set at the AI's start 0x837a23, read by AI
+ * vtbl+0x3f0): set again. Live (p016-17G, level 3, Die("KEEP") then the host's 5 s rewind): the copy left the corpse 1 s after
+ * the playback (stance 202 -> 80002) and played the server's animations again (187, 359, 181 as the host's, 2-10 s later);
+ * frame pairs host / client: standing and firing at the same container on both. On by default; TS_AIREVIVE=0 off. */
+#define AI_STANCE 0x4ec                      /* stance component: +0x30 mode bits (0x100, 0x200 ragdoll, 0x400, 0x1000, 0x20000, 0x80000) */
+#define STANCE_RAGDOLL 0x200
 static LONG n_revive_logged;
 static int revive_here(char *ai, AiState *s)
 {
@@ -1261,11 +1272,23 @@ static int revive_here(char *ai, AiState *s)
     float full = *(float *)(ai + 0x238);
     if (full > 0.f && full < 100000.f)
         *(float *)(ai + 0x234) = full;
+    char *stc = *(char **)(ai + AI_STANCE);
+    unsigned md0 = 0, md1 = 0;
+    if (stc && !IsBadWritePtr(stc + 0x30, 4)) {
+        md0 = *(unsigned *)(stc + 0x30);
+        md1 = md0 & ~(unsigned)STANCE_RAGDOLL;
+        if (!(md1 & (0x100 | 0x400 | 0x1000 | 0x20000)))   /* (as 0x45e2e0's tail) */
+            md1 = (md1 & 0xfff000ffu) | 0x80000;
+        *(unsigned *)(stc + 0x30) = md1;
+    }
+    *(unsigned *)(ai + 0x53c) |= 0x200;
+    *(unsigned *)(ai + AI_FLAGS) |= 0x20;   /* (animation changed: the copy's step starts the server's animation) */
     s->corpse = s->noanim = s->srv_dead = 0;
     s->alive_reads = 0;
     if (InterlockedIncrement(&n_revive_logged) <= 50)
-        ts_log("aisync: %s (net %d) lives again on the server (the host's rewind): back from the corpse here (ragdoll %d -> %d, hp %.2f)",
-               ai_name(ai), *(int *)(ai + E_NETID), rag, ragdoll_active(ai), (double)*(float *)(ai + 0x234));
+        ts_log("aisync: %s (net %d) lives again on the server (the host's rewind): back from the corpse here (ragdoll %d -> %d, "
+               "stance %x -> %x, hp %.2f)", ai_name(ai), *(int *)(ai + E_NETID), rag, ragdoll_active(ai), md0, md1,
+               (double)*(float *)(ai + 0x234));
     return 1;
 }
 
@@ -1967,10 +1990,12 @@ static void con_list_fn(char *ai)
     AiState *s = state_of(ai);
     if (con_n < con_size - 200)
         con_n += snprintf(con_out + con_n, con_size - con_n,
-                          "%s vt=%p net=%d role=%x fl=%x hp=%.2f anim=%d rag=%d corpse=%d/%d\n", nm, *(void **)ai,
-                          *(int *)(ai + E_NETID), *(unsigned *)(ai + E_ROLE), *(unsigned *)(ai + AI_FLAGS),
+                          "%s vt=%p net=%d role=%x fl=%x hp=%.2f anim=%d rag=%d corpse=%d/%d md=%x st=%d x53c=%x x540=%x\n", nm,
+                          *(void **)ai, *(int *)(ai + E_NETID), *(unsigned *)(ai + E_ROLE), *(unsigned *)(ai + AI_FLAGS),
                           *(float *)(ai + 0x234), node ? anim_id(node) : -9, ragdoll_active(ai), s ? s->corpse : -1,
-                          s ? s->srv_dead : -1);
+                          s ? s->srv_dead : -1, *(char **)(ai + AI_STANCE) ? *(unsigned *)(*(char **)(ai + AI_STANCE) + 0x30) : 0,
+                          *(char **)(ai + 0x50c) ? *(int *)(*(char **)(ai + 0x50c) + 0xc) : -1, *(unsigned *)(ai + 0x53c),
+                          *(unsigned *)(ai + 0x540));
 }
 
 /* (lab) "!ai near" / "!ai killnear": the living soldiers with a net id nearest this machine's player */
@@ -2282,8 +2307,8 @@ void aisync_install(void)
     }
     if (ts_env("TS_AISTATE", v, sizeof v) && v[0] == '0')
         wst_on = 0;
-    if (ts_env("TS_AIREVIVE", v, sizeof v))
-        revive_on = v[0] == '1';
+    if (ts_env("TS_AIREVIVE", v, sizeof v) && v[0] == '0')
+        revive_on = 0;
     if (ts_env("TS_AIVOICE", v, sizeof v) && v[0] == '0')
         voice_on = 0;
     if (engine_mode && voice_on && voice_install() != (int)N_VT) {
