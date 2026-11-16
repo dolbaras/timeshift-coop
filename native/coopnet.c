@@ -16,7 +16,8 @@
  *   1  run this SSL text here (queued for the script tick, like the test console)
  *   3  (client -> server, unreliable, every frame in a co-op session) nothing: carries acknowledgements
  *   2  (client -> server) run on every machine: the server runs it and relays it as 1 to all other clients
- *   10+ other parts of the mod (coopnet_listen): 10-19 time powers (timesync.c)
+ *   10+ other parts of the mod (coopnet_listen): 10-19 time powers (timesync.c), ... 100-104 scripted actors (campaign.c),
+ *       110-119 the skip vote (skipvote.c)
  * Running received SSL needs TS_COOPNET=1 or the test console (TS_CONSOLE); otherwise it is logged and
  * dropped. TS_COOPNET=0 leaves the game's handlers alone.
  *
@@ -81,12 +82,12 @@ static handler_t orig_server = (handler_t)SRV_HANDLER, orig_client = (handler_t)
 static int remote_ssl, hooks_in;
 
 /* Subtype ranges handled by other parts of the mod (registered at start-up, before any message). */
-static struct { unsigned short first, last; coopnet_recv fn; } listeners[8];
+static struct { unsigned short first, last; coopnet_recv fn; } listeners[16];
 static int n_listeners;
 
 int coopnet_listen(unsigned short first, unsigned short last, coopnet_recv fn)
 {
-    if (n_listeners >= 8 || first <= SUB_RUN_ALL)
+    if (n_listeners >= 16 || first <= SUB_RUN_ALL)
         return 0;
     listeners[n_listeners].first = first;
     listeners[n_listeners].last = last;

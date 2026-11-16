@@ -453,6 +453,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         netfix_install();
         gamepad_install();
         split_install();
+        skipvote_install();   /* (after split_install: it uses split screen's command hook when there is one) */
         char v[16];
         if (ts_env("TS_WATCHDOG", v, sizeof v) && (watchdog_secs = (DWORD)atoi(v)) > 0) {
             DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &main_thread,

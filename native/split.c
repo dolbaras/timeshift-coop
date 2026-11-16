@@ -1273,6 +1273,7 @@ static void TSCALL hook_eval(void *imv)
             ts_log("split: command pass for the copy skipped %d, run %d (p2 %p ctx2 %p raw2 %p ctx1 %p vt %08lx)", skipped, ran, (void *)p2,
                    (void *)ctx2, (void *)raw2, (void *)ctx1, ctx1 ? *(DWORD *)ctx1 : 0);
         }
+        skipvote_after_eval(imv, NULL);   /* (co-op skip vote: STOP_CINEMATIC presses become votes) */
         return;
     }
     ran++;
@@ -1303,6 +1304,7 @@ static void TSCALL hook_eval(void *imv)
     memcpy(raw + RAW_FROM, raw1 + RAW_FROM, RAW_TO - RAW_FROM);
     memcpy(im + IMF_A, a1, sizeof a1);
     memcpy(im + IMF_B, b1, sizeof b1);
+    skipvote_after_eval(imv, ctx2);   /* (co-op skip vote: player 1's and player 2's STOP_CINEMATIC presses become votes) */
 }
 
 /* Player 2's update with the world seen as player 2's: player pointers, camera, commands and look state. */
@@ -4185,6 +4187,12 @@ static int patch_slot(DWORD vtbl, int slot, void *hook, void **orig)
 unsigned char *split_player2(void)
 {
     return p2;
+}
+
+/* a second human at THIS machine: split screen's player 2 (not the host's stand-in for a client's player 2) */
+int split_p2_local(void)
+{
+    return p2 && !remote_host;
 }
 
 void split_install(void)

@@ -17,3 +17,5 @@ sh ual_test.sh
 ../build/radarmate_test.exe
 "$ZIG" cc -O1 -o ../build/readyroom_test.exe readyroom_test.c
 ../build/readyroom_test.exe
+"$ZIG" cc -O1 -o ../build/skipvote_test.exe skipvote_test.c
+../build/skipvote_test.exe

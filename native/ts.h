@@ -98,6 +98,7 @@ void gamepad_poll_player2(int on);   /* split.c: the next input polls read pad 2
 /* split.c: local split screen, player 2 on pad 2 (TS_SPLIT=1, prototype) */
 void split_install(void);
 unsigned char *split_player2(void);   /* the second player run on this machine (split screen, a client's player 2), or NULL */
+int split_p2_local(void);             /* 1 = split screen's player 2 sits at this machine (not a client's player 2 on the host) */
 int ts_profile_value(const char *key, char *out, int size);   /* display.c: a key of the player's profile (user.ini) */
 int ts_cinematic_now(void);           /* split.c: a cinematic camera (or the level 1 opening) is on now (any game mode) */
 void split_p1_native(void *obj, int kind, int arg, const char *name);   /* campaign.c: a player native ran (1 Transport, 2 DisableMove, 3 DisableInput) */
@@ -107,6 +108,10 @@ int campaign_split_gates(void);       /* campaign.c: the all-players gates count
 void *split_radar_record(void);       /* the split screen's shared radar record (radarmate.h), or NULL */
 void gamepad_set_player2_pad(const void *xinput_gamepad);   /* gamepad.c: player 2's pad state from elsewhere (NULL: pad 2) */
 void gamepad_mask_player2(unsigned short buttons, int triggers);   /* gamepad.c: buttons (and both triggers) player 2's commands do not get */
+
+/* skipvote.c: the co-op skip vote for cinematics (every player's Skip is a vote; the host ends the scene everywhere) */
+void skipvote_install(void);                     /* after split_install (its command hook calls skipvote_after_eval) */
+void skipvote_after_eval(void *im, void *ctx2);  /* after the engine's command evaluation; ctx2 = player 2's context or NULL */
 
 /* d3dex.c: Direct3D 9Ex instead of 9 (default; TS_D3D9EX=0 off: no lost device in a window), resource census (TS_D3DCENSUS=1) */
 void d3dex_install(void);
