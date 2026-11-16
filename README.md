@@ -7,9 +7,9 @@ Co-op for **TimeShift** (2007, PC; Saber Interactive / Sierra): the whole story 
 
 ## Status
 
-**Version 0.1.6** ([release notes](https://github.com/dolbaras/timeshift-coop/releases/latest)): a player whose PC loads a level slowly is no longer dropped by the host (the drop on the way into level 1, in 0.1.5 too); after every level change nobody moves until every player has loaded the level, and the screen names the players still loading; Skip in a cutscene or film is a vote of every player (split-screen player 2 too), and the scene ends on every machine together; split screen carries player 2 along with player 1's story teleports, movement locks, lifts and trains; cutscenes no longer show the partner's name tag or body. Before it: the texts reviewed in all nine languages and the bug-report collector in the player's language (0.1.5), the other players on the HUD radar and the Ready step (0.1.4).
+**Version 0.1.7** ([release notes](https://github.com/dolbaras/timeshift-coop/releases/latest)): the scripted people of a level's opening scene (such as the kneeling rebels of level 2) play their scene on the clients too; the soldiers' voices and the melee-hit sound are heard on the clients; the other player's jump and crouch sounds play at its body (not always); a soldier the host's rewind brings back to life stands up on the clients too; in split screen player 2 sets off the story and time-power zones as player 1 does. Before it: no drop while a level loads, a level start that waits for the players still loading and the skip vote (0.1.6), the texts reviewed in all nine languages (0.1.5), the other players on the HUD radar and the Ready step (0.1.4).
 
-How it is tested: the whole campaign was run host + client by an automatic bot (24 of 24 levels); each version's changes are checked with a host and a client on two test PCs and in split screen on one. Nobody outside the lab has played 0.1.6 yet, and a whole campaign played by people has not been done. Every player needs the same version of the mod.
+How it is tested: the whole campaign was run host + client by an automatic bot (24 of 24 levels); each version's changes are checked with a host and a client on two test PCs and in split screen on one. Nobody outside the lab has played 0.1.7 yet, and a whole campaign played by people has not been done. Every player needs the same version of the mod.
 
 ## What works
 
@@ -28,7 +28,7 @@ How it is tested: the whole campaign was run host + client by an automatic bot (
 | Time powers in co-op: slow and stop for everyone, one power at a time, each player's own energy | ✅ |
 | Reverse in co-op (the game's own time recorder on the host; puzzle actors, force fields, container trap) | ✅ |
 | Continue: the host's checkpoint of a co-op game is saved per profile with the real loadout; Co-op -> Continue hosts it again | ✅ |
-| AI on clients: movement, deaths and corpses, weapon fire | ✅ |
+| AI on clients: movement, deaths and corpses, weapon fire, voices, scripted scenes at level openings, soldiers revived by the host's rewind | ✅ |
 | Campaign levels for several players: lifts and trains wait for everyone, zeppelin turrets and armoured car for clients, AI aims at the nearest player, late joiners get the level's state | 🟨 |
 | Local split screen for two players with gamepads (own HUD, weapons, ammo, effects, pick-ups, saves) | ✅ |
 | Split screen together with network play | 🟨 host with split screen and a client works; split screen on a client is basic |
@@ -82,11 +82,11 @@ The setup exe is not code-signed, so Windows SmartScreen may warn ("More info" -
 
 - **Ready step:** a split-screen player 2 in a network game is not held in the ready room and is no player of the ready check; the Tab scoreboard during the ready room was not checked.
 - **ASI loaders:** tested with Ultimate ASI Loader 10.0.2 and a test plugin only; a loader renamed to some other DLL name was not tried.
-- **Sound was never judged by ear** (all test windows were muted). The soldiers' own voices and the gibbing sounds are still played on the host only.
+- **Sound was never judged by ear** (all test windows were muted). Another player's landing sound is not heard on the other machines, and its jump and crouch sounds are often missing on a client.
 - **A bad link:** under about 30 % lost packets a join can fail once; press Join again.
-- **Split screen:** cutscenes, the pause menu and loading screens are full screen; each half runs at half of the game's frame rate unless `BothViews=1` helps on your card (tried on an Intel card only); the story's trigger zones, hint boxes and the automatic time power follow player 1 only; split screen on a client is basic.
-- **Cutscenes:** in some level openings (for example the rebels at the start of level 2) the scripted people stand idle on a client's screen while the host sees them play their scene; a Start or Esc pressed when no scene runs (right after one ended) opens the pause menu as usual; the in-game camera scenes of levels 8 and 22 were not reached in the tests.
-- **After the host's rewind** the clients take the rewound machinery's state from the host on level 2 (the walkway) only; during the playback the clients' soldiers, loose objects and doors get no update, and a soldier the rewind brings back to life stays a corpse on the clients.
+- **Split screen:** cutscenes, the pause menu and loading screens are full screen; each half runs at half of the game's frame rate unless `BothViews=1` helps on your card (tried on an Intel card only); both players now set off the story and time-power zones; the hint boxes still show in both halves and name player 1's keys; split screen on a client is basic.
+- **Cutscenes:** a Start or Esc pressed when no scene runs (right after one ended) opens the pause menu as usual; the in-game camera scenes of levels 8 and 22 were not reached in the tests.
+- **After the host's rewind** the clients take the rewound machinery's state from the host on level 2 (the walkway) only; whether doors follow the host during its rewind was not checked.
 - **Internet play** (through OpenSpy and a forwarded port) is untested, and a whole campaign played by people has not been done.
 - **Steam:** tested with the real community package on a simulated Steam folder and on a test PC, not on a real Steam installation.
 - **The setup exe is not code-signed** (see above).

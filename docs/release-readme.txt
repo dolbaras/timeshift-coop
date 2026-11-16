@@ -64,36 +64,31 @@ What the mod does
   join as usual. On a host both halves of its screen play in the session and the other players see
   both bodies. On a client the second player is supported in basic form (experimental).
 
-New in 0.1.6
-- Level changes: the host dropped a player whose PC was still loading the next level when the load
-  stayed silent for more than 15 seconds (the player saw "Server was shut down."). It happened on the
-  way into level 1 (City, part 1), for example after level 19 or at a team restart there, and 0.1.5
-  did it too. In a co-op game a loading player may now stay silent for up to 120 seconds.
-- Level start: after a level change nobody can move until every player has loaded the level (60
-  seconds at most); meanwhile the screen names the players still loading ("Waiting for the players
-  still loading the level: <names>"). A player who leaves while loading ends the wait.
-- Cutscenes and films: in a co-op game Skip (Start on the pad, Esc on the keyboard) is a vote. The
-  screen shows who wants to skip and how many have voted ("<name> wants to skip the scene (1/2)");
-  when every player has voted, the scene ends on every machine at the same moment. In split screen
-  player 2 votes with its own Start. Alone, the game skips as before.
-- Cutscenes no longer show the other player's name tag (it was drawn over the opening film of level
-  1) or the other players' bodies.
-- Split screen: the story's teleports and movement locks of player 1 are repeated on player 2; the
-  all-players places (lifts, trains) wait for player 2, a line in both halves says so, and after 20
-  seconds player 2 is put in beside player 1; player 2 is brought to player 1 when it stays more
-  than 40 m away for 10 seconds.
-- The armoured car ride of level 19 no longer stays set on the host after a level change (the host
-  kept looking for the car in the next level).
+New in 0.1.7
+- Level openings: the scripted people of a level's opening scene (for example the kneeling rebels
+  at the start of level 2) now play their scene on the clients too; before, they stood idle there.
+  This works for a player who joins later and after a team restart.
+- Soldiers' voices: the enemies' shouts and calls, and the sound of a melee hit, are now heard on
+  the clients too; before, only the host heard them.
+- The other player's jump and crouch sounds are now played at its body on the other machines (not
+  always: see the known limits).
+- Rewind: a soldier the host's rewind brings back to life now stands up and fights on the clients'
+  screens too; before, it stayed a corpse there.
+- Split screen: player 2 now sets off the story's trigger zones and the time-power zones as player
+  1 does (story events, checkpoints, the zones that slow or stop time). Before, only player 1 did.
+  The environment variable TS_SPLIT_ZONES=0 turns this off.
 
-Changes in 0.1.5
-- Texts: every text of the mod reviewed in the nine languages: the game's own words where the game
-  has them ("health", the game's word for the checkpoint, the controller), one word for the host and
-  for the mod in each language, one form of address per language, each language's quotes; the
-  Italian Regroup lines no longer read as if you or the host had moved the others.
-- Bug reports: the window of Collect logs.bat (in <game>\coop) speaks your language (the game's
-  language from bin\steamwars.ini, else Windows'; 16 languages). The zip's report stays in English.
-  The setup exe's message boxes follow Windows' language in 16 languages.
-- 0.1.4: the other players on the HUD radar, the Ready step before the first chapter, co-op next to
+Changes in 0.1.6
+- Level changes: a player whose PC loads the next level slowly is no longer dropped by the host
+  (seen on the way into level 1); after a level change nobody moves until every player has loaded
+  the level, and the screen names the players still loading.
+- Skip in a cutscene or film is a vote of every player (split screen player 2 too); the scene ends
+  on every machine at the same moment. Cutscenes no longer show the other player's name tag or body.
+- Split screen: player 2 follows player 1's story teleports and movement locks; lifts and trains
+  wait for player 2 and put it in after 20 seconds; player 2 is brought to player 1 when it stays
+  more than 40 m away for 10 seconds.
+- 0.1.5: the texts reviewed in the nine languages, Collect logs.bat and the setup exe's messages in
+  16 languages. 0.1.4: the other players on the HUD radar, the Ready step before the first chapter, co-op next to
   other mods' ASI loaders (Ultimate ASI Loader as bin\winmm.dll, ddraw.dll or d3d9.dll), the
   installer also in Polish, Czech and Hungarian, the stick directions on the controls screen in the
   game's words. 0.1.3: on level 2 (the walkway the robot wrecks) the clients of a network game follow
@@ -109,9 +104,11 @@ Not finished / known limits
   that is already in the game rides along (checked by log and coordinates).
 - Voices: the lines of Cooke and the rebels in the zeppelin intros (levels 8 and 23) and other spoken
   lines are started on the clients from the host's messages (checked in the logs); the sound itself
-  could not be judged in the automatic tests (muted windows). The enemies' weapon shots are heard on
-  the clients, but the soldiers' own voices and the gibbing sounds are still played on the host
-  only. Tell us if a client misses a voice, shots or footsteps.
+  could not be judged in the automatic tests (muted windows). The enemies' weapon shots and, from
+  0.1.7, their voices and the melee-hit sound are started on the clients too (checked by the sound
+  counters). Another player's landing sound is not heard on the other machines, and its jump and
+  crouch sounds are often missing on a client (the client's sound system refuses them). Tell us if
+  a client misses a voice, shots or footsteps.
 - A bad connection: joining a game over a link that loses about a third of its packets can fail once
   (the game sends its connect packets a few times and gives up); press Join again. Playing, changing
   levels and Continue were tested with 5 %, 15 % and 30 % lost packets.
@@ -121,32 +118,30 @@ Not finished / known limits
   off by default, tried on an Intel card only, not on NVIDIA or AMD); the scripts treat player 1 as
   "the player": the enemies aim at player 2 too, the story's teleports and movement locks of player 1
   are repeated on player 2, the all-players gates (lifts, trains) wait for player 2 (after 20 s it is
-  put in), and player 2 is brought to player 1 when it stays more than 40 m away for 10 s; but the
-  story's trigger zones, the hint boxes and the automatic time power still follow player 1 only. The
-  shot sounds of player 2 are untested. Split screen on a client is basic: player 2's pick-ups were
-  checked in a live game, its time power and kills over the network were not.
+  put in), and player 2 is brought to player 1 when it stays more than 40 m away for 10 s; both
+  players now set off the story and time-power zones; the hint boxes still show in both halves and
+  name player 1's keys. The shot sounds of player 2 are untested. Split screen on a client is basic:
+  player 2's pick-ups were checked in a live game, its time power and kills over the network were
+  not.
 - Cutscenes: a Start or Esc pressed when no scene is running (for example right after a scene ended)
-  opens the game's pause menu as usual. In some level openings (for example the rebels at the start
-  of level 2) the scripted people stand idle on a client's screen while the host sees them play
-  their scene. The in-game camera scenes of levels 8 and 22 were not reached in the tests (the
-  cutscenes seen were films).
+  opens the game's pause menu as usual. The in-game camera scenes of levels 8 and 22 were not
+  reached in the tests (the cutscenes seen were films).
 - Most checks of the rewind, force fields, vehicles and container traps were made by reading clip and
   time values, coordinates and the logs of both machines, not by watching the screens: the results are
   in the numbers, but how it looks in play has had little human testing.
 - After the host's rewind, the clients take the rewound machinery's state from the host on level 2
   (the walkway) only. On other levels the kill zones, force fields and pieces that a rewound machine's
   animation switches may stay on a client as they were before the rewind (not seen in the tests; the
-  places are listed for a later version). While the host's rewind plays back, the soldiers, loose
-  objects and doors on the clients' screens get no update from the host until it ends, and a
-  soldier the rewind brings back to life stays a corpse there.
+  places are listed for a later version). Whether the doors follow the host while its rewind plays
+  back was not checked (soldiers and loose objects do).
 - Level 2, the walkway the robot wrecks, works as the level is made: reverse time in the first
   seconds of the collapse and run across at once; a few seconds after the rewind the walkway
   collapses again, and a player still on it dies (the game restarts from the checkpoint it saved on
-  the walkway). In split screen the walkway's trigger and its time-power zone follow player 1 only:
-  RB (F on the keyboard), the automatic power the level's hint names, reverses only while player 1
-  is on the walkway (otherwise it gives slow motion); the reverse button itself (D-pad right, B on
-  the keyboard) works for both players. Checked with virtual pads in the single-player game and in
-  split screen, not yet in a network game.
+  the walkway). In split screen RB (F on the keyboard), the automatic power the level's hint names,
+  reverses only inside the walkway's time-power zone (otherwise it gives slow motion); from 0.1.7
+  player 2 sets off that zone too (not checked on the walkway itself); the reverse button (D-pad
+  right, B on the keyboard) works for both players. Checked with virtual pads in the single-player
+  game and in split screen, not yet in a network game.
 - Only the PC version of the game with patch 1.2 is supported. A Steam copy (version 1.0) works after
   it is brought to 1.2 with the community-made 1.2 update package that you supply yourself (see Requirements);
   that path was tested on a simulated Steam folder and with the package's files, not on a real Steam
