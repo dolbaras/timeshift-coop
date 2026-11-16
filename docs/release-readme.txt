@@ -18,7 +18,10 @@ What the mod does
   (the host too) opens the pause menu (Esc) and picks READY (NOT READY takes it back); the
   screen shows "Select READY in Menu" until you are ready, the game's message feed names each
   player who gets ready, and the mission starts when all players are. Until then nobody can
-  move. Chapters that follow in the same game start at once.
+  move. Chapters that follow in the same game start without it, as soon as every player has
+  loaded the level (the screen names the players still loading; 60 seconds at most).
+- Cutscenes and films in a co-op game: Skip (Start or Esc) is a vote; the scene ends for everybody
+  at the same moment when every player has voted.
 - Radar: the other players are blue blips on the HUD radar (top right), in a network game and in
   split screen (each half shows the other player).
 - In a co-op session: no friendly fire; the enemies move, fight and die
@@ -61,33 +64,41 @@ What the mod does
   join as usual. On a host both halves of its screen play in the session and the other players see
   both bodies. On a client the second player is supported in basic form (experimental).
 
-New in 0.1.5
+New in 0.1.6
+- Level changes: the host dropped a player whose PC was still loading the next level when the load
+  stayed silent for more than 15 seconds (the player saw "Server was shut down."). It happened on the
+  way into level 1 (City, part 1), for example after level 19 or at a team restart there, and 0.1.5
+  did it too. In a co-op game a loading player may now stay silent for up to 120 seconds.
+- Level start: after a level change nobody can move until every player has loaded the level (60
+  seconds at most); meanwhile the screen names the players still loading ("Waiting for the players
+  still loading the level: <names>"). A player who leaves while loading ends the wait.
+- Cutscenes and films: in a co-op game Skip (Start on the pad, Esc on the keyboard) is a vote. The
+  screen shows who wants to skip and how many have voted ("<name> wants to skip the scene (1/2)");
+  when every player has voted, the scene ends on every machine at the same moment. In split screen
+  player 2 votes with its own Start. Alone, the game skips as before.
+- Cutscenes no longer show the other player's name tag (it was drawn over the opening film of level
+  1) or the other players' bodies.
+- Split screen: the story's teleports and movement locks of player 1 are repeated on player 2; the
+  all-players places (lifts, trains) wait for player 2, a line in both halves says so, and after 20
+  seconds player 2 is put in beside player 1; player 2 is brought to player 1 when it stays more
+  than 40 m away for 10 seconds.
+- The armoured car ride of level 19 no longer stays set on the host after a level change (the host
+  kept looking for the car in the next level).
+
+Changes in 0.1.5
 - Texts: every text of the mod reviewed in the nine languages: the game's own words where the game
   has them ("health", the game's word for the checkpoint, the controller), one word for the host and
   for the mod in each language, one form of address per language, each language's quotes; the
   Italian Regroup lines no longer read as if you or the host had moved the others.
-- Bug reports: the window of Collect logs.bat (in <game>\coop) now speaks your language (the game's
+- Bug reports: the window of Collect logs.bat (in <game>\coop) speaks your language (the game's
   language from bin\steamwars.ini, else Windows'; 16 languages). The zip's report stays in English.
-- The setup exe's message boxes follow Windows' language in 16 languages.
-
-Changes in 0.1.4
-- Radar: the other players are blue blips on the HUD radar, in a network game and in split screen.
-  Before, the radar never showed them.
-- Ready step: the first chapter of a co-op game waits until every player picked READY in the pause
-  menu (see "What the mod does").
-- Other mods' ASI loaders: on PCs with more than 8 CPU threads the game crashed at the start when
-  an ASI loader of another mod (Ultimate ASI Loader as bin\winmm.dll, ddraw.dll or d3d9.dll) started
-  before co-op, because the loader undid co-op's CPU fix. Fixed; checked in the game
-  with Ultimate ASI Loader 10.0.2 (as bin\winmm.dll) and a test plugin on a PC with 12 threads. The installer
-  keeps such a loader that was bin\dinput8.dll running as bin\winmm.dll (see "Install").
-- Languages: the installer, the shortcut's update messages and the setup exe are also in Polish,
-  Czech and Hungarian. The controls screen names the stick directions as the game does ("Forward on
-  Left Stick", in the game's language) instead of PAD_LSTICK (Forw); the stick clicks (LS / RS) in
-  the hints are named in every language.
-- 0.1.3: on level 2 (the walkway the robot wrecks) the clients of a network game follow the host's
-  rewind; split screen player 2 has the story's time-power locks and no longer loops between deaths
-  in the walkway's water; Collect logs.bat also packs the launcher's and the installer's logs.
-  0.1.2 fixed the slow walk of player 1 in split screen while player 2 stood still.
+  The setup exe's message boxes follow Windows' language in 16 languages.
+- 0.1.4: the other players on the HUD radar, the Ready step before the first chapter, co-op next to
+  other mods' ASI loaders (Ultimate ASI Loader as bin\winmm.dll, ddraw.dll or d3d9.dll), the
+  installer also in Polish, Czech and Hungarian, the stick directions on the controls screen in the
+  game's words. 0.1.3: on level 2 (the walkway the robot wrecks) the clients of a network game follow
+  the host's rewind; split screen player 2 has the story's time-power locks. 0.1.2 fixed the slow
+  walk of player 1 in split screen while player 2 stood still.
 
 Not finished / known limits
 - Ready step: a second player on pad 2 in a network game (split screen on a host or a client) is not
@@ -107,18 +118,27 @@ Not finished / known limits
 - Split screen: cutscenes, the pause menu and the loading screens are full screen for both; each half
   is drawn every second frame, so each half runs at half of the game's frame rate (ts_coop.ini ->
   [Split] -> BothViews=1 draws both halves every frame; it only helps when the frame rate is capped,
-  off by default, tried on an Intel card only, not on NVIDIA or AMD); the scripts treat player 1 as "the player": the enemies
-  aim at player 2 too, the story's teleports and movement locks of player 1 are repeated on player 2, the
-  all-players gates (lifts, trains) wait for player 2 (after 20 s it is put in), and player 2 is brought to player 1
-  when it stays more than 40 m away for 10 s; the shot sounds of player 2 are untested. Split screen on a client is basic: player
-  2's pick-ups were checked in a live game, its time power and kills over the network were not.
+  off by default, tried on an Intel card only, not on NVIDIA or AMD); the scripts treat player 1 as
+  "the player": the enemies aim at player 2 too, the story's teleports and movement locks of player 1
+  are repeated on player 2, the all-players gates (lifts, trains) wait for player 2 (after 20 s it is
+  put in), and player 2 is brought to player 1 when it stays more than 40 m away for 10 s; but the
+  story's trigger zones, the hint boxes and the automatic time power still follow player 1 only. The
+  shot sounds of player 2 are untested. Split screen on a client is basic: player 2's pick-ups were
+  checked in a live game, its time power and kills over the network were not.
+- Cutscenes: a Start or Esc pressed when no scene is running (for example right after a scene ended)
+  opens the game's pause menu as usual. In some level openings (for example the rebels at the start
+  of level 2) the scripted people stand idle on a client's screen while the host sees them play
+  their scene. The in-game camera scenes of levels 8 and 22 were not reached in the tests (the
+  cutscenes seen were films).
 - Most checks of the rewind, force fields, vehicles and container traps were made by reading clip and
   time values, coordinates and the logs of both machines, not by watching the screens: the results are
   in the numbers, but how it looks in play has had little human testing.
 - After the host's rewind, the clients take the rewound machinery's state from the host on level 2
   (the walkway) only. On other levels the kill zones, force fields and pieces that a rewound machine's
   animation switches may stay on a client as they were before the rewind (not seen in the tests; the
-  places are listed for a later version).
+  places are listed for a later version). While the host's rewind plays back, the soldiers, loose
+  objects and doors on the clients' screens get no update from the host until it ends, and a
+  soldier the rewind brings back to life stays a corpse there.
 - Level 2, the walkway the robot wrecks, works as the level is made: reverse time in the first
   seconds of the collapse and run across at once; a few seconds after the rewind the walkway
   collapses again, and a player still on it dies (the game restarts from the checkpoint it saved on

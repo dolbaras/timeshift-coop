@@ -7,9 +7,9 @@ Co-op for **TimeShift** (2007, PC; Saber Interactive / Sierra): the whole story 
 
 ## Status
 
-**Version 0.1.5** ([release notes](https://github.com/dolbaras/timeshift-coop/releases/latest)): the mod's texts reviewed in all nine languages of the game (the game's own words where it has them, such as "health" instead of "life" and the game's word for the checkpoint; one word for the host and for the mod in each language; one form of address per language: German "Sie", Spanish "tú"; Italian Regroup lines that read "moved by you" fixed); `coop\Collect logs.bat` now speaks the player's language (16 languages: the game's language, else Windows'); the setup exe's error messages are in 16 languages. The rest of the mod is unchanged from 0.1.4 (the other players on the HUD radar, a Ready step before the first chapter, co-op next to other mods' ASI loaders). The new texts were seen in the running game in Russian, Polish, Czech and Hungarian (Co-op menus, Video options) and the collector's window in five languages.
+**Version 0.1.6** ([release notes](https://github.com/dolbaras/timeshift-coop/releases/latest)): a player whose PC loads a level slowly is no longer dropped by the host (the drop on the way into level 1, in 0.1.5 too); after every level change nobody moves until every player has loaded the level, and the screen names the players still loading; Skip in a cutscene or film is a vote of every player (split-screen player 2 too), and the scene ends on every machine together; split screen carries player 2 along with player 1's story teleports, movement locks, lifts and trains; cutscenes no longer show the partner's name tag or body. Before it: the texts reviewed in all nine languages and the bug-report collector in the player's language (0.1.5), the other players on the HUD radar and the Ready step (0.1.4).
 
-How it is tested: the whole campaign was run host + client by an automatic bot (24 of 24 levels); each version's changes are checked with a host and a client on test PCs. Nobody outside the lab has played 0.1.5 yet, and a whole campaign played by people has not been done. Every player needs the same version of the mod.
+How it is tested: the whole campaign was run host + client by an automatic bot (24 of 24 levels); each version's changes are checked with a host and a client on two test PCs and in split screen on one. Nobody outside the lab has played 0.1.6 yet, and a whole campaign played by people has not been done. Every player needs the same version of the mod.
 
 ## What works
 
@@ -68,6 +68,7 @@ The setup exe is not code-signed, so Windows SmartScreen may warn ("More info" -
 |---|---|
 | Esc -> READY / NOT READY | the Ready step before the first chapter |
 | Esc -> Regroup | on a client: moves you to the host's player; on the host: brings every living client to the host |
+| Start / Esc in a cutscene or film | in a co-op game: your vote to skip it (the screen shows the votes); the scene ends for everybody when every player has voted |
 | Gamepads | Xbox-style (XInput) pads in the game and its menus; split screen: player 1 on keyboard and mouse or pad 1, player 2 on pad 2 |
 | Video options -> Screen mode | Full screen, Borderless or Window (applies at the next start) |
 
@@ -83,8 +84,9 @@ The setup exe is not code-signed, so Windows SmartScreen may warn ("More info" -
 - **ASI loaders:** tested with Ultimate ASI Loader 10.0.2 and a test plugin only; a loader renamed to some other DLL name was not tried.
 - **Sound was never judged by ear** (all test windows were muted). The soldiers' own voices and the gibbing sounds are still played on the host only.
 - **A bad link:** under about 30 % lost packets a join can fail once; press Join again.
-- **Split screen:** cutscenes, the pause menu and loading screens are full screen; each half runs at half of the game's frame rate unless `BothViews=1` helps on your card (tried on an Intel card only); split screen on a client is basic.
-- **After the host's rewind** the clients take the rewound machinery's state from the host on level 2 (the walkway) only.
+- **Split screen:** cutscenes, the pause menu and loading screens are full screen; each half runs at half of the game's frame rate unless `BothViews=1` helps on your card (tried on an Intel card only); the story's trigger zones, hint boxes and the automatic time power follow player 1 only; split screen on a client is basic.
+- **Cutscenes:** in some level openings (for example the rebels at the start of level 2) the scripted people stand idle on a client's screen while the host sees them play their scene; a Start or Esc pressed when no scene runs (right after one ended) opens the pause menu as usual; the in-game camera scenes of levels 8 and 22 were not reached in the tests.
+- **After the host's rewind** the clients take the rewound machinery's state from the host on level 2 (the walkway) only; during the playback the clients' soldiers, loose objects and doors get no update, and a soldier the rewind brings back to life stays a corpse on the clients.
 - **Internet play** (through OpenSpy and a forwarded port) is untested, and a whole campaign played by people has not been done.
 - **Steam:** tested with the real community package on a simulated Steam folder and on a test PC, not on a real Steam installation.
 - **The setup exe is not code-signed** (see above).
