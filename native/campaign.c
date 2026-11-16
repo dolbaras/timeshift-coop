@@ -2863,7 +2863,7 @@ static void cine_hide_step(void)
  * keys at that body through the entity's sound helper 0x642bb0 (thiscall (entity, String *key, String *bone), ret 8; 3D at the
  * body: player_mp's sounds say is2D = No). The landing uses land_ground (the surface under the remote body is not known
  * here). Co-op sessions only. TS_CAMPAIGN_MOVESND=0 off. */
-static int use_movesnd = 1;
+static int use_movesnd = 1, land_delay;
 static int movesnd_played, movesnd_missed;
 static void movesnd_play(char *ent, const char *key)
 {
@@ -2887,7 +2887,7 @@ static void movesnd_play(char *ent, const char *key)
 
 static void movesnd_step(void)
 {
-    static struct { char *ent; int id; } last[16];
+    static struct { char *ent; int id; DWORD land_at; } last[16];
     int m = game_mode();
     if (!use_movesnd || (m != MODE_SERVER && m != MODE_CLIENT) || !PEER_NETWORK || !ts_coop_active())
         return;
@@ -2904,18 +2904,29 @@ static void movesnd_step(void)
         char *node = *(char **)(ent + 0x230);
         int id = node && !IsBadReadPtr(node, 0x80) ? bhv_anim_id(node) : -1;
         if (last[i].ent != ent) {
-            last[i].ent = ent, last[i].id = id;
+            last[i].ent = ent, last[i].id = id, last[i].land_at = 0;
             continue;
         }
         int was = last[i].id;
         last[i].id = id;
+        if (last[i].land_at && (int)(GetTickCount() - last[i].land_at) >= 0) {
+            last[i].land_at = 0;
+            movesnd_play(ent, "land_ground");
+        }
         if (id == was)
             continue;
         if (id == 516)
             movesnd_play(ent, "jump_start");
         else if (id == 518) {
             movesnd_play(ent, "jump_end");
-            movesnd_play(ent, "land_ground");
+            /* (round 2: land_ground started in the same frame as jump_end was refused every time, p016-17E: 0 of 4. With
+             * TS_CAMPAIGN_LANDDELAY=1 (lab, not run yet: the pair slot for it was not possible) the landing follows 0.1 s later) */
+            if (land_delay) {
+                last[i].land_at = GetTickCount() + 100;
+                if (!last[i].land_at)
+                    last[i].land_at = 1;
+            } else
+                movesnd_play(ent, "land_ground");
         } else if (id == 188 && was != 89 && was != 188)
             movesnd_play(ent, "crouch");
     }
@@ -3468,6 +3479,7 @@ void campaign_install(void)
     use_ai = !(ts_env("TS_CAMPAIGN_AI", v, sizeof v) && v[0] == '0');
     use_bhv = !(ts_env("TS_CAMPAIGN_BHV", v, sizeof v) && v[0] == '0');
     use_movesnd = !(ts_env("TS_CAMPAIGN_MOVESND", v, sizeof v) && v[0] == '0');
+    land_delay = ts_env("TS_CAMPAIGN_LANDDELAY", v, sizeof v) && v[0] == '1';
     use_routes = !(ts_env("TS_CAMPAIGN_ROUTES", v, sizeof v) && v[0] == '0');
     use_voice = !(ts_env("TS_CAMPAIGN_VOICE", v, sizeof v) && v[0] == '0');
     use_digest = !(ts_env("TS_CAMPAIGN_DIGEST", v, sizeof v) && v[0] == '0');
