@@ -2920,7 +2920,10 @@ static void movesnd_step(void)
         else if (id == 518) {
             movesnd_play(ent, "jump_end");
             /* (round 2: land_ground started in the same frame as jump_end was refused every time, p016-17E: 0 of 4. With
-             * TS_CAMPAIGN_LANDDELAY=1 (lab, not run yet: the pair slot for it was not possible) the landing follows 0.1 s later) */
+             * TS_CAMPAIGN_LANDDELAY=1 (lab, off) the landing follows 0.1 s later: refused too, p016-17I: 0 of 3 on the client,
+             * where player_jump_start started 1 of 6 (its own player's 3 jumps refused as well as 2 of the host's 3; the host
+             * started all of its own and the client's crouch): the refusals are the client machine's sound system (GetBuffer
+             * 0x78a1c0 -> NULL), not the timing. Left off.) */
             if (land_delay) {
                 last[i].land_at = GetTickCount() + 100;
                 if (!last[i].land_at)
