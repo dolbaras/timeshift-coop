@@ -588,7 +588,7 @@ static const char *pick_wrapper(void)
 
 /* Split screen (game mode 1, parity-017 round 2, sync-parity top gap 10): the level objects' class records are built there too
  * (classification only, nothing rewritten: one machine runs the story), so the trigger zones below can count player 2. */
-static int split_zones_on;                   /* TS_SPLIT_ZONES=1 (lab: not run in a game yet) */
+static int split_zones_on = 1;               /* (TS_SPLIT_ZONES=0 off) */
 static int split_records(void)
 {
     return enabled && split_zones_on && game_mode() == 1 && campaign_name(LEVEL_NAME);
@@ -726,9 +726,12 @@ static char *remote_inside(char *dom)
  * watched object is player 1's counts as entered while player 2 is inside too (IsBelong of player 2's body), as the host does
  * for a client's body; the campaign's rule zones (all-players gates, campaign_dom_verdict) decide first as before. The engine
  * tests a zone only when player 1 moves, so the zones player 2 is inside (or that count as entered) are tested again 4 times a
- * second (split_retest). A zone event shows its hints in the half of the player inside (split_msg_scope).
- * LAB, OFF by default (TS_SPLIT_ZONES=1): written and built, not run in a game yet (round 2's split slot on level 2 was refused:
- * the main PC, where split screen is tested, was the owner's); "!ss split" and "!ss goto2 <zone>" (lab) are its test tools. */
+ * second (split_retest). Live (p016-17Z2, level 2, player 1 33-66 m away): player 2 put into tc_domain_water -> its OnEnter
+ * ($tc.SetMode("stop")) ran, state 0 -> 1; into the story zone dom_act_farm_street -> state 0 -> 6 and its soldiers
+ * ai_street_struggle_4 / _5 created; the checkpoint zones near it saved the game (AutoSave). On by default; TS_SPLIT_ZONES=0 off.
+ * Hints stay shared: a zone event's messages were tried in the half of the player inside (the message line's per-player
+ * hiding): the SAM hint box still showed in both halves, while a story message ("new objective") then missed player 1's half,
+ * so that was dropped. "!ss split" and "!ss goto2 <zone>" (lab) are the test tools. */
 static void *split_watch;                    /* (mode 1) the object player 1's zones watch, learnt as the network's */
 static int split_p2_hits, split_retests, split_changes;
 static int split_here(void)
@@ -995,21 +998,6 @@ static int ev_logged;
 static Status *TSCALL hook_event(void *cls, Status *out, void *inst, int idx, int argc, Variant **argv)
 {
     int role = net_role();
-    if (!role && inst && split_here() && idx >= 0 && idx < *(int *)((char *)cls + CLASS_MEMBERS + 4)) {
-        /* (split screen: a hint or time-power zone's OnEnter shows its hints in the half of the player inside) */
-        ClassRec *sr = rec_of_inst(inst);
-        int sym = *(int *)(*(char **)((char *)cls + CLASS_MEMBERS) + idx * 12);
-        char *ent = *(char **)((char *)inst + INST_NATIVE);
-        if (sr && (sr->dom_hint || sr->dom_tc) && sym == sym_enter && is_domain(ent)) {
-            int p1in = PLAYER && (dom_is_belong(ent, PLAYER) & 0xff), p2in = dom_is_belong(ent, split_player2()) & 0xff;
-            int who = p1in && !p2in ? 1 : p2in && !p1in ? 2 : 0;
-            SLOG("storysync: split: %s.OnEnter for %s", sr->name, who == 2 ? "player 2" : who == 1 ? "player 1" : "both players");
-            split_msg_scope(who);
-            Status *st = orig_event(cls, out, inst, idx, argc, argv);
-            split_msg_scope(0);
-            return st;
-        }
-    }
     ClassRec *r = role && inst ? rec_of_inst(inst) : NULL;
     if (!r)
         return orig_event(cls, out, inst, idx, argc, argv);
@@ -1711,7 +1699,8 @@ void storysync_install(void)
     ts_env("TS_EVLOG", ev_log_sub, sizeof ev_log_sub);
     if (ts_env("TS_STORYSYNC_CINEBHV", v, sizeof v) && v[0] == '1')
         cine_bhv = 1;
-    split_zones_on = ts_env("TS_SPLIT_ZONES", v, sizeof v) && v[0] == '1';
+    if (ts_env("TS_SPLIT_ZONES", v, sizeof v) && v[0] == '0')
+        split_zones_on = 0;
     table = calloc(TABLE_SIZE, sizeof(ClassRec));
     if (!table || !ts_tick_install() || !ts_frame_add(frame) || !coopnet_listen(SUB_OCC, 39, on_message)) {
         ts_log("storysync: off (no script tick or mod messages)");

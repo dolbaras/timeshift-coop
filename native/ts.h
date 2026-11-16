@@ -106,7 +106,6 @@ void split_p1_native(void *obj, int kind, int arg, const char *name);   /* campa
 int split_carry_report(char *out, int size);                            /* "!cp carry" (lab) */
 int split_p2_put(const float *pos);   /* campaign.c: player 2 (split screen) to a spot inside a gate; 1 = done */
 int campaign_split_gates(void);       /* campaign.c: the all-players gates count the local player 2 (split, single player) */
-void split_msg_scope(int owner);      /* storysync.c: a trigger zone's event of player 1 / 2 runs now (its hints in that half; 0 = over) */
 void *split_radar_record(void);       /* the split screen's shared radar record (radarmate.h), or NULL */
 void gamepad_set_player2_pad(const void *xinput_gamepad);   /* gamepad.c: player 2's pad state from elsewhere (NULL: pad 2) */
 void gamepad_mask_player2(unsigned short buttons, int triggers);   /* gamepad.c: buttons (and both triggers) player 2's commands do not get */

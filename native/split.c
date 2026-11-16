@@ -1422,10 +1422,9 @@ static dispatch_t dispatch_tramp;
 
 static int msglog, p1_depth, allow_ff, p2_removing;
 static int in_pickup;
-static int scope_owner;   /* (storysync.c, split_msg_scope: the player whose trigger zone event runs now) */
 int split_msg_owner(void)
 {
-    return as2.depth ? 2 : in_pickup ? in_pickup : p1_depth ? 1 : scope_owner;
+    return as2.depth ? 2 : in_pickup ? in_pickup : p1_depth ? 1 : 0;
 }
 static BYTE *(TSCALL *find_task)(void *, int) = (void *)0x947c10;   /* scheduler: object by id */
 
@@ -1724,22 +1723,6 @@ static void TSCALL hook_msg_add(void *w, void *text, void *arg, DWORD t)
             return;   /* (our player 2's copy: the host's real one sends its messages) */
     }
     real_msg_add(w, text, arg, t);
-}
-
-/* (parity-017 round 2, sync-parity top gap 10) A trigger zone's event that shows a hint runs for one player (storysync.c:
- * the zone counts that player only): its messages belong to that player. Hints (ShowTimeHint, ShowMsg, ShowSAMMsg) go to the
- * hint box, not through the message line above: the hint's text ("MessageText") is then not drawn in the other player's half
- * for 10 s (hook_text_draw), like a player's own message line. */
-void split_msg_scope(int owner)
-{
-    scope_owner = owner;
-    if (owner > 0 && p2) {
-        msg_owner = owner;
-        msg_time = GetTickCount();
-        static int n;
-        if (splitlog && n++ < 40)
-            ts_log("split: a trigger zone event of player %d: its hints in that half only", owner);
-    }
 }
 
 /* The message boxes (hintBox widgets "MessageBox"/"MessageBoxBig", class 0xda34f8, updated per view like the other
