@@ -139,10 +139,13 @@ typedef struct {
     unsigned short wk_seen;         /* client: the counters read last */
     unsigned char wk_any;           /* server: a state event happened (the counters ride in every update from then on) */
     unsigned char wk_pend;          /* client: kinds still to set on the weapon (bit per kind) */
+    int alive_reads;                /* client, a corpse here: updates in a row in which the server says "alive" */
 } AiState;
 #define NO_ANIM 0x7fffffff
 static AiState states[MAX_AI];
 static int n_states;
+static int revive_on;   /* (client) a corpse whose server soldier lives again comes back here (TS_AIREVIVE=1, lab: see revive_here) */
+static int revive_here(char *ai, AiState *s);
 
 static AiState *state_of(char *ai)
 {
@@ -278,8 +281,19 @@ static void TSCALL hook_read(void *ai, char *msg, int flags)
     AiState *s = state_of(ai);
     if (s)
         s->reads++;
-    if (s && (s->corpse || s->noanim))
-        return;   /* (a corpse: the server's "no animation" would stand it up again) */
+    if (s && (s->corpse || s->noanim)) {
+        /* (a corpse: the server's "no animation" would stand it up again) - unless the server's soldier lives again (the
+         * host's rewind brought it back, parity-017): its state byte says "alive" (bit 0 clear) in 3 updates in a row */
+        int alive = 0;
+        if (revive_on && b && m[MSG_LEN] >= ANIM_EXTRA) {
+            const unsigned char *mk = b + m[MSG_LEN] - 2;
+            if (!memcmp(mk, anim_mark, 2) || !memcmp(mk, anim_mark_shot, 2) || !memcmp(mk, anim_mark_k, 2) || !memcmp(mk, anim_mark_shot_k, 2))
+                alive = !(b[m[MSG_LEN] - 3] & 1);
+        }
+        s->alive_reads = alive ? s->alive_reads + 1 : 0;
+        if (s->alive_reads < 3 || !revive_here((char *)ai, s))
+            return;
+    }
     if (b && m[MSG_LEN] >= ANIM_EXTRA + KINDS_EXTRA &&
         (memcmp(b + m[MSG_LEN] - 2, anim_mark_k, 2) == 0 || memcmp(b + m[MSG_LEN] - 2, anim_mark_shot_k, 2) == 0)) {
         unsigned char *kd = b + m[MSG_LEN] - ANIM_EXTRA - KINDS_EXTRA;
@@ -1219,6 +1233,40 @@ static void kill_here(char *ai)
     memset(fake_hit, 0, sizeof fake_hit);
     if (st)
         ((void (TSCALL *)(void *, int, void *))(*(void ***)st)[1])(st, 0, fake_hit);
+}
+
+/* ---- a soldier the host's rewind brings back (parity-017, sync-parity top gap 2a) ----
+ * The host's rewind plays the recorded world back (coopreverse.c), soldiers included; one that died in the rewound seconds
+ * can live again there. A client's copy had shown that death (corpse_check) and ignored every update since. When the
+ * server's updates say "alive" again (state byte bit 0 clear, 3 updates in a row, hook_read), the copy leaves the corpse
+ * state: its death flags go, its life is full again, its ragdoll stops (the body's ragdoll off 0x8141d0: the ragdoll +0x7c
+ * "active" (+0x18) -> its +0x14, as the body does) and the server's updates (place, animations) apply again.
+ * Live (p016-17E, level 3, the host's Die("KEEP") then a 5 s rewind): the host's soldier stood up again with the same net id
+ * (fl 1, hp 45, animations); the soldiers' updates DO reach the clients during a playback (they ride the server's regular
+ * updates, role 0x10, not the entity frame that a playback stops: the client read "alive" 4 s into the playback), so nothing
+ * has to push them. The client's copy left the corpse state (ragdoll 1 -> 0) but played no animation afterwards (-1, fl
+ * c40020, hp -10): so this is OFF by default (TS_AIREVIVE=1, lab) until a copy is proven to stand up and move again. */
+static LONG n_revive_logged;
+static int revive_here(char *ai, AiState *s)
+{
+    if (*(unsigned *)(ai + E_ROLE) & 4)
+        return 0;
+    int rag = ragdoll_active(ai);
+    char *body = *(char **)(ai + 0x4fc);
+    if (rag && body && !IsBadReadPtr(body, 0x80))
+        __asm__ volatile("call *%1" : "+c"(body) : "r"((DWORD)0x8141d0) : "eax", "edx", "memory", "cc");
+    /* (the death set 0x20000 dead, 0x40000, 0x400000, 0x800000 here (fl c20000 / c40020 seen, p016-17E); a living copy has
+     * none of them; and its life: the class's full life +0x238, as the host's rewound soldier has its own back) */
+    *(unsigned *)(ai + AI_FLAGS) &= ~(unsigned)(AI_DEAD | 0x40000 | 0x400000 | 0x800000);
+    float full = *(float *)(ai + 0x238);
+    if (full > 0.f && full < 100000.f)
+        *(float *)(ai + 0x234) = full;
+    s->corpse = s->noanim = s->srv_dead = 0;
+    s->alive_reads = 0;
+    if (InterlockedIncrement(&n_revive_logged) <= 50)
+        ts_log("aisync: %s (net %d) lives again on the server (the host's rewind): back from the corpse here (ragdoll %d -> %d, hp %.2f)",
+               ai_name(ai), *(int *)(ai + E_NETID), rag, ragdoll_active(ai), (double)*(float *)(ai + 0x234));
+    return 1;
 }
 
 /* Dead before the join: AIs that died on the server before a client loaded the level stand alive on the client
@@ -2234,6 +2282,8 @@ void aisync_install(void)
     }
     if (ts_env("TS_AISTATE", v, sizeof v) && v[0] == '0')
         wst_on = 0;
+    if (ts_env("TS_AIREVIVE", v, sizeof v))
+        revive_on = v[0] == '1';
     if (ts_env("TS_AIVOICE", v, sizeof v) && v[0] == '0')
         voice_on = 0;
     if (engine_mode && voice_on && voice_install() != (int)N_VT) {
