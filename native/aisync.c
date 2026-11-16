@@ -1334,12 +1334,174 @@ static void on_dead(int peer, unsigned short sub, const unsigned char *d, int le
     }
 }
 
+/* ---- soldiers' voices on clients (parity-017, sync-parity top gap 8) ----
+ * A soldier's voice lines (battle callouts ex_pol3_* ..., pain and death cries) are started by the AI's behaviour and damage
+ * code through the AI's sound function, AI vtable +0x90 (0x457510 in four of the eight AI classes, the entity's 0x642eb0 in
+ * the others; thiscall (String *name, params *p, String *bone), ret 0xc; params = 0x18 bytes, the entity helper 0x642bb0
+ * passes {0, -1, the "no place" vector [0x1095f64], 0}; 0x642eb0 may write the place into it). That code runs only where the
+ * AI has authority, so a client heard none of them. The host now hooks the slot in the AI vtables: an AI with a net id in a
+ * co-op session sends {net id, params as passed, name, bone} to every client (message 54); a client plays the same call on its
+ * copy of that AI (found by the net id) 0.25 s later, so the sound starts at the copy's body as on the host. A copy's own
+ * calls play as before: a copy that plays a scripted sequence (animation -2: the scene's mocap sequence starts its lines on
+ * every machine, live p016-17B: the opening's vo_city_2_* lines came both ways) gets no host voice, nor does a copy that
+ * started the same sound itself in the last 3 s. "!ai voice" (lab) counts them. TS_AIVOICE=0 off. */
+#define SUB_VOICE 54
+#define VOICE_Q 32
+typedef void *(TSCALL *voice_t)(void *ai, StrHdr **name, void *params, StrHdr **bone);
+static voice_t voice_orig[N_VT];
+static int voice_on = 1, voice_sent, voice_got, voice_played, voice_missing, voice_local, voice_dup;
+static int voice_in_play, voice_bufs, ex_bufs_other;   /* (lab counters, with the sound counters on: buffers started inside a +0x90 call / ex_* outside) */
+static struct { int net; DWORD at; unsigned char params[0x18]; char name[64], bone[32]; } voice_q[VOICE_Q];
+static int voice_qn;
+static struct { int net; DWORD at; char name[64]; } voice_own[16];   /* (client) the copies' own calls, newest 16 */
+static int voice_own_k;
+static char voice_last[160];
+
+static void *TSCALL hook_voice(void *ai, StrHdr **name, void *params, StrHdr **bone)
+{
+    voice_t orig = NULL;
+    for (unsigned i = 0; i < N_VT && !orig; i++)
+        if (*(DWORD *)ai == ai_vtables[i])
+            orig = voice_orig[i];
+    if (!orig)
+        return NULL;
+    unsigned char p_in[0x18];
+    if (params)
+        memcpy(p_in, params, sizeof p_in);
+    voice_in_play++;
+    void *r = orig(ai, name, params, bone);
+    voice_in_play--;
+    char *gm = GAME_MODE_OBJ;
+    int mode = gm ? *(int *)(gm + 0x3c) : 0, net = *(int *)((char *)ai + E_NETID);
+    if (!voice_on || mode < 2 || !(GAME_FLAGS & 0x2000) || net < 0 || !name || !*name || !params)
+        return r;
+    if (mode == 3) {   /* (a client's own call for a copy) */
+        voice_local++;
+        voice_own[voice_own_k].net = net, voice_own[voice_own_k].at = GetTickCount();
+        snprintf(voice_own[voice_own_k].name, sizeof voice_own[0].name, "%s", (*name)->s);
+        voice_own_k = (voice_own_k + 1) % 16;
+        if (voice_local <= 30)
+            ts_log("aisync: voice %s: %.63s started by this machine's own copy (net %d)", ai_name(ai), (*name)->s, net);
+        return r;
+    }
+    if (!ts_coop_active())
+        return r;
+    int nl = (int)strnlen((*name)->s, 63), bl = bone && *bone ? (int)strnlen((*bone)->s, 31) : 0;
+    if (nl <= 0)
+        return r;
+    unsigned char m[2 + 4 + 0x18 + 1 + 63 + 1 + 31];
+    int n = 0;
+    m[n++] = NPROTO;
+    m[n++] = 0;
+    memcpy(m + n, &net, 4), n += 4;
+    memcpy(m + n, p_in, 0x18), n += 0x18;
+    m[n++] = (unsigned char)nl;
+    memcpy(m + n, (*name)->s, nl), n += nl;
+    m[n++] = (unsigned char)bl;
+    if (bl)
+        memcpy(m + n, (*bone)->s, bl), n += bl;
+    int sent = coopnet_send(-1, SUB_VOICE, m, n);
+    if (sent > 0)
+        voice_sent++;
+    snprintf(voice_last, sizeof voice_last, "%s: %.63s%s%.31s", ai_name(ai), (*name)->s, bl ? " at " : "", bl ? (*bone)->s : "");
+    if (voice_sent <= 30)
+        ts_log("aisync: voice %s (net %d) sent to %d client(s)", voice_last, net, sent);
+    return r;
+}
+
+static void on_voice(const unsigned char *d, int len)
+{
+    char *gm = GAME_MODE_OBJ;
+    if (!voice_on || !gm || *(int *)(gm + 0x3c) != 3 || len < 2 + 4 + 0x18 + 2 || d[0] != NPROTO || voice_qn >= VOICE_Q)
+        return;
+    int n = 2 + 4 + 0x18, nl = d[n];
+    if (nl <= 0 || nl > 63 || n + 1 + nl + 1 > len)
+        return;
+    int bl = d[n + 1 + nl];
+    if (bl > 31 || n + 2 + nl + bl > len)
+        return;
+    voice_got++;
+    voice_q[voice_qn].at = GetTickCount();
+    memcpy(&voice_q[voice_qn].net, d + 2, 4);
+    memcpy(voice_q[voice_qn].params, d + 6, 0x18);
+    memcpy(voice_q[voice_qn].name, d + n + 1, nl);
+    voice_q[voice_qn].name[nl] = 0;
+    memcpy(voice_q[voice_qn].bone, d + n + 2 + nl, bl);
+    voice_q[voice_qn].bone[bl] = 0;
+    voice_qn++;
+}
+
+static void voice_frame(void)   /* (client, main thread) */
+{
+    DWORD now = GetTickCount();
+    int keep = 0;
+    for (int k = 0; k < voice_qn; k++) {
+        if (now - voice_q[k].at < 250) {   /* (held: the copy may start the same sound itself in this time) */
+            if (keep != k)
+                voice_q[keep] = voice_q[k];
+            keep++;
+            continue;
+        }
+        char *ai = obj_by_net(voice_q[k].net);
+        char *node = ai ? *(char **)(ai + E_NODE) : NULL;
+        int own = 0;
+        for (int j = 0; j < 16 && !own; j++)
+            own = voice_own[j].at && voice_own[j].net == voice_q[k].net && now - voice_own[j].at < 3000
+                  && !strcmp(voice_own[j].name, voice_q[k].name);
+        if (ai && ((node && anim_id(node) == -2) || own)) {
+            if (++voice_dup <= 20)
+                ts_log("aisync: voice %s of net %d not played: %s", voice_q[k].name, voice_q[k].net,
+                       own ? "the copy started it itself" : "the copy plays a scripted sequence (its own lines)");
+            continue;
+        }
+        voice_t orig = NULL;
+        for (unsigned i = 0; ai && i < N_VT && !orig; i++)
+            if (*(DWORD *)ai == ai_vtables[i])
+                orig = voice_orig[i];
+        if (!orig) {
+            if (++voice_missing <= 20)
+                ts_log("aisync: voice %s of net %d: no such soldier here", voice_q[k].name, voice_q[k].net);
+            continue;
+        }
+        StrHdr *nm = NULL, *bn = NULL;
+        str_ctor(&nm, voice_q[k].name, -1, 0);
+        str_ctor(&bn, voice_q[k].bone, -1, 0);
+        voice_in_play++;
+        orig(ai, &nm, voice_q[k].params, &bn);
+        voice_in_play--;
+        str_release(nm);
+        str_release(bn);
+        voice_played++;
+        snprintf(voice_last, sizeof voice_last, "%s: %s%s%s", ai_name(ai), voice_q[k].name, voice_q[k].bone[0] ? " at " : "",
+                 voice_q[k].bone);
+        if (voice_played <= 30)
+            ts_log("aisync: voice %s (net %d) played here", voice_last, voice_q[k].net);
+    }
+    voice_qn = keep;
+}
+
+static int voice_install(void)
+{
+    int ok = 0;
+    for (unsigned i = 0; i < N_VT; i++) {
+        voice_orig[i] = *(voice_t *)(ai_vtables[i] + 0x90);
+        DWORD o = (DWORD)voice_orig[i];
+        if (o != 0x457510 && o != 0x642eb0)
+            continue;
+        void *h = (void *)hook_voice;
+        ok += ts_patch_bytes(ai_vtables[i] + 0x90, &o, &h, 4);
+    }
+    return ok;
+}
+
 static void on_message(int peer, unsigned short sub, const unsigned char *d, int len)
 {
     if (sub == SUB_NAME_ASK || sub == SUB_NAME_TELL)
         on_names(peer, sub, d, len);
     else if (sub == SUB_DEAD_ASK || sub == SUB_DEAD_TELL)
         on_dead(peer, sub, d, len);
+    else if (sub == SUB_VOICE)
+        on_voice(d, len);
 }
 
 /* client: ask for the dead when the host's session info has arrived (the server talks to a client only once it
@@ -1606,6 +1768,10 @@ static void *TSCALL hook_getbuffer(void *sys, char *name, int flag)
     else
         snd_tab[i].refused++;
     snd_total++;
+    if (r && voice_in_play)
+        voice_bufs++;
+    else if (r && !strncmp(snd_tab[i].name, "ex_", 3))
+        ex_bufs_other++;
     return r;
 }
 
@@ -1700,6 +1866,8 @@ static void frame(float dt)
         if (n_dead_told)
             dead_list_apply();
         for_each_ai(corpse_check);
+        if (voice_qn)
+            voice_frame();
         for_each_ai(fire_frame);
         for_each_ai(wstate_frame);
         pjl_expire();
@@ -1755,6 +1923,20 @@ static void con_list_fn(char *ai)
                           *(int *)(ai + E_NETID), *(unsigned *)(ai + E_ROLE), *(unsigned *)(ai + AI_FLAGS),
                           *(float *)(ai + 0x234), node ? anim_id(node) : -9, ragdoll_active(ai), s ? s->corpse : -1,
                           s ? s->srv_dead : -1);
+}
+
+/* (lab) "!ai near" / "!ai killnear": the living soldiers with a net id nearest this machine's player */
+static float *near_from, near_d[64];
+static char *near_ai[64];
+static int near_n;
+static void near_fn(char *ai)
+{
+    char *node = *(char **)(ai + E_NODE);
+    if (!node || near_n >= 64 || *(int *)(ai + E_NETID) < 0 || (*(unsigned *)(ai + AI_FLAGS) & AI_DEAD) || !inst_of(ai))
+        return;
+    float *p = (float *)(node + 0x68), dx = p[0] - near_from[0], dy = p[1] - near_from[1], dz = p[2] - near_from[2];
+    near_d[near_n] = sqrtf(dx * dx + dy * dy + dz * dz);
+    near_ai[near_n++] = ai;
 }
 
 /* Test console (TS_CONSOLE): "!ai list <part of a name>|*", "!ai kill <ai>" (the death state, as the server's
@@ -1855,6 +2037,61 @@ int aisync_console(const char *text, char *out, int size)
         }
         return n;
     }
+    if (!strcmp(cmd, "near") || !strcmp(cmd, "killnear")) {   /* (lab) the living soldiers nearest this player / kill the nearest */
+        char *me = PLAYER, *pn = me ? *(char **)(me + E_NODE) : NULL;
+        if (!pn)
+            return snprintf(out, size, "no player"), 1;
+        near_from = (float *)(pn + 0x68);
+        near_n = 0;
+        for_each_ai(near_fn);
+        for (int i = 0; i < near_n; i++)   /* (sorted by distance) */
+            for (int j = i + 1; j < near_n; j++)
+                if (near_d[j] < near_d[i]) {
+                    float t = near_d[i]; near_d[i] = near_d[j]; near_d[j] = t;
+                    char *a = near_ai[i]; near_ai[i] = near_ai[j]; near_ai[j] = a;
+                }
+        if (cmd[0] == 'k') {
+            if (!near_n || near_d[0] > 60.f)
+                return snprintf(out, size, "killnear: no living soldier within 60 m"), 1;
+            kill_here(near_ai[0]);
+            return snprintf(out, size, "killed %s (net %d) at %.1f m: fl %x hp %.2f", ai_name(near_ai[0]), *(int *)(near_ai[0] + E_NETID),
+                            (double)near_d[0], *(unsigned *)(near_ai[0] + AI_FLAGS), (double)*(float *)(near_ai[0] + 0x234)), 1;
+        }
+        int n = snprintf(out, size, "%d living soldier(s):", near_n);
+        for (int i = 0; i < near_n && i < 6 && n < size - 100; i++)
+            n += snprintf(out + n, size - n, " %s (net %d) %.1f m;", ai_name(near_ai[i]), *(int *)(near_ai[i] + E_NETID), (double)near_d[i]);
+        return 1;
+    }
+    if (!strcmp(cmd, "view")) {   /* "!ai view <object> <dx> <dz> <up>" (lab): this player at the object + (dx, up, dz), facing it */
+        float dx = 3, dz = 0, up = 1;
+        char nm[128] = "";
+        sscanf(text + 3, "%31s %127s %f %f %f", cmd, nm, &dx, &dz, &up);
+        StrHdr *sn = NULL;
+        void *inst = NULL;
+        str_ctor(&sn, nm, -1, 0);
+        mgr_find_obj(MGR, &inst, &sn);
+        str_release(sn);
+        char *o = inst ? *(char **)((char *)inst + 0xc) : NULL;
+        if (inst)
+            inst_release(&inst);
+        char *node = o && !IsBadReadPtr(o, 0x240) ? *(char **)(o + E_NODE) : NULL, *me = PLAYER;
+        if (!node || !me)
+            return snprintf(out, size, "view: no object %s or no player", nm), 1;
+        float *op = (float *)(node + 0x68), pos[3] = {op[0] + dx, op[1] + up, op[2] + dz};
+        float dir[3] = {-dx, -up * 0.5f, -dz}, l = sqrtf(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+        if (l < 0.01f)
+            return snprintf(out, size, "view: too close"), 1;
+        for (int i = 0; i < 3; i++)
+            dir[i] /= l;
+        void (TSCALL *place)(void *, float *, float *, int) = (*(void ***)me)[0x210 / 4];
+        place(me, pos, dir, 1);
+        return snprintf(out, size, "view: me at %.2f %.2f %.2f facing %s at %.2f %.2f %.2f", pos[0], pos[1], pos[2], nm, op[0], op[1],
+                        op[2]), 1;
+    }
+    if (!strcmp(cmd, "voice"))   /* "!ai voice" (lab): the soldiers' voices sent (host) / got, played, missing, own calls (client) */
+        return snprintf(out, size, "voices %s: sent %d, got %d, played %d, not played (the copy's own) %d, no soldier %d, own calls of"
+                        " copies %d; sound buffers started inside the AI sound function %d, ex_* outside it %d; last %s", voice_on ? "on" : "off",
+                        voice_sent, voice_got, voice_played, voice_dup, voice_missing, voice_local, voice_bufs, ex_bufs_other, voice_last), 1;
     if (!strcmp(cmd, "snd")) {   /* "!ai snd on|off|dump|reset|trace <name part> [count]" (lab): the sound start counters above */
         if (!strcmp(a1, "trace")) {
             char part[48] = "", cnt[16] = "";
@@ -1997,6 +2234,12 @@ void aisync_install(void)
     }
     if (ts_env("TS_AISTATE", v, sizeof v) && v[0] == '0')
         wst_on = 0;
+    if (ts_env("TS_AIVOICE", v, sizeof v) && v[0] == '0')
+        voice_on = 0;
+    if (engine_mode && voice_on && voice_install() != (int)N_VT) {
+        ts_log("aisync: AI sound functions not found (other exe): no soldiers' voices on clients");
+        voice_on = 0;
+    }
     if (engine_mode && wst_on && wstate_install() != (int)(sizeof wst_slots / sizeof wst_slots[0])) {
         ts_log("aisync: weapon state virtuals not found (other exe): no AI shot sounds on clients");
         wst_on = 0;
