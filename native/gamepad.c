@@ -644,6 +644,20 @@ void gamepad_after_poll(void (*fn)(void))
     after_poll = fn;
 }
 
+/* (lab, parity-016 round 4) a key held for some milliseconds as if the keyboard reported it: written into the raw value of the
+ * code right after the engine's own keyboard poll, so the press goes the game's whole input way (binding -> command). A memory
+ * write from outside (lab
+100_key.ps1) works on the N100 (no keyboard) but not on the main PC: its real keyboard's poll
+ * overwrites the value every frame. Console "!pr key <hex code> [ms]" (test console only). */
+static volatile LONG lab_key_code = -1;
+static volatile DWORD lab_key_until;
+
+void gamepad_lab_key(int code, int ms)
+{
+    lab_key_until = GetTickCount() + (DWORD)(ms > 0 ? ms : 150);
+    InterlockedExchange(&lab_key_code, code >= 0 && code < 0x108 ? code : -1);
+}
+
 static void THISCALL hook_kb_poll(void *raw)
 {
     if (poll_player2) {
@@ -651,6 +665,15 @@ static void THISCALL hook_kb_poll(void *raw)
         return;
     }
     real_kb_poll(raw);
+    LONG lk = lab_key_code;
+    if (lk >= 0) {
+        BYTE *used = (BYTE *)raw + 0x1154 + lk;   /* (the "used" mark of a key that set off an action, until a release) */
+        *used &= (BYTE)~8;
+        if ((LONG)(GetTickCount() - lab_key_until) < 0)
+            ((float *)((BYTE *)raw + 0x10))[lk] = 1.0f;
+        else
+            InterlockedCompareExchange(&lab_key_code, -1, lk);
+    }
     {   /* (keyboard keys and mouse buttons pressed: player 1 uses keyboard and mouse) */
         float *v = (float *)((BYTE *)raw + 0x10);
         for (int c = 0; c < 0x108; c++)

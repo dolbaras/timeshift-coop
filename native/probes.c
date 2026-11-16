@@ -624,6 +624,11 @@ int probes_console(const char *text, char *out, int size)
     char cmd[16] = "", a1[64] = "";
     int a2 = 0;
     sscanf(text + 3, "%15s %63s %d", cmd, a1, &a2);
+    if (!strcmp(cmd, "key")) {   /* "!pr key <hex code> [ms]" (lab): a keyboard key through the game's own input (gamepad.c) */
+        int code = (int)strtol(a1, NULL, 16);
+        gamepad_lab_key(code, a2 > 0 ? a2 : 150);
+        return snprintf(out, size, "key 0x%02x held %d ms from the next keyboard poll", code, a2 > 0 ? a2 : 150), 1;
+    }
     if (!strcmp(cmd, "on")) {
         probes_on(atoi(a1));
         return snprintf(out, size, "probes on (report every %d s)", period_ms / 1000), 1;
