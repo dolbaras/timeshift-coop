@@ -81,6 +81,7 @@ The setup exe is not code-signed, so Windows SmartScreen may warn ("More info" -
 ## Known limits / not verified
 
 - **Ready step:** a split-screen player 2 in a network game is not held in the ready room and is no player of the ready check; the Tab scoreboard during the ready room was not checked.
+- **Joining a running level:** a joining player appears where the host's player stood at the level's last checkpoint; when the host still stands there (for example in the ready room of level 2), the two bodies overlap until the game pushes them about 1 m apart or one of them walks away (seen since 0.1.4, no harm seen).
 - **ASI loaders:** tested with Ultimate ASI Loader 10.0.2 and a test plugin only; a loader renamed to some other DLL name was not tried.
 - **Sound was never judged by ear** (all test windows were muted). Another player's landing sound is not heard on the other machines, and its jump and crouch sounds are often missing on a client.
 - **A bad link:** under about 30 % lost packets a join can fail once; press Join again.
