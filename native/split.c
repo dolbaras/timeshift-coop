@@ -3056,6 +3056,17 @@ static float players_apart(BYTE *a, BYTE *b)
     return sqrtf(dx * dx + dy * dy + dz * dz);
 }
 
+/* the distance across (x / z only): two bodies put on one spot can also end stacked, one 1.4 m under the other inside the
+ * floor (release 0.1.7 check R3, level 7 start_pos: same x / z, 1.43 m apart in 3-D, no "put beside") */
+static float players_across(BYTE *a, BYTE *b)
+{
+    BYTE *na = a ? *(BYTE **)(a + 0x230) : NULL, *nb = b ? *(BYTE **)(b + 0x230) : NULL;
+    if (!na || !nb)
+        return -1;
+    float *pa = (float *)(na + 0x68), *pb = (float *)(nb + 0x68), dx = pa[0] - pb[0], dz = pa[2] - pb[2];
+    return sqrtf(dx * dx + dz * dz);
+}
+
 static void p2_carry_step(void)
 {
     static const char *const what[4] = {"", "Transport", "DisableMove", "DisableInput"};
@@ -3079,9 +3090,10 @@ static void p2_carry_step(void)
     carry_n = 0;
     if (carry_check_at && (int)(GetTickCount() - carry_check_at) >= 0) {
         carry_check_at = 0;
-        float d = players_apart(p1, p2);
-        ts_log("split: after the teleport player 2 is %.2f m from player 1%s", d, d >= 0 && d < 0.6f ? ": put beside it" : "");
-        if (d >= 0 && d < 0.6f)
+        float d = players_apart(p1, p2), h = players_across(p1, p2);
+        int one_spot = d >= 0 && h >= 0 && h < 0.6f && d < 2.5f;   /* (on one spot, or stacked on it) */
+        ts_log("split: after the teleport player 2 is %.2f m from player 1 (%.2f m across)%s", d, h, one_spot ? ": put beside it" : "");
+        if (one_spot)
             place_player(p2, p1);
     }
     /* the leash */
