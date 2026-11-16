@@ -76,7 +76,8 @@ New in 0.1.7
   screens too; before, it stayed a corpse there.
 - Split screen: player 2 now sets off the story's trigger zones and the time-power zones as player
   1 does (story events, checkpoints, the zones that slow or stop time). Before, only player 1 did.
-  The environment variable TS_SPLIT_ZONES=0 turns this off.
+  The environment variable TS_SPLIT_ZONES=0 turns this off. When the story teleports player 1,
+  player 2 no longer ends up stuck in the floor under player 1 (it is put beside player 1).
 
 Changes in 0.1.6
 - Level changes: a player whose PC loads the next level slowly is no longer dropped by the host
