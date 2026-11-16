@@ -2281,6 +2281,24 @@ static void dyn_step(DWORD now)
  * campaign_dom_verdict() keeps a gate's domain "outside" while player 1 is inside and player 2 is not. The engine tests a
  * domain only when its watched object moves, so the domain is tested again here when both stand inside; after
  * TS_CAMPAIGN_GATHER seconds of waiting (default 20) player 2 is put into the domain, as the host gathers its clients. */
+/* (parity-016 round 4) the waiting line of a split-screen gate: the network texts name the pause menu's Regroup, which split
+ * screen has not; every 3 s while a gate waits for player 2, with the seconds until player 2 is put in */
+static DWORD split_hint_at;
+static void split_gate_hint(DWORD now, DWORD since)
+{
+    if (split_hint_at && now - split_hint_at < 3000)
+        return;
+    split_hint_at = now;
+    char ssl[120], out[64];
+    int left = since ? gather_after - (int)((now - since) / 1000) : gather_after;
+    if (gather_after > 0)
+        snprintf(ssl, sizeof ssl, "$player.ShowMsg(\"COOP_HINT_GATE_SPLIT,%d\", 3)", left < 1 ? 1 : left);
+    else
+        snprintf(ssl, sizeof ssl, "$player.ShowMsg(\"COOP_HINT_GATE_SPLIT_WAIT\", 3)");
+    ts_script_run(ssl, out, sizeof out);
+    VLOG("campaign: split gate hint (%d s left) -> %s", left, out);
+}
+
 static void split_gates_step(DWORD now)
 {
     char *p2e = split_p2();
@@ -2313,6 +2331,7 @@ static void split_gates_step(DWORD now)
             continue;
         }
         a->missing = 1;
+        split_gate_hint(now, a->wait_since);
         if (!a->wait_since) {
             a->wait_since = now;
             CLOG("campaign: %s waits for player 2 (split screen)", a->r->domain);

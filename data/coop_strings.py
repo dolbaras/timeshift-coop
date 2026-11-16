@@ -432,6 +432,28 @@ STRINGS = [
         "czech": "Přeskočení scény: {STRING} z {STRING} hráčů. Čeká se na ostatní.",
         "hungarian": "Jelenet átugrása: {STRING}/{STRING} játékos. Várakozás a többiekre.",
     }),
+    ("COOP_HINT_GATE_SPLIT", {   # split screen: a gate waits for player 2; {STRING} 1 = seconds until player 2 is brought in
+        "english": "Waiting for player 2 here: the way on opens when both players are inside. Player 2 is brought here in {STRING} s.",
+        "russian": "Здесь ждут игрока 2: путь дальше откроется, когда оба игрока будут внутри. Игрок 2 будет перенесён сюда через {STRING} с.",
+        "german": "Hier wird auf Spieler 2 gewartet: Es geht weiter, wenn beide Spieler drin sind. Spieler 2 wird in {STRING} s hergeholt.",
+        "french": "On attend le joueur 2 ici : la suite s'ouvre quand les deux joueurs sont dedans. Le joueur 2 sera amené ici dans {STRING} s.",
+        "italian": "Qui si aspetta il giocatore 2: si prosegue quando entrambi i giocatori sono dentro. Il giocatore 2 verrà portato qui tra {STRING} s.",
+        "spanish": "Aquí se espera al jugador 2: se sigue cuando ambos jugadores están dentro. El jugador 2 será traído aquí en {STRING} s.",
+        "polish": "Czekamy tu na gracza 2: dalej można iść, gdy obaj gracze są w środku. Gracz 2 zostanie tu przeniesiony za {STRING} s.",
+        "czech": "Tady se čeká na hráče 2: dál se jde, až budou oba hráči uvnitř. Hráč 2 sem bude přenesen za {STRING} s.",
+        "hungarian": "Itt a 2. játékosra várunk: akkor lehet továbbmenni, ha mindkét játékos bent van. A 2. játékos {STRING} mp múlva ide kerül.",
+    }),
+    ("COOP_HINT_GATE_SPLIT_WAIT", {   # split screen: a gate waits for player 2 (no automatic bring-in set)
+        "english": "Waiting for player 2 here: the way on opens when both players are inside.",
+        "russian": "Здесь ждут игрока 2: путь дальше откроется, когда оба игрока будут внутри.",
+        "german": "Hier wird auf Spieler 2 gewartet: Es geht weiter, wenn beide Spieler drin sind.",
+        "french": "On attend le joueur 2 ici : la suite s'ouvre quand les deux joueurs sont dedans.",
+        "italian": "Qui si aspetta il giocatore 2: si prosegue quando entrambi i giocatori sono dentro.",
+        "spanish": "Aquí se espera al jugador 2: se sigue cuando ambos jugadores están dentro.",
+        "polish": "Czekamy tu na gracza 2: dalej można iść, gdy obaj gracze są w środku.",
+        "czech": "Tady se čeká na hráče 2: dál se jde, až budou oba hráči uvnitř.",
+        "hungarian": "Itt a 2. játékosra várunk: akkor lehet továbbmenni, ha mindkét játékos bent van.",
+    }),
 ]
 
 
