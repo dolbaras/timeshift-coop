@@ -4226,10 +4226,11 @@ int split_session_on(void)
     return stage >= 3;
 }
 
-/* a moment where player 2 may come or go: play, no cinematic, the level's player there (pausemenu.c's CoopSafe) */
+/* a moment where player 2 may come or go: no cinematic, the level's player there (pausemenu.c's CoopSafe; asked while the pause menu is up,
+ * where in_play() is false) */
 int split_safe_moment(void)
 {
-    return in_play() && !cinematic() && PLAYER_B != NULL;
+    return !cinematic() && PLAYER_B != NULL && *(DWORD *)PLAYER_B == PLAYER_VTBL;
 }
 
 /* the pause menu asks for split screen on (1) / off (0) in a game started without it; the safe-moment gate holds the "on" (split_choice) */
