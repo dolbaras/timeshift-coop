@@ -34,6 +34,9 @@ CoopKickReq, CoopPads, CoopPadNow1/2, CoopSplitOn, CoopSafe, CoopRoleNow, CoopPl
 import re
 
 # profile keys the co-op server changes; the main menu and the Multiplayer frame restore them
+# the project's address, shown with the version at the foot of the main menu (COOP_TITLE_LINE)
+PROJECT_URL = "github.com/dolbaras/timeshift-coop"
+
 KEPT_KEYS = ["ServerMinPlayers", "ServerMaxPlayers", "ServerTimeLimit", "ServerFragLimit",
              "ServerMaxSpectators", "ServerName", "NetworkMode"]
 
@@ -194,7 +197,7 @@ def build(ctx):
     ctx.add("CacheBlock/ps/coophost.ui", host)
     ctx.add("CacheBlock/ps/coopsplit.ui", fill(ctx.data_file("ui/coopsplit.ui"), {"%LEVEL_LINES%": "\n".join(lines)}))
     ctx.add("CacheBlock/ps/coopmenu.ui", fill(ctx.data_file("ui/coopmenu.ui"), {"%VERSION%": v}))
-    ctx.add("CacheBlock/ps/coopinfo.ui", ctx.data_file("ui/coopinfo.ui"))
+    ctx.add("CacheBlock/ps/coopinfo.ui", fill(ctx.data_file("ui/coopinfo.ui"), {"%VERSION%": v}))
 
     restore = RESTORE_FUNCS.replace("%RESTORE%", "\n".join(
         '         CoopRestoreKey("%s")' % k for k in KEPT_KEYS))
@@ -206,7 +209,24 @@ def build(ctx):
               ("Content", "               posY        = 190, 30", "220"),
               ("Update", "               posY        = 220, 30", "250"),
               ("Credits", "               posY        = 250, 30", "280")]
-    edits = [('''               text        = UI_BTN_MULTIPLAYER
+    edits = [('''      texX        = 0.0, 1.0
+      texY        = 0.05, 0.55
+   }
+''', '''      texX        = 0.0, 1.0
+      texY        = 0.05, 0.55
+   }
+   {
+      type        = text
+      name        = CoopModLine
+      text        = COOP_TITLE_LINE,%s,%s
+      posX        = 0, 100%%
+      posY        = -26, 20
+      textScale   = 6
+      textAlign   = centerX centerY
+      textColor   = 200 210 225 255
+   }
+''' % (v, PROJECT_URL)),
+              ('''               text        = UI_BTN_MULTIPLAYER
                //textColor               = 255 192 192 192
                //textColorHighlighted    = 255 149 238 242
             }

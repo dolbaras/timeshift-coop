@@ -24,9 +24,18 @@ child = [
       child       = [
          {
             type      = text
+            name      = ModLine
+            posX      = 8%, 85%
+            posY      = 4, 22
+            textScale = 7
+            textAlign = leftX centerY
+            textColor = 200 210 225 255
+         }
+         {
+            type      = text
             name      = Players
             posX      = 8%, 85%
-            posY      = 8, 26
+            posY      = 27, 24
             textScale = 8
             textAlign = leftX centerY
             textColor = 255 255 255 255
@@ -35,7 +44,7 @@ child = [
             type      = text
             name      = Pad1Line
             posX      = 8%, 85%
-            posY      = 36, 22
+            posY      = 50, 20
             textScale = 7
             textAlign = leftX centerY
             textColor = 200 210 225 255
@@ -44,7 +53,7 @@ child = [
             type      = text
             name      = Pad2Line
             posX      = 8%, 85%
-            posY      = 58, 22
+            posY      = 70, 20
             textScale = 7
             textAlign = leftX centerY
             textColor = 200 210 225 255
@@ -299,6 +308,7 @@ child = [
 ssl = <<<
 
    override OnInit
+      Element("ModLine").SetText("COOP_MOD_VERSION,%VERSION%")
       var pads : string
       var role : string
       var split : string

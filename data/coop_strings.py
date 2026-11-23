@@ -88,6 +88,17 @@ STRINGS = [
         "czech": "Kooperativní mod {STRING}",
         "hungarian": "Kooperatív mod {STRING}",
     }),
+    ("COOP_TITLE_LINE", {   # main menu foot line: {STRING} 1 = version, 2 = the project's address (the name is not translated)
+        "english": "TimeShift Co-op {STRING}  -  {STRING}",
+        "russian": "TimeShift Co-op {STRING}  -  {STRING}",
+        "german": "TimeShift Co-op {STRING}  -  {STRING}",
+        "french": "TimeShift Co-op {STRING}  -  {STRING}",
+        "italian": "TimeShift Co-op {STRING}  -  {STRING}",
+        "spanish": "TimeShift Co-op {STRING}  -  {STRING}",
+        "polish": "TimeShift Co-op {STRING}  -  {STRING}",
+        "czech": "TimeShift Co-op {STRING}  -  {STRING}",
+        "hungarian": "TimeShift Co-op {STRING}  -  {STRING}",
+    }),
     # Split screen (Co-op menu -> Split screen; native/split.c)
     ("COOP_BTN_SPLIT", {   # Co-op menu entry (upper case like the stock entries next to it)
         "english": "SPLIT SCREEN",
