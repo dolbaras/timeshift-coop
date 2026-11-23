@@ -218,14 +218,13 @@ def build(ctx):
    {
       type        = text
       name        = CoopModLine
-      text        = COOP_TITLE_LINE,%s,%s
-      posX        = 0, 100%%
+      posX        = 0, 100%
       posY        = -26, 20
       textScale   = 6
       textAlign   = centerX centerY
       textColor   = 200 210 225 255
    }
-''' % (v, PROJECT_URL)),
+''' ),
               ('''               text        = UI_BTN_MULTIPLAYER
                //textColor               = 255 192 192 192
                //textColorHighlighted    = 255 149 238 242
@@ -267,11 +266,12 @@ def build(ctx):
       $ui.SetStr("CoopContinue", "")
       CoopSplitJoinInit()
       CoopDevInit()
+      Element("CoopModLine").SetText("COOP_TITLE_LINE,%s,%s")
       if $ui.GetStr("CoopError") != ""
          CoopShowError($ui.ShowFrame("ErrorMsg"))
       end
 
-      if $ui.GetStr("KICKED") == "Yes"''' % v),
+      if $ui.GetStr("KICKED") == "Yes"''' % (v, v, PROJECT_URL)),
         ('''   override OnButtonPressed("MultiPlayer")''', '''   override OnButtonPressed("Coop")
       $ui.SwitchFrame("CoopMenu")
    end

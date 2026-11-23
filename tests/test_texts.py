@@ -45,6 +45,7 @@ SAME_OK_DATA = {
     # the labels printed on the pad (Xbox layout), the same in every language like the keyboard's key names
     "CTRL_PAD_A": "*", "CTRL_PAD_B": "*", "CTRL_PAD_X": "*", "CTRL_PAD_Y": "*", "CTRL_PAD_LB": "*", "CTRL_PAD_RB": "*",
     "CTRL_PAD_LT": "*", "CTRL_PAD_RT": "*", "CTRL_PAD_BACK": "*", "CTRL_PAD_START": "*",
+    "COOP_TITLE_LINE": "*",   # the mod's name, version and address on the main menu: not translated
 }
 SAME_OK_INSTALLER = {
     "browse_zip": "*",            # "Zip..." (a file type)
