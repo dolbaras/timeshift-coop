@@ -83,6 +83,88 @@ child = [
          }
          {
             type        = select
+            name        = CoopDev1
+            posX        = 52%, -15
+            posY        = 240, 30
+            text        = COOP_OPT_DEV1
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = select
+            name        = CoopDev2
+            posX        = 52%, -15
+            posY        = 275, 30
+            text        = COOP_OPT_DEV2
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = select
             name        = CoopDifficulty
             posX        = 52%, -15
             posY        = 310, 30
@@ -168,6 +250,54 @@ ssl = <<<
          v := "1"
       end
       Element("CoopDifficulty").SetVal(v)
+      // the input devices of the two players (kept in the profile; the DLL reads the UI strings): automatic, keyboard and mouse
+      // for player 1, gamepads 1-4
+      Element("CoopDev1").AddItem("COOP_DEV_AUTO", "a")
+      Element("CoopDev1").AddItem("COOP_DEV_KBM", "k")
+      Element("CoopDev1").AddItem("COOP_DEV_PAD1", "1")
+      Element("CoopDev1").AddItem("COOP_DEV_PAD2", "2")
+      Element("CoopDev1").AddItem("COOP_DEV_PAD3", "3")
+      Element("CoopDev1").AddItem("COOP_DEV_PAD4", "4")
+      Element("CoopDev2").AddItem("COOP_DEV_AUTO", "a")
+      Element("CoopDev2").AddItem("COOP_DEV_PAD1", "1")
+      Element("CoopDev2").AddItem("COOP_DEV_PAD2", "2")
+      Element("CoopDev2").AddItem("COOP_DEV_PAD3", "3")
+      Element("CoopDev2").AddItem("COOP_DEV_PAD4", "4")
+      Element("CoopDev1").SetVal(DevVal("CoopDev1"))
+      Element("CoopDev2").SetVal(DevVal("CoopDev2"))
+   end
+
+   func DevVal(key : string) : string
+      var v : string
+      v := $ui.GetStr(key)
+      if v == "" or v == "null"
+         v := $ui.GetUserVar(key)
+      end
+      if v == "null" or v == ""
+         v := "a"
+      end
+      return v
+   end
+
+   override OnSelectSelection("CoopDev1")
+      SaveDev("CoopDev1")
+   end
+
+   override OnSelectSelection("CoopDev2")
+      SaveDev("CoopDev2")
+   end
+
+   func SaveDev(key : string)
+      var v : string
+      v := $ui.GetUserVar(key)
+      if v == "null" or v == ""
+         v := "a"
+      end
+      $ui.SetStr(key, Element(key).GetVal())
+      if Element(key).GetVal() != v
+         $ui.SetUserVar(key, Element(key).GetVal())
+         $ui.FlushCfg()
+      end
    end
 
    // CoopAuto (UI string) starts by itself with the CoopLevel UI string; only tests set it

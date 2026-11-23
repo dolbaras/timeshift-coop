@@ -153,6 +153,10 @@ static void resolve_pads(int split, int *o1, int *o2)
     int d1 = dev_choice[0], d2 = dev_choice[1];
     if (d1 == -2 && fixed_pad >= 0)
         d1 = fixed_pad;
+    if (d1 >= 0 && !connected[d1])   /* (a saved choice of a pad that is not there now: as automatic) */
+        d1 = -2;
+    if (d2 >= 0 && !connected[d2])
+        d2 = -2;
     int p1 = -1, p2 = -1;
     if (!split) {
         *o1 = d1 == -1 ? -1 : d1 >= 0 ? d1 : n > 0 ? pads[0] : -1;

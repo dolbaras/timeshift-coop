@@ -121,7 +121,7 @@ void pausemenu_poll(void)
     snprintf(list, sizeof list, "%s", cn ? clean : "Player");
     for (int i = 0; i < n; i++) {
         size_t u = strlen(list);
-        snprintf(list + u, sizeof list - u, ", %s", names[i]);
+        snprintf(list + u, sizeof list - u, " / %s", names[i]);
     }
     int pad1 = gamepad_slot(0), pad2 = gamepad_slot(1);
     int split = split_session_on();

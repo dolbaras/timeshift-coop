@@ -20,9 +20,16 @@ Co-op frame option "Second player on pad 2" (CoopSplitJoin, off/on, kept in the 
 set as a UI string by the Co-op frame and the main menu): hosting or joining a co-op game with it on brings a
 second player on pad 2 into the game, the screen split (native/split.c, docs/splitscreen.md).
 
+Pause menu (notes\\pause-menu.md): both pause frames get a "Co-op" button that opens the new frame CoopInfo
+(data/ui/coopinfo.ui): players, the second player on / off, the input device of each local player (automatic / keyboard and mouse /
+gamepad 1-4), swap, and the host's "remove player". The network pause frame (InGameMulti) shows it in a co-op session; the single-player
+pause frame (InGameMenu, the split-screen-only start) while a split-screen game runs (UI string CoopSplit set, "0" after the second
+player was switched off). The Co-op frame "Split screen" (CoopSplit) has the same two input rows.
+
 UI strings shared with the DLL and the lab's test recipe: CoopSession ("host" / "client" / ""),
 CoopDifficulty, CoopMaxPlayers, CoopLevel, CoopStage, CoopAuto, CoopError, CoopDataVersion, CoopSplit,
-CoopPad2, CoopSplitJoin.
+CoopPad2, CoopSplitJoin; for the pause frame / input rows (native/pausemenu.c has the list): CoopDev1, CoopDev2, CoopSplitReq,
+CoopKickReq, CoopPads, CoopPadNow1/2, CoopSplitOn, CoopSafe, CoopRoleNow, CoopPlayers, CoopPeer0-2.
 """
 import re
 
@@ -30,7 +37,22 @@ import re
 KEPT_KEYS = ["ServerMinPlayers", "ServerMaxPlayers", "ServerTimeLimit", "ServerFragLimit",
              "ServerMaxSpectators", "ServerName", "NetworkMode"]
 
-RESTORE_FUNCS = '''   // co-op mod: joining with split screen (the Co-op frame's option, kept in the profile)
+RESTORE_FUNCS = '''   // co-op mod: the input devices of the two local players (kept in the profile; the DLL reads the UI strings)
+   func CoopDevInit()
+      var v : string
+      v := $ui.GetUserVar("CoopDev1")
+      if v == "null" or v == ""
+         v := "a"
+      end
+      $ui.SetStr("CoopDev1", v)
+      v := $ui.GetUserVar("CoopDev2")
+      if v == "null" or v == ""
+         v := "a"
+      end
+      $ui.SetStr("CoopDev2", v)
+   end
+
+   // co-op mod: joining with split screen (the Co-op frame's option, kept in the profile)
    func CoopSplitJoinInit()
       var v : string
       v := $ui.GetUserVar("CoopSplitJoin")
@@ -172,6 +194,7 @@ def build(ctx):
     ctx.add("CacheBlock/ps/coophost.ui", host)
     ctx.add("CacheBlock/ps/coopsplit.ui", fill(ctx.data_file("ui/coopsplit.ui"), {"%LEVEL_LINES%": "\n".join(lines)}))
     ctx.add("CacheBlock/ps/coopmenu.ui", fill(ctx.data_file("ui/coopmenu.ui"), {"%VERSION%": v}))
+    ctx.add("CacheBlock/ps/coopinfo.ui", ctx.data_file("ui/coopinfo.ui"))
 
     restore = RESTORE_FUNCS.replace("%RESTORE%", "\n".join(
         '         CoopRestoreKey("%s")' % k for k in KEPT_KEYS))
@@ -223,6 +246,7 @@ def build(ctx):
       $ui.SetStr("CoopSplit", "")
       $ui.SetStr("CoopContinue", "")
       CoopSplitJoinInit()
+      CoopDevInit()
       if $ui.GetStr("CoopError") != ""
          CoopShowError($ui.ShowFrame("ErrorMsg"))
       end
@@ -290,8 +314,15 @@ def build(ctx):
             type        = button
             name        = QuitToMenuCoop
             posX        = center, 100%
-            posY        = 210, 30
+            posY        = 250, 30
             text        = UI_BTN_QUIT_TO_MAIN
+         }
+         {
+            type        = button
+            name        = CoopSettings
+            posX        = center, 100%
+            posY        = 210, 30
+            text        = COOP_BTN_COOP
          }
 '''),
         ('''ssl = <<<
@@ -322,7 +353,12 @@ def build(ctx):
          Element("Regroup").Show(false)
          Element("QuitToMenuCoop").Show(false)
          Element("CoopReady").Show(false)
+         Element("CoopSettings").Show(false)
       end
+   end
+
+   override OnButtonPressed("CoopSettings")
+      $ui.SwitchFrame("CoopInfo")
    end
 
    override OnButtonPressed("Regroup")
@@ -340,6 +376,96 @@ def build(ctx):
    end
 
    override OnButtonPressed("ResumeGame")'''),
+    ])
+
+    # ---- the single-player pause frame in a split-screen game: "Co-op" (players, second player, input devices) ----
+    # The frame is the stock InGameMenu (Resume 30, Restart 70, Load 110, Save 150, Options 190, Quit 230, Exit game 290). While a
+    # split-screen game runs (UI string CoopSplit set by the Co-op menu's Split screen: "1", "0" after the second player was switched
+    # off; or the DLL says CoopSplitOn) the stock Quit and Exit rows are replaced by twins lower down, with the Co-op button between.
+    ctx.edit("CacheBlock/ps/ingamemenu.ui", [
+        ('''            name        = QuitToMenu
+            posX        = center, 100%
+            posY        = 230, 30
+            text        = UI_BTN_QUIT_TO_MAIN
+         }
+         {
+            type        = button
+            name        = ExitGame
+            text        = UI_BTN_STOP_GAME
+            textAlign   = centerX centerY
+            textScale   = 12
+            posX        = center, 100
+            posY        = 290, 30
+         }
+''', '''            name        = QuitToMenu
+            posX        = center, 100%
+            posY        = 230, 30
+            text        = UI_BTN_QUIT_TO_MAIN
+         }
+         {
+            type        = button
+            name        = ExitGame
+            text        = UI_BTN_STOP_GAME
+            textAlign   = centerX centerY
+            textScale   = 12
+            posX        = center, 100
+            posY        = 290, 30
+         }
+         {
+            type        = button
+            name        = CoopSettings
+            posX        = center, 100%
+            posY        = 230, 30
+            text        = COOP_BTN_COOP
+         }
+         {
+            type        = button
+            name        = QuitToMenuCoop
+            posX        = center, 100%
+            posY        = 270, 30
+            text        = UI_BTN_QUIT_TO_MAIN
+         }
+         {
+            type        = button
+            name        = ExitGameCoop
+            text        = UI_BTN_STOP_GAME
+            textAlign   = centerX centerY
+            textScale   = 12
+            posX        = center, 100
+            posY        = 330, 30
+         }
+'''),
+        ('''      $ui.SetStr("SinglePlayer", "Yes")
+''', '''      $ui.SetStr("SinglePlayer", "Yes")
+      // co-op mod: a split-screen game gets the Co-op button and the lower twins of Quit and Exit game
+      if $ui.GetStr("CoopSplit") != "" or $ui.GetStr("CoopSplitOn") == "1"
+         Element("QuitToMenu").Show(false)
+         Element("ExitGame").Show(false)
+      else
+         Element("CoopSettings").Show(false)
+         Element("QuitToMenuCoop").Show(false)
+         Element("ExitGameCoop").Show(false)
+      end
+'''),
+        ('''   override OnButtonPressed("QuitToMenu")
+      InitExitConfirm($ui.ShowFrame("Confirmation"))
+   end
+''', '''   override OnButtonPressed("QuitToMenu")
+      InitExitConfirm($ui.ShowFrame("Confirmation"))
+   end
+
+   override OnButtonPressed("QuitToMenuCoop")
+      InitExitConfirm($ui.ShowFrame("Confirmation"))
+   end
+
+   override OnButtonPressed("CoopSettings")
+      $ui.SwitchFrame("CoopInfo")
+   end
+
+   override OnButtonPressed("ExitGameCoop")
+      InitExitGameConfirm($ui.ShowFrame("Confirmation"))
+   end
+'''),
     ])
 
     # ---- the stock server set-up, driven by CoopStage ----

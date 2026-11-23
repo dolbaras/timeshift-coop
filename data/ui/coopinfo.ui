@@ -1,0 +1,495 @@
+// Co-op mod: the Co-op frame of the pause menu (written for the mod; same look as the Co-op menu frames).
+// Opened by the "Co-op" button of both pause frames (InGameMulti: a network co-op game, InGameMenu: a split screen game).
+// What it shows and does goes through UI strings with the DLL (native/pausemenu.c has the list). Rows that do not apply are not
+// shown: the second player and the input rows need a gamepad, "Player 2 controls" and "Swap" a split screen, "Remove player" a host
+// with clients. The two groups at the bottom (kick) have a twin at the top rows for the case where no input row is there.
+name           = CoopInfo
+style          = styMenu
+
+child = [
+   {
+      type      = text
+      text      = COOP_FRAME_COOP
+      posX      = 0, 100%
+      posY      = 6%, 30
+      textScale = 15
+      textAlign = centerX centerY
+      font      = font_main
+   }
+   {
+      type        = background
+      border      = true
+      posY        = 60, 355
+
+      child       = [
+         {
+            type      = text
+            name      = Players
+            posX      = 8%, 85%
+            posY      = 8, 26
+            textScale = 8
+            textAlign = leftX centerY
+            textColor = 255 255 255 255
+         }
+         {
+            type      = text
+            name      = Pad1Line
+            posX      = 8%, 85%
+            posY      = 36, 22
+            textScale = 7
+            textAlign = leftX centerY
+            textColor = 200 210 225 255
+         }
+         {
+            type      = text
+            name      = Pad2Line
+            posX      = 8%, 85%
+            posY      = 58, 22
+            textScale = 7
+            textAlign = leftX centerY
+            textColor = 200 210 225 255
+         }
+         {
+            type        = select
+            name        = CoopSplitJoin
+            posX        = 10%, 80%
+            posY        = 90, 30
+            text        = COOP_OPT_SPLITJOIN
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = select
+            name        = CoopDev1
+            posX        = 10%, 80%
+            posY        = 125, 30
+            text        = COOP_OPT_DEV1
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = select
+            name        = CoopDev2
+            posX        = 10%, 80%
+            posY        = 160, 30
+            text        = COOP_OPT_DEV2
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = button
+            name        = SwapPads
+            posX        = center, 100%
+            posY        = 195, 30
+            text        = COOP_BTN_SWAP
+         }
+         {
+            type        = select
+            name        = KickWho
+            posX        = 10%, 80%
+            posY        = 235, 30
+            text        = COOP_OPT_KICK
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = button
+            name        = Kick
+            posX        = center, 100%
+            posY        = 270, 30
+            text        = UI_BTN_KICK
+         }
+         {
+            type        = select
+            name        = KickWho2
+            posX        = 10%, 80%
+            posY        = 90, 30
+            text        = COOP_OPT_KICK
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = button
+            name        = Kick2
+            posX        = center, 100%
+            posY        = 125, 30
+            text        = UI_BTN_KICK
+         }
+      ]
+   }
+   {
+      type        = box
+      border      = true
+      posY        = -65, 40
+      child       = [
+         {
+            type        = esc_button
+            name        = Back
+            text        = UI_BTN_BACK
+            textAlign   = left centerY
+            textScale   = 12
+            posX        = 10, 100
+            posY        = 5, 30
+            XBoxShortCut = B
+         }
+      ]
+   }
+]
+
+ssl = <<<
+
+   override OnInit
+      var pads : string
+      var role : string
+      var split : string
+      pads := $ui.GetStr("CoopPads")
+      role := $ui.GetStr("CoopRoleNow")
+      split := $ui.GetStr("CoopSplitOn")
+      if split != "1"
+         split := "0"
+      end
+
+      // who is playing
+      if role == ""
+         Element("Players").Show(false)
+      else
+         Element("Players").SetText("COOP_PAUSE_PLAYERS," + $ui.GetStr("CoopPlayers"))
+      end
+
+      // the input devices (a gamepad or the split screen's player 2 is the reason for these rows)
+      Element("CoopDev1").AddItem("COOP_DEV_AUTO", "a")
+      Element("CoopDev1").AddItem("COOP_DEV_KBM", "k")
+      Element("CoopDev1").AddItem("COOP_DEV_PAD1", "1")
+      Element("CoopDev1").AddItem("COOP_DEV_PAD2", "2")
+      Element("CoopDev1").AddItem("COOP_DEV_PAD3", "3")
+      Element("CoopDev1").AddItem("COOP_DEV_PAD4", "4")
+      Element("CoopDev2").AddItem("COOP_DEV_AUTO", "a")
+      Element("CoopDev2").AddItem("COOP_DEV_PAD1", "1")
+      Element("CoopDev2").AddItem("COOP_DEV_PAD2", "2")
+      Element("CoopDev2").AddItem("COOP_DEV_PAD3", "3")
+      Element("CoopDev2").AddItem("COOP_DEV_PAD4", "4")
+      Element("CoopDev1").SetVal(DevVal("CoopDev1"))
+      Element("CoopDev2").SetVal(DevVal("CoopDev2"))
+      Element("CoopSplitJoin").AddItem("UI_SOFF", "0")
+      Element("CoopSplitJoin").AddItem("UI_SON", "1")
+      Element("CoopSplitJoin").SetVal(split)
+
+      // no gamepad: nothing to choose, no second player (only the keyboard and mouse)
+      if pads == "0" or pads == ""
+         Element("CoopDev1").Show(false)
+         Element("CoopDev2").Show(false)
+         Element("SwapPads").Show(false)
+         Element("Pad1Line").Show(false)
+         Element("Pad2Line").Show(false)
+         Element("CoopSplitJoin").Show(false)
+      else
+         // the second player on / off waits for a safe moment (the DLL says: CoopSafe); a guest only drops out of a split screen
+         if $ui.GetStr("CoopSafe") != "1"
+            Element("CoopSplitJoin").Show(false)
+         end
+         if split == "1"
+            ShowPadLines()
+         else
+            Element("Pad1Line").Show(false)
+            Element("Pad2Line").Show(false)
+            Element("CoopDev2").Show(false)
+            Element("SwapPads").Show(false)
+         end
+         if pads == "1"
+            Element("SwapPads").Show(false)
+         end
+      end
+
+      // the host removes a player (the stock network layer's kick); the row stands at the top when no input row is there
+      Element("KickWho").Show(false)
+      Element("Kick").Show(false)
+      Element("KickWho2").Show(false)
+      Element("Kick2").Show(false)
+      if role == "host"
+         if $ui.GetStr("CoopPeer0") != ""
+            if pads == "0" or pads == ""
+               Fill("KickWho2")
+               Element("KickWho2").Show(true)
+               Element("Kick2").Show(true)
+            else
+               Fill("KickWho")
+               Element("KickWho").Show(true)
+               Element("Kick").Show(true)
+            end
+         end
+      end
+   end
+
+   func Fill(name : string)
+      Element(name).AddItem($ui.GetStr("CoopPeer0"), "0")
+      if $ui.GetStr("CoopPeer1") != ""
+         Element(name).AddItem($ui.GetStr("CoopPeer1"), "1")
+      end
+      if $ui.GetStr("CoopPeer2") != ""
+         Element(name).AddItem($ui.GetStr("CoopPeer2"), "2")
+      end
+      Element(name).SetVal("0")
+   end
+
+   // the saved choice of a device row (profile; automatic when nothing is saved)
+   func DevVal(key : string) : string
+      var v : string
+      v := $ui.GetStr(key)
+      if v == ""
+         v := $ui.GetUserVar(key)
+      end
+      if v == "null" or v == ""
+         v := "a"
+      end
+      return v
+   end
+
+   func ShowPadLines()
+      var n1 : string
+      var n2 : string
+      n1 := $ui.GetStr("CoopPadNow1")
+      n2 := $ui.GetStr("CoopPadNow2")
+      if n1 == "0" or n1 == ""
+         Element("Pad1Line").SetText("COOP_PAUSE_P1_KBM")
+      else
+         Element("Pad1Line").SetText("COOP_PAUSE_P1_PAD," + n1)
+      end
+      if n2 == "0" or n2 == ""
+         Element("Pad2Line").Show(false)
+      else
+         Element("Pad2Line").SetText("COOP_PAUSE_P2_PAD," + n2)
+      end
+   end
+
+   // the second player on / off: the DLL switches the split screen (a drop-in waits for a safe moment)
+   override OnSelectSelection("CoopSplitJoin")
+      if Element("CoopSplitJoin").GetVal() != $ui.GetStr("CoopSplitOn")
+         $ui.SetStr("CoopSplitReq", Element("CoopSplitJoin").GetVal())
+      end
+   end
+
+   override OnSelectSelection("CoopDev1")
+      SaveDev("CoopDev1")
+   end
+
+   override OnSelectSelection("CoopDev2")
+      SaveDev("CoopDev2")
+   end
+
+   // the choice goes to the DLL at once (UI string) and into the profile when it changed there
+   func SaveDev(key : string)
+      var v : string
+      v := $ui.GetUserVar(key)
+      if v == "null" or v == ""
+         v := "a"
+      end
+      $ui.SetStr(key, Element(key).GetVal())
+      if Element(key).GetVal() != v
+         $ui.SetUserVar(key, Element(key).GetVal())
+         $ui.FlushCfg()
+      end
+   end
+
+   // the gamepads of the two players exchanged (this session only: the profile keeps the saved choice)
+   override OnButtonPressed("SwapPads")
+      var n1 : string
+      var n2 : string
+      n1 := $ui.GetStr("CoopPadNow1")
+      n2 := $ui.GetStr("CoopPadNow2")
+      if n1 != "0" and n1 != "" and n2 != "0" and n2 != ""
+         $ui.SetStr("CoopDev1", n2)
+         $ui.SetStr("CoopDev2", n1)
+         Element("CoopDev1").SetVal(n2)
+         Element("CoopDev2").SetVal(n1)
+         $ui.SetStr("CoopPadNow1", n2)
+         $ui.SetStr("CoopPadNow2", n1)
+         ShowPadLines()
+      end
+   end
+
+   override OnButtonPressed("Kick")
+      AskKick(Element("KickWho"))
+   end
+
+   override OnButtonPressed("Kick2")
+      AskKick(Element("KickWho2"))
+   end
+
+   func AskKick(who : object)
+      var frm : object
+      $ui.SetStr("CoopKickPick", who.GetVal())
+      frm := $ui.ShowFrame("Confirmation")
+      frm.Element("Message").SetText("COOP_PAUSE_KICK_ASK," + $ui.GetStr("CoopPeer" + who.GetVal()))
+      frm.Element("Caption").SetText("UI_BTN_KICK")
+      frm.SetStr("confid", "CoopKick")
+   end
+
+   override OnResult("CoopKick", "Yes")
+      $ui.SetStr("CoopKickReq", $ui.GetStr("CoopKickPick"))
+      $ui.CloseMenu()
+   end
+
+   override OnButtonPressed("Back")
+      $ui.BackFrame()
+   end
+>>>
