@@ -476,10 +476,12 @@ ssl = <<<
    end
 
    func AskKick(who : object)
-      var frm : object
       $ui.SetStr("CoopKickPick", who.GetVal())
-      frm := $ui.ShowFrame("Confirmation")
-      frm.Element("Message").SetText("COOP_PAUSE_KICK_ASK," + $ui.GetStr("CoopPeer" + who.GetVal()))
+      InitKickConfirm($ui.ShowFrame("Confirmation"), $ui.GetStr("CoopPeer" + who.GetVal()))
+   end
+
+   func InitKickConfirm(frm : object, name : string)
+      frm.Element("Message").SetText("COOP_PAUSE_KICK_ASK," + name)
       frm.Element("Caption").SetText("UI_BTN_KICK")
       frm.SetStr("confid", "CoopKick")
    end
