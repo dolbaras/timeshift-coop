@@ -102,6 +102,7 @@ static void (TSCALL *eval_commands)(void *) = (void *)0x6595e0;   /* (fastcall e
 static void (TSCALL *node_name)(void *, const char *) = (void *)0x94c730;
 
 static int stage, layout_cfg, splitlog, keep_mt, p2_delay = 5;
+static int p2_dropin_pending;   /* the pause menu switched the second player on: waits for a safe moment (split_choice) */
 static int forced;   /* TS_SPLIT: 1 on, -1 never, 0 the player's choice (CoopSplit) */
 static DWORD mt_saved;
 static int mt_set;
@@ -2636,16 +2637,19 @@ static void spawn_p2(BYTE *p1)
  * the script tick stops; once a second. */
 void gamepad_after_poll(void (*fn)(void));   /* gamepad.c */
 
+void pausemenu_poll(void);   /* pausemenu.c: the pause / Co-op frames' two-way UI strings */
+
 static void publish_pad2(void)
 {
     coopsave_publish();
+    pausemenu_poll();
     static DWORD last, logged;
     DWORD now = GetTickCount();
     if (now - last < 1000)
         return;
     last = now;
     char out[64], ssl[96];
-    snprintf(ssl, sizeof ssl, "$ui.SetStr(\"CoopPad2\", \"%d\")", gamepad_slot(1) >= 0);
+    snprintf(ssl, sizeof ssl, "$ui.SetStr(\"CoopPad2\", \"%d\")", gamepad_slot(1) >= 0);   /* (a pad for player 2: with one pad player 1 plays on keyboard and mouse) */
     ts_script_run(ssl, out, sizeof out);
     if (!logged++)
         ts_log("split: pad 2 %s (told to the menu from thread %lu)", gamepad_slot(1) >= 0 ? "there" : "missing",
@@ -2681,7 +2685,16 @@ static void split_choice(void)
     static int host_miss;
     host_miss = host ? 0 : host_miss + 1;
     int want = strcmp(out, "1") == 0 || host || (stage && host_miss < 5 && net_mode() != 1 && client_choice);
+    if (want && !stage && (cinematic() || !in_play() || !PLAYER_B) && p2_dropin_pending) {   /* (the pause menu's "second player on": a safe moment only) */
+        static DWORD told;
+        if (GetTickCount() - told > 10000) {
+            told = GetTickCount();
+            ts_log("split: second player waits for a safe moment (cinematic %d, in play %d)", cinematic(), in_play());
+        }
+        want = 0;
+    }
     if (want && !stage) {
+        p2_dropin_pending = 0;
         stage = 3;
         set_single_thread(1);
         ts_log("split: on (%s; player 2 on XInput pad %d)", host ? "a co-op host with \"Second player on pad 2\"" : "chosen in the Co-op menu",
@@ -4205,6 +4218,24 @@ unsigned char *split_player2(void)
 int split_p2_local(void)
 {
     return p2 && !remote_host;
+}
+
+/* split screen is on for this session (stage 3: gamepad.c gives the only pad to player 2 then; pausemenu.c) */
+int split_session_on(void)
+{
+    return stage >= 3;
+}
+
+/* a moment where player 2 may come or go: play, no cinematic, the level's player there (pausemenu.c's CoopSafe) */
+int split_safe_moment(void)
+{
+    return in_play() && !cinematic() && PLAYER_B != NULL;
+}
+
+/* the pause menu asks for split screen on (1) / off (0) in a game started without it; the safe-moment gate holds the "on" (split_choice) */
+void split_dropin_request(int on)
+{
+    p2_dropin_pending = on;
 }
 
 void split_install(void)

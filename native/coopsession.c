@@ -204,6 +204,54 @@ int ts_coop_active(void)
            && campaign_level();
 }
 
+/* ---- the pause menu's Co-op frame (pausemenu.c) ---- */
+static const char *peer_name(int id);
+static int slot_count(void);
+static char *slot_at(int i);
+/* 1 host / 2 client / 0 not in a network session (any thread; reads game state) */
+int coopsession_role(void)
+{
+    int m = game_mode();
+    if (!enabled || !PEER_NETWORK)
+        return 0;
+    return m == MODE_SERVER ? 1 : m == MODE_CLIENT ? 2 : 0;
+}
+
+/* host: the joined clients (not the host's own slot): ids and profile names; returns how many (at most max) */
+int coopsession_clients(int *ids, char names[][28], int max)
+{
+    int n = 0;
+    if (coopsession_role() != 1)
+        return 0;
+    for (int i = 0; i < slot_count() && n < max; i++) {
+        char *s = slot_at(i);
+        if (!s || *(int *)s == 0 || (*(int *)(s + 8) & SLOT_JOINED) == 0)
+            continue;
+        ids[n] = *(int *)s;
+        const char *nm = peer_name(ids[n]);
+        snprintf(names[n], 28, "%s", strcmp(nm, "?") ? nm : "Player");
+        n++;
+    }
+    return n;
+}
+
+/* host: the stock network layer's Kick (net::PEER_NETWORK vtable +0x20, thiscall (peer, reason text), hooked and logged by netfix.c) */
+int coopsession_kick(int peer)
+{
+    typedef void (__attribute__((thiscall)) *kick_fn)(void *, int, const char *);
+    int ids[8];
+    char names[8][28];
+    int n = coopsession_clients(ids, names, 8);
+    for (int i = 0; i < n; i++)
+        if (ids[i] == peer) {
+            void **vt = *(void ***)PEER_NETWORK;
+            CLOG("coopsession: the host removes client %d (%s) from the pause menu", peer, names[i]);
+            ((kick_fn)vt[0x20 / 4])(PEER_NETWORK, peer, "KICK");
+            return 1;
+        }
+    return 0;
+}
+
 int ts_coop_feature(int flag)
 {
     if (!ts_coop_active())

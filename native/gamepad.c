@@ -133,33 +133,107 @@ static int game_in_front(void)
     return w && GetWindowThreadProcessId(w, &pid) && pid == GetCurrentProcessId();
 }
 
-/* Which XInput pad each local player uses: a fixed one (Pad=, TS_PAD=) or, in auto mode, the first
- * and second connected pads. Empty slots are slow to query, so they are scanned once a second. */
+/* Which XInput pad each local player uses. The choice per player (dev_choice, set by pausemenu.c from the pause / Co-op frames' rows,
+ * ts_coop.ini [Gamepad] Pad1= / Pad2=, or TS_PAD): -2 automatic, -1 keyboard and mouse only (player 1), 0-3 that XInput pad.
+ * Automatic: two or more pads = player 1 the first, player 2 the next (as always); ONE pad = player 1 while the screen is not split,
+ * player 2 once it is (player 1 then plays on keyboard and mouse: split screen with one gamepad). A pad serves one player; where a choice
+ * names the same pad twice, player 2 gets it. player_slot[1] is always the assignment WITH split screen (the menus and split.c ask it
+ * before the screen is split); player_slot[0] follows the split state. Empty slots are slow to query, so the pads are scanned once a
+ * second (at once when the split state or a choice changed). */
+static int dev_choice[2] = {-2, -2};
+static volatile LONG dev_gen;
+static int pad_count;
+
+static void resolve_pads(int split, int *o1, int *o2)
+{
+    int n = 0, pads[XUSER_MAX_COUNT];
+    for (int i = 0; i < XUSER_MAX_COUNT; i++)
+        if (connected[i])
+            pads[n++] = i;
+    int d1 = dev_choice[0], d2 = dev_choice[1];
+    if (d1 == -2 && fixed_pad >= 0)
+        d1 = fixed_pad;
+    int p1 = -1, p2 = -1;
+    if (!split) {
+        *o1 = d1 == -1 ? -1 : d1 >= 0 ? d1 : n > 0 ? pads[0] : -1;
+        *o2 = -1;
+        return;
+    }
+    if (d2 >= 0)
+        p2 = d2;
+    if (d1 >= 0)
+        p1 = d1;
+    if (d1 == -2 && d2 == -2) {
+        if (n >= 2)
+            p1 = pads[0], p2 = pads[1];
+        else if (n == 1)
+            p2 = pads[0];
+    } else if (d1 == -2) {
+        for (int i = 0; i < n && p1 < 0; i++)
+            if (pads[i] != p2)
+                p1 = pads[i];
+    } else if (d2 == -2) {
+        for (int i = 0; i < n && p2 < 0; i++)
+            if (pads[i] != p1)
+                p2 = pads[i];
+    }
+    if (p1 >= 0 && p1 == p2)
+        p1 = -1;
+    *o1 = p1;
+    *o2 = p2;
+}
+
+int split_session_on(void);   /* split.c: split screen is on (the session chose it) */
+
 static void scan_pads(void)
 {
+    static int last_split = -1;
+    static LONG last_gen;
     DWORD now = GetTickCount();
-    if (last_scan && now - last_scan < 1000)
+    int split = split_session_on();
+    if (last_scan && now - last_scan < 1000 && split == last_split && dev_gen == last_gen)
         return;
     last_scan = now;
-    int n = 0, slots[XUSER_MAX_COUNT];
+    last_split = split;
+    last_gen = dev_gen;
+    pad_count = 0;
     for (int i = 0; i < XUSER_MAX_COUNT; i++) {
         XINPUT_STATE st;
         int c = x_get(i, &st) == ERROR_SUCCESS;
         if (c != connected[i])
             ts_log("gamepad: XInput pad %d %s", i + 1, c ? "connected" : "disconnected");
         connected[i] = c;
-        if (c)
-            slots[n++] = i;
+        pad_count += c;
     }
-    int p0 = fixed_pad >= 0 ? fixed_pad : n > 0 ? slots[0] : -1;
-    int p1 = -1;
-    for (int i = 0; i < n && p1 < 0; i++)
-        if (slots[i] != p0)
-            p1 = slots[i];
+    int p0, p1, pn;
+    resolve_pads(1, &p0, &p1);
+    int none;
+    resolve_pads(0, &pn, &none);
+    if (!split)
+        p0 = pn;
     if (p0 != player_slot[0] || p1 != player_slot[1])
-        ts_log("gamepad: player 1 -> pad %d, player 2 -> pad %d (0 = none)", p0 + 1, p1 + 1);
+        ts_log("gamepad: player 1 -> pad %d, player 2 -> pad %d (0 = none; split %d, choices %d/%d, %d pad(s))", p0 + 1, p1 + 1, split,
+               dev_choice[0], dev_choice[1], pad_count);
     player_slot[0] = p0;
     player_slot[1] = p1;
+}
+
+/* pausemenu.c: the device choices (-2 automatic, -1 keyboard and mouse, 0-3 XInput pad) and what is connected / assigned */
+void gamepad_set_devices(int p1, int p2)
+{
+    if (p1 < -2 || p1 > 3 || p2 < -2 || p2 > 3 || p2 == -1)
+        return;
+    if (p1 != dev_choice[0] || p2 != dev_choice[1]) {
+        ts_log("gamepad: player 1 device %d, player 2 device %d (-2 auto, -1 keyboard and mouse, 0-3 pad)", p1, p2);
+        dev_choice[0] = p1;
+        dev_choice[1] = p2;
+        InterlockedIncrement(&dev_gen);
+    }
+}
+
+int gamepad_count(void)
+{
+    return pad_count;
 }
 
 /* The pad state of a local player's pad now (split.c streams player 2's to the host); 0: none. */
@@ -539,12 +613,14 @@ static void pad_poll(BYTE *raw)
 
     XINPUT_STATE st;
     memset(&st, 0, sizeof st);
+    int menu = menu_active(im);
     int slot = player_slot[0];
+    if (slot < 0 && menu)   /* (player 1 plays on keyboard and mouse and the only pad is player 2's: it still steers the menus) */
+        slot = player_slot[1];
     int ok = slot >= 0 && (test_pad || game_in_front()) && x_get(slot, &st) == ERROR_SUCCESS;
     XINPUT_GAMEPAD *g = &st.Gamepad;
     if (!ok)
         memset(g, 0, sizeof *g);
-    int menu = menu_active(im);
     float l[2], r[2];
     write_codes(v, g, menu, l, r);
     if (ok && text_pad(g, menu)) {   /* (typing: the menu's directions stay silent) */
@@ -805,6 +881,8 @@ static void load_settings(void)
         look_speed = s;
     if (ts_env("TS_PAD", v, sizeof v) && v[0] >= '1' && v[0] <= '4') {
         fixed_pad = v[0] - '1';
+        test_pad = 1;
+    } else if (ts_env("TS_PAD", v, sizeof v) && (v[0] == '0' || v[0] == 'a')) {   /* (tests: pads read in the background, assigned automatically) */
         test_pad = 1;
     }
     padlog = ts_env("TS_PADLOG", v, sizeof v) && v[0] == '1';
