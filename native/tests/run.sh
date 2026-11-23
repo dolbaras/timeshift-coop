@@ -19,3 +19,5 @@ sh ual_test.sh
 ../build/readyroom_test.exe
 "$ZIG" cc -O1 -o ../build/skipvote_test.exe skipvote_test.c
 ../build/skipvote_test.exe
+"$ZIG" cc -O1 -o ../build/padassign_test.exe padassign_test.c
+../build/padassign_test.exe

@@ -113,7 +113,7 @@ STRINGS = [
     }),
     ("COOP_HINT_SPLIT", {
         "english": "Two players on this PC, the screen split in two. Player 2 plays on a gamepad; player 1 on keyboard and mouse or on a second gamepad.",
-        "russian": "Два игрока на этом ПК, экран разделён на две части. Игрок 2 играет на геймпаде, игрок 1 — на клавиатуре с мышью или на втором геймпаде.",
+        "russian": "Два игрока на этом ПК, экран разделён на две части. Игрок 2 играет на геймпаде, игрок 1 на клавиатуре с мышью или на втором геймпаде.",
         "german": "Zwei Spieler an diesem PC, der Bildschirm wird geteilt. Spieler 2 spielt mit einem Controller, Spieler 1 mit Tastatur und Maus oder mit einem zweiten Controller.",
         "french": "Deux joueurs sur ce PC, l'écran partagé en deux. Le joueur 2 joue à la manette, le joueur 1 au clavier et à la souris ou avec une deuxième manette.",
         "italian": "Due giocatori su questo PC, lo schermo diviso in due. Il giocatore 2 usa un controller, il giocatore 1 tastiera e mouse oppure un secondo controller.",

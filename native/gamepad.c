@@ -43,6 +43,7 @@
 #include <wchar.h>
 
 #include "ts.h"
+#include "padassign.h"
 
 #define THISCALL __attribute__((thiscall))
 
@@ -146,45 +147,7 @@ static int pad_count;
 
 static void resolve_pads(int split, int *o1, int *o2)
 {
-    int n = 0, pads[XUSER_MAX_COUNT];
-    for (int i = 0; i < XUSER_MAX_COUNT; i++)
-        if (connected[i])
-            pads[n++] = i;
-    int d1 = dev_choice[0], d2 = dev_choice[1];
-    if (d1 == -2 && fixed_pad >= 0)
-        d1 = fixed_pad;
-    if (d1 >= 0 && !connected[d1])   /* (a saved choice of a pad that is not there now: as automatic) */
-        d1 = -2;
-    if (d2 >= 0 && !connected[d2])
-        d2 = -2;
-    int p1 = -1, p2 = -1;
-    if (!split) {
-        *o1 = d1 == -1 ? -1 : d1 >= 0 ? d1 : n > 0 ? pads[0] : -1;
-        *o2 = -1;
-        return;
-    }
-    if (d2 >= 0)
-        p2 = d2;
-    if (d1 >= 0)
-        p1 = d1;
-    if (d1 == -2 && d2 == -2) {
-        if (n >= 2)
-            p1 = pads[0], p2 = pads[1];
-        else if (n == 1)
-            p2 = pads[0];
-    } else if (d1 == -2) {
-        for (int i = 0; i < n && p1 < 0; i++)
-            if (pads[i] != p2)
-                p1 = pads[i];
-    } else if (d2 == -2) {
-        for (int i = 0; i < n && p2 < 0; i++)
-            if (pads[i] != p1)
-                p2 = pads[i];
-    }
-    if (p1 >= 0 && p1 == p2)
-        p1 = -1;
-    *o1 = p1;
-    *o2 = p2;
+    pad_assign(connected, fixed_pad, dev_choice, split, o1, o2);
 }
 
 int split_session_on(void);   /* split.c: split screen is on (the session chose it) */
