@@ -494,24 +494,34 @@ static const char text_set[] = "0123456789.:abcdefghijklmnopqrstuvwxyzABCDEFGHIJ
 static int text_on, text_pending, text_idx;
 
 /* The UI's "focus" (vtable +0x120, 0x597c10) is the top FRAME of the stack when nothing is modal, so every sub-frame (the pause menu,
- * Options, ...) looked like a text field and the d-pad, A and the stick were swallowed there (found 2026-11-25 in the pause menu work:
- * the pad did not move the highlight of the pause menu). A frame hands a typed character to its children one after the other (0x700790:
- * the children list starts at +0x44, the next child at +0x48, each child's +0x5c takes the character); the default of that slot, the
- * one of the frame, buttons and labels, is 0x700790 itself. Only a frame that has a child with another handler (an edit field) is a
- * text entry. */
-#define CHAR_DEFAULT 0x00700790
-static int has_text_child(BYTE *e, int depth)
+ * Options, the join lists, ...) looked like a text field and the d-pad, A and the stick were swallowed there (found 2026-11-25 in the
+ * pause menu work: the pad did not move the highlight of the pause menu). A text entry is a frame that has an edit field in its tree:
+ * the element class `input` (vtable 0xdb32a8, seen in the Direct connection frame, absent from the join lists and the other frames;
+ * children list: first child +0x44, next sibling +0x48). */
+#define INPUT_VT 0x00db32a8
+static int has_input(BYTE *e, int depth)
 {
     int n = 0;
-    if (depth > 4)
+    if (depth > 6)
         return 0;
     for (BYTE *c = *(BYTE **)(e + 0x44); c && n < 64; c = *(BYTE **)(c + 0x48), n++) {
         if (IsBadReadPtr(c, 0x4c) || IsBadReadPtr(*(void **)c, 0x60))
             return 0;
-        if (((DWORD *)*(void **)c)[0x5c / 4] != CHAR_DEFAULT || has_text_child(c, depth + 1))
+        if (*(DWORD *)c == INPUT_VT || has_input(c, depth + 1))
             return 1;
     }
     return 0;
+}
+
+static void tree_dump(BYTE *e, int depth, char *buf, int *k, int size)
+{
+    int n = 0;
+    if (depth > 5)
+        return;
+    for (BYTE *c = *(BYTE **)(e + 0x44); c && n < 40 && *k < size - 40 && !IsBadReadPtr(c, 0x4c) && !IsBadReadPtr(*(void **)c, 0x60); c = *(BYTE **)(c + 0x48), n++) {
+        *k += snprintf(buf + *k, size - *k, " %d:%x", depth, *(unsigned *)c);
+        tree_dump(c, depth + 1, buf, k, size);
+    }
 }
 
 static void *text_focus(void)
@@ -522,7 +532,17 @@ static void *text_focus(void)
     void *e = ((void *(THISCALL *)(void *))(*(void ***)ui)[0x120 / 4])(ui);
     if (!e || IsBadReadPtr(e, 0x4c) || IsBadReadPtr(*(void **)e, 0x60))
         return NULL;
-    return ((DWORD *)*(void **)e)[0x5c / 4] != CHAR_DEFAULT || has_text_child(e, 0) ? e : NULL;
+    if (padlog) {   /* (tests: the classes in a frame's tree, once per frame object) */
+        static void *last;
+        if (e != last) {
+            last = e;
+            char buf[1000];
+            int k = snprintf(buf, sizeof buf, "gamepad: ui focus %p vtable %08x tree:", e, *(unsigned *)e);
+            tree_dump(e, 0, buf, &k, sizeof buf);
+            ts_log("%s", buf);
+        }
+    }
+    return has_input(e, 0) ? e : NULL;
 }
 
 static void type_char(unsigned ch)
