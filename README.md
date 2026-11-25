@@ -69,7 +69,7 @@ The setup exe is not code-signed, so Windows SmartScreen may warn ("More info" -
 | Esc -> READY / NOT READY | the Ready step before the first chapter |
 | Esc -> Regroup | on a client: moves you to the host's player; on the host: brings every living client to the host |
 | Start / Esc in a cutscene or film | in a co-op game: your vote to skip it (the screen shows the votes); the scene ends for everybody when every player has voted |
-| Gamepads | Xbox-style (XInput) pads in the game and its menus; split screen: player 1 on keyboard and mouse or pad 1, player 2 on pad 2 |
+| Gamepads | Xbox-style (XInput) pads in the game and its menus; split screen: player 2 on a gamepad, player 1 on keyboard and mouse (one pad is enough) or on pad 1 |
 | Video options -> Screen mode | Full screen, Borderless or Window (applies at the next start) |
 
 ## Languages

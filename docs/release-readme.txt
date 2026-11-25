@@ -55,12 +55,16 @@ What the mod does
 - Screen modes: in the game's own Video options, "Screen mode": Full screen, Borderless (full screen
   without a frame, quick switching to other programs) or Window. It changes at the next start.
 - Gamepads: Xbox-style (XInput) pads in the game and in its menus.
-- Split screen: two players on one PC, player 1 on keyboard and mouse or pad 1, player 2 on pad 2.
-  You need a second XInput gamepad. Main menu -> Co-op -> SPLIT SCREEN: pick the chapter and the
-  difficulty, Start (without a second pad the menu says so and starts nothing). Going back to the
-  main menu ends it. Each player has an own view, weapons, HUD and pick-ups; player 2 comes back
+- Split screen: two players on one PC, player 2 on an XInput gamepad, player 1 on keyboard and mouse
+  (one gamepad is enough) or on a first gamepad when two are connected. Main menu -> Co-op -> SPLIT
+  SCREEN: pick the chapter and the difficulty, Start (without a gamepad the menu says so and starts
+  nothing); the two "controls" rows choose the device of each player. Going back to the main menu
+  ends it. Each player has an own view, weapons, HUD and pick-ups; player 2 comes back
   beside player 1 when it dies.
-- Split screen in a network game: in the Co-op menu set "Second player on pad 2" to On, then host or
+- Pause menu: in a co-op or split screen game the pause menu has a Co-op button: the mod version, who
+  plays, the second player on / off, the controls of each player, swap gamepads, and for the host the
+  game's Player control (kick). The network pause menu also has Regroup.
+- Split screen in a network game: in the Co-op menu set "Second player on a gamepad" to On, then host or
   join as usual. On a host both halves of its screen play in the session and the other players see
   both bodies. On a client the second player is supported in basic form (experimental).
 

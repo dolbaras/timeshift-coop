@@ -114,8 +114,17 @@ InvertY=0        ; 1: right stick up looks down
 Vibration=1      ; 0: no rumble (the game's own vibration option also applies)
 ```
 
-Local player 2 (for the planned split screen) gets the next connected pad. `gamepad_slot(1)` returns it;
-nothing uses it yet.
+Who uses which pad (split screen; `native/padassign.h`, offline check `native/tests/padassign_test.c`). Each local human has an input
+choice: player 1 automatic / keyboard and mouse / gamepad 1-4, player 2 automatic / gamepad 1-4 (the pause menu's Co-op frame and the Co-op
+menu's Split screen frame have the two rows; the choice is kept in the profile keys `CoopDev1` / `CoopDev2` and reaches the DLL as UI strings).
+Automatic: with two or more pads player 1 gets the first and player 2 the next (as before); with ONE pad it is player 1's while the screen is
+not split and player 2's once it is split, and player 1 then plays on keyboard and mouse. A pad serves one player (player 2 is served first); a
+saved choice of a pad that is not connected counts as automatic. While a menu is up, the pad of player 2 steers the menu when player 1 has no
+pad (the one pad is player 2's). `gamepad_slot(1)` is always the assignment with split screen (the menus ask it before the screen is split).
+
+Typing with the pad (direct address, password) is on only while the open frame has an edit field in its tree (element class `input`, vtable
+0xdb32a8). Before 2026-11-25 (0.1.7 and older) every sub-frame counted as a text field (the UI's "focus" is the top frame), so the pad's d-pad, A and
+stick did nothing in the pause menu, Options and the join lists.
 
 Test variables: `TS_PAD=1-4` picks that pad and reads it even while the window is not in front (test
 windows never are). `TS_PADLOG=1` writes pad changes, command changes of the active context, rumble and

@@ -31,10 +31,11 @@
 > step is tested on `work\install_test` only (not on a real install).
 
 
-Two players on one PC: player 1 on keyboard, mouse and pad 1, player 2 on pad 2. The screen is split side by
+Two players on one PC: player 1 on keyboard and mouse (or a gamepad), player 2 on a gamepad; one gamepad is enough (player 1 then plays on
+keyboard and mouse); with two, player 1 may also use the first one (the default). The screen is split side by
 side on wide screens and top and bottom on others. The player turns it on in the mod's Co-op menu: **Co-op ->
 Split screen** shows the campaign's chapters (as the Co-op host frame) and the difficulty; **Start** starts the
-chapter as a single-player game with split screen on. Without a second pad the frame says so (`COOP_ERR_PAD2`)
+chapter as a single-player game with split screen on. Without any pad the frame says so (`COOP_ERR_PAD2`)
 and starts nothing. Going back to the main menu ends split screen (player 2 is removed). The environment
 variable `TS_SPLIT=1` still forces it on for tests (`TS_SPLIT=0`: never). The code is `native/split.c`; the
 menu is `data/ui/coopsplit.ui` and `data/coop_menu.py`, its texts `data/coop_strings.py`; the static research
@@ -49,7 +50,8 @@ instead of ending the game, stays through a level change, and each player sees t
 
 | | |
 |---|---|
-| What you need | two gamepads (XInput). Player 1 plays with keyboard and mouse or pad 1, player 2 with pad 2 |
+| What you need | one gamepad (XInput) for player 2; player 1 plays on keyboard and mouse. With two gamepads player 1 may use pad 1 (the default) or keep the keyboard. The input of each player can be chosen: Co-op -> Split screen has two rows, and the pause menu's **Co-op** frame has them too, with a swap button |
+| The pause menu's Co-op frame | in a split screen game (single player pause menu `InGameMenu`) and in a network co-op game (the real Esc frame is the exe's `InGameMultiTeam`, the PC member of that name, key 6f8c8918e3d9a64f): mod version, who plays, **Second player** on / off (live; a safe moment: no cinematic; the second player comes in 5 s after the switch), the input rows, **Swap gamepads**, and for the host **Player control** (the game's own list with KICK / BAN). The network pause frame also has **Regroup** now (the earlier edit of ingamemulti.ui was never what Esc shows). Rows that do not apply are not shown (no gamepad: no input rows) |
 | Two players on one PC | main menu -> **Co-op** -> **Split screen**, pick the chapter and the difficulty, **Start**. The screen splits side by side on wide screens, top and bottom otherwise. Back to the main menu ends it |
 | Two players on one PC in a network co-op game | in the **Co-op** frame set **Second player on pad 2** to On (kept in the profile), then host or join a co-op game as usual. **Hosting**: your screen is split, player 2 plays on your PC and is seen by the other players (tested with `TS_SPLIT=1`, which this option now sets in a hosted game; the option itself on a host is not run yet). **Joining**: the host runs your second player, your screen is split (the host side is tested, the joining PC's second half is not tested yet, see round 18) |
 | Each player has | an own camera, first-person weapon, crosshair, HUD (life, ammunition, grenades, time energy), screen effects (damage, death, low life), pick-up messages, pick-ups and weapons; prompts name the button of the player's own device |
