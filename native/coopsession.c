@@ -235,23 +235,6 @@ int coopsession_clients(int *ids, char names[][28], int max)
     return n;
 }
 
-/* host: the stock network layer's Kick (net::PEER_NETWORK vtable +0x20, thiscall (peer, reason text), hooked and logged by netfix.c) */
-int coopsession_kick(int peer)
-{
-    typedef void (__attribute__((thiscall)) *kick_fn)(void *, int, const char *);
-    int ids[8];
-    char names[8][28];
-    int n = coopsession_clients(ids, names, 8);
-    for (int i = 0; i < n; i++)
-        if (ids[i] == peer) {
-            void **vt = *(void ***)PEER_NETWORK;
-            CLOG("coopsession: the host removes client %d (%s) from the pause menu", peer, names[i]);
-            ((kick_fn)vt[0x20 / 4])(PEER_NETWORK, peer, "KICK");
-            return 1;
-        }
-    return 0;
-}
-
 int ts_coop_feature(int flag)
 {
     if (!ts_coop_active())

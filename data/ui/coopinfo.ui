@@ -189,100 +189,18 @@ child = [
             text        = COOP_BTN_SWAP
          }
          {
-            type        = select
-            name        = KickWho
-            posX        = 10%, 80%
+            type        = button
+            name        = PlayerControl
+            posX        = center, 100%
             posY        = 270, 30
-            text        = COOP_OPT_KICK
-            textAlign   = left centerY
-            typeVal     = String
-
-            child = [
-               {
-                  type      = button
-                  texture   = arrow_left
-                  name      = left
-                  posX      = -175, 30
-                  posY      = 0, 30
-                  textureMirror  = false
-                  NoSoundOnFocus = true
-                  texHighlighted = true
-               }
-               {
-                  type      = button
-                  texture   = arrow_right
-                  name      = right
-                  posX      = -30, 30
-                  posY      = 0, 30
-                  textureMirror  = false
-                  NoSoundOnFocus = true
-                  texHighlighted = true
-               }
-               {
-                  type      = text
-                  name      = value
-                  textScale = 8
-                  textAlign = centerX centerY
-                  posX      = -160, -15
-                  posY      = 5, 20
-                  NoSoundOnFocus = true
-               }
-            ]
+            text        = UI_BTN_KICK_PLAYER
          }
          {
             type        = button
-            name        = Kick
+            name        = PlayerControl2
             posX        = center, 100%
-            posY        = 305, 30
-            text        = UI_BTN_KICK
-         }
-         {
-            type        = select
-            name        = KickWho2
-            posX        = 10%, 80%
             posY        = 130, 30
-            text        = COOP_OPT_KICK
-            textAlign   = left centerY
-            typeVal     = String
-
-            child = [
-               {
-                  type      = button
-                  texture   = arrow_left
-                  name      = left
-                  posX      = -175, 30
-                  posY      = 0, 30
-                  textureMirror  = false
-                  NoSoundOnFocus = true
-                  texHighlighted = true
-               }
-               {
-                  type      = button
-                  texture   = arrow_right
-                  name      = right
-                  posX      = -30, 30
-                  posY      = 0, 30
-                  textureMirror  = false
-                  NoSoundOnFocus = true
-                  texHighlighted = true
-               }
-               {
-                  type      = text
-                  name      = value
-                  textScale = 8
-                  textAlign = centerX centerY
-                  posX      = -160, -15
-                  posY      = 5, 20
-                  NoSoundOnFocus = true
-               }
-            ]
-         }
-         {
-            type        = button
-            name        = Kick2
-            posX        = center, 100%
-            posY        = 165, 30
-            text        = UI_BTN_KICK
+            text        = UI_BTN_KICK_PLAYER
          }
       ]
    }
@@ -370,38 +288,21 @@ ssl = <<<
          end
       end
 
-      // the host removes a player (the stock network layer's kick); the row stands at the top when no input row is there
-      Element("KickWho").Show(false)
-      Element("Kick").Show(false)
-      Element("KickWho2").Show(false)
-      Element("Kick2").Show(false)
+      // the host removes a player: the game's own player control frame (list with KICK and BAN); its button stands at the top when
+      // no input row is there
+      Element("PlayerControl").Show(false)
+      Element("PlayerControl2").Show(false)
       if role == "host"
          if $ui.GetStr("CoopPeer0") != ""
             if pads == "0" or pads == ""
-               Fill("KickWho2")
-               Element("KickWho2").Show(true)
-               Element("Kick2").Show(true)
+               Element("PlayerControl2").Show(true)
             else
-               Fill("KickWho")
-               Element("KickWho").Show(true)
-               Element("Kick").Show(true)
+               Element("PlayerControl").Show(true)
             end
          end
       end
    end
 
-   func Fill(name : string)
-      Element(name).AddItem($ui.GetStr("CoopPeer0"), "0")
-      if $ui.GetStr("CoopPeer1") != ""
-         Element(name).AddItem($ui.GetStr("CoopPeer1"), "1")
-      end
-      if $ui.GetStr("CoopPeer2") != ""
-         Element(name).AddItem($ui.GetStr("CoopPeer2"), "2")
-      end
-      Element(name).SetVal("0")
-   end
-
-   // the saved choice of a device row (profile; automatic when nothing is saved)
    func DevVal(key : string) : string
       var v : string
       v := $ui.GetStr(key)
@@ -477,28 +378,12 @@ ssl = <<<
       end
    end
 
-   override OnButtonPressed("Kick")
-      AskKick(Element("KickWho"))
+   override OnButtonPressed("PlayerControl")
+      $ui.SwitchFrame("ControlPlayer")
    end
 
-   override OnButtonPressed("Kick2")
-      AskKick(Element("KickWho2"))
-   end
-
-   func AskKick(who : object)
-      $ui.SetStr("CoopKickPick", who.GetVal())
-      InitKickConfirm($ui.ShowFrame("Confirmation"), $ui.GetStr("CoopPeer" + who.GetVal()))
-   end
-
-   func InitKickConfirm(frm : object, name : string)
-      frm.Element("Message").SetText("COOP_PAUSE_KICK_ASK," + name)
-      frm.Element("Caption").SetText("UI_BTN_KICK")
-      frm.SetStr("confid", "CoopKick")
-   end
-
-   override OnResult("CoopKick", "Yes")
-      $ui.SetStr("CoopKickReq", $ui.GetStr("CoopKickPick"))
-      $ui.CloseMenu()
+   override OnButtonPressed("PlayerControl2")
+      $ui.SwitchFrame("ControlPlayer")
    end
 
    override OnButtonPressed("Back")

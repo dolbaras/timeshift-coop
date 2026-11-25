@@ -13,15 +13,15 @@
  *     CoopSafe        1 = a cinematic-free moment in play: the second player may be switched
  *     CoopRoleNow     "" / "host" / "client" (the network session, coopsession.c)
  *     CoopPlayers     "Name, Name, ..." (host: itself and the joined clients; client: itself)
- *     CoopPeerN       N = 0..2: the host's joined clients' names (for the "remove player" row), "" = none
+ *     CoopPeerN       N = 0..2: the host's joined clients' names ("" = none: the "player control" button needs one)
  *   frame -> DLL (read about twice a second, cleared when handled):
  *     CoopDev1 / CoopDev2   the input devices: a automatic, k keyboard and mouse (player 1 only), 1-4 gamepad number
  *     CoopSplitReq          "1" / "0": second player on / off
- *     CoopKickReq           N: the host removes CoopPeerN
  *
  * Why the DLL does the work: split screen on / off is the existing CoopSplit (single player game) / CoopSplitJoin (network game)
  * choice that split.c polls once a second, and a drop-in waits for a safe moment there (split_choice); the removal of a player is the
- * stock network layer's Kick (coopsession.c coopsession_kick).
+ * game's own player control frame (ControlPlayer: KICK / BAN), opened by the frame's button; a direct call of the network layer's Kick
+ * (vtable 0xdb5754 + 0x20 -> 0x76a060 -> transport 0x77fcf0) crashed the host (live 2026-11-25: null connection record).
  */
 #include <windows.h>
 #include <stdio.h>
@@ -32,7 +32,6 @@
 
 int coopsession_role(void);
 int coopsession_clients(int *ids, char names[][28], int max);
-int coopsession_kick(int peer);
 void gamepad_set_devices(int p1, int p2);
 int gamepad_count(void);
 int split_session_on(void);
@@ -66,7 +65,7 @@ void pausemenu_poll(void)
 
     /* frame -> DLL (one script call; a missing string is "") */
     ts_script_run("return $ui.GetStr(\"CoopDev1\") + \"|\" + $ui.GetStr(\"CoopDev2\") + \"|\" + $ui.GetStr(\"CoopSplitReq\") + \"|\" + "
-                  "$ui.GetStr(\"CoopKickReq\")",
+                  "\"\"",
                   out, sizeof out);
     char *f[4] = {"", "", "", ""};
     int nf = 0;
@@ -89,14 +88,6 @@ void pausemenu_poll(void)
             split_dropin_request(on);
             snprintf(ssl, sizeof ssl, "$ui.SetStr(\"%s\", \"%d\")\n$ui.SetStr(\"CoopSplitReq\", \"\")", role ? "CoopSplitJoin" : "CoopSplit", on);
             ts_script_run(ssl, out, sizeof out);
-        }
-        if (f[3][0] >= '0' && f[3][0] < '0' + MAXC) {
-            int k = f[3][0] - '0';
-            ts_script_run("$ui.SetStr(\"CoopKickReq\", \"\")", out, sizeof out);
-            if (k < snap_n) {
-                ts_log("pausemenu: remove player %d (peer %d) requested", k, snap_ids[k]);
-                coopsession_kick(snap_ids[k]);
-            }
         }
     }
 
