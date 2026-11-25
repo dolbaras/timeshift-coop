@@ -28,7 +28,7 @@ player was switched off). The Co-op frame "Split screen" (CoopSplit) has the sam
 
 UI strings shared with the DLL and the lab's test recipe: CoopSession ("host" / "client" / ""),
 CoopDifficulty, CoopMaxPlayers, CoopLevel, CoopStage, CoopAuto, CoopError, CoopDataVersion, CoopSplit,
-CoopPad2, CoopSplitJoin; for the pause frame / input rows (native/pausemenu.c has the list): CoopDev1, CoopDev2, CoopSplitReq,
+CoopPad2, CoopSplitJoin; for the pause frame / input rows (native/pausemenu.c has the list): CoopDev1, CoopDev2, CoopLayout, CoopSplitReq,
 CoopKickReq, CoopPads, CoopPadNow1/2, CoopSplitOn, CoopSafe, CoopRoleNow, CoopPlayers, CoopPeer0-2.
 """
 import re
@@ -53,6 +53,11 @@ RESTORE_FUNCS = '''   // co-op mod: the input devices of the two local players (
          v := "a"
       end
       $ui.SetStr("CoopDev2", v)
+      v := $ui.GetUserVar("CoopLayout")
+      if v != "v" and v != "h"
+         v := "a"
+      end
+      $ui.SetStr("CoopLayout", v)
    end
 
    // co-op mod: joining with split screen (the Co-op frame's option, kept in the profile)

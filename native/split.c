@@ -557,6 +557,20 @@ static void bb_size(int *w, int *h)
     *h = desc ? *(int *)(desc + 0xc) : 0;
 }
 
+/* The layout the player chose in the Co-op frames (pausemenu.c reads the UI string CoopLayout: a automatic, v side by side, h top
+ * and bottom). The test variable TS_SPLIT_LAYOUT wins when it is set. Read every frame, so a change shows at once (the HUD canvas
+ * of the half's shape is laid out again by the frame start when the half's shape changes). */
+static int layout_env;
+
+void split_set_layout(char c)
+{
+    int v = c == 'v' || c == 'h' ? c : 0;
+    if (layout_env || v == layout_cfg)
+        return;
+    layout_cfg = v;
+    ts_log("split: layout %s (the Co-op frame's choice)", v ? (v == 'v' ? "side by side" : "top and bottom") : "automatic");
+}
+
 /* side by side (1) or top and bottom (0) */
 static int side_by_side(int w, int h)
 {
@@ -4255,8 +4269,10 @@ void split_install(void)
     stage = forced > 0 ? 3 : 0;
     if (forced > 0 && ts_env("TS_SPLIT_STAGE", v, sizeof v) && v[0] >= '1' && v[0] <= '3')
         stage = v[0] - '0';
-    if (ts_env("TS_SPLIT_LAYOUT", v, sizeof v) && (v[0] == 'v' || v[0] == 'h'))
+    if (ts_env("TS_SPLIT_LAYOUT", v, sizeof v) && (v[0] == 'v' || v[0] == 'h')) {
         layout_cfg = v[0];
+        layout_env = 1;
+    }
     keep_mt = ts_env("TS_SPLIT_MT", v, sizeof v) && v[0] == '1';
     {   /* both views in every frame: TS_SPLIT_BOTH=1/0, else ts_coop.ini [Split] BothViews=1 (off by default) */
         char ini[MAX_PATH];

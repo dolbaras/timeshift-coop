@@ -75,7 +75,7 @@ child = [
             name      = Hint
             text      = COOP_HINT_SPLIT
             posX      = 52%, -15
-            posY      = 180, 20
+            posY      = 172, 20
             textScale = 8
             textAlign = leftX centerY
             textColor = 255 255 255 255
@@ -85,7 +85,7 @@ child = [
             type        = select
             name        = CoopDev1
             posX        = 52%, -15
-            posY        = 240, 30
+            posY        = 235, 30
             text        = COOP_OPT_DEV1
             textAlign   = left centerY
             typeVal     = String
@@ -126,8 +126,49 @@ child = [
             type        = select
             name        = CoopDev2
             posX        = 52%, -15
-            posY        = 275, 30
+            posY        = 265, 30
             text        = COOP_OPT_DEV2
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = select
+            name        = CoopLayout
+            posX        = 52%, -15
+            posY        = 295, 30
+            text        = COOP_OPT_LAYOUT
             textAlign   = left centerY
             typeVal     = String
 
@@ -167,7 +208,7 @@ child = [
             type        = select
             name        = CoopDifficulty
             posX        = 52%, -15
-            posY        = 310, 30
+            posY        = 325, 30
             text        = UI_ADVSERV_DIFFICULTY
             textAlign   = left centerY
             section     = Multiplayer
@@ -265,6 +306,27 @@ ssl = <<<
       Element("CoopDev2").AddItem("COOP_DEV_PAD4", "4")
       Element("CoopDev1").SetVal(DevVal("CoopDev1"))
       Element("CoopDev2").SetVal(DevVal("CoopDev2"))
+      // the split screen layout: automatic, side by side, top and bottom (kept in the profile)
+      Element("CoopLayout").AddItem("COOP_DEV_AUTO", "a")
+      Element("CoopLayout").AddItem("COOP_LAY_SIDE", "v")
+      Element("CoopLayout").AddItem("COOP_LAY_TOPBOT", "h")
+      Element("CoopLayout").SetVal(LayVal())
+   end
+
+   func LayVal() : string
+      var v : string
+      v := $ui.GetStr("CoopLayout")
+      if v == ""
+         v := $ui.GetUserVar("CoopLayout")
+      end
+      if v != "v" and v != "h"
+         v := "a"
+      end
+      return v
+   end
+
+   override OnSelectSelection("CoopLayout")
+      SaveDev("CoopLayout")
    end
 
    func DevVal(key : string) : string

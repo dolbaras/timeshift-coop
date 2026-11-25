@@ -101,9 +101,50 @@ child = [
          }
          {
             type        = select
-            name        = CoopDev1
+            name        = CoopLayout
             posX        = 10%, 80%
             posY        = 165, 30
+            text        = COOP_OPT_LAYOUT
+            textAlign   = left centerY
+            typeVal     = String
+
+            child = [
+               {
+                  type      = button
+                  texture   = arrow_left
+                  name      = left
+                  posX      = -175, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = button
+                  texture   = arrow_right
+                  name      = right
+                  posX      = -30, 30
+                  posY      = 0, 30
+                  textureMirror  = false
+                  NoSoundOnFocus = true
+                  texHighlighted = true
+               }
+               {
+                  type      = text
+                  name      = value
+                  textScale = 8
+                  textAlign = centerX centerY
+                  posX      = -160, -15
+                  posY      = 5, 20
+                  NoSoundOnFocus = true
+               }
+            ]
+         }
+         {
+            type        = select
+            name        = CoopDev1
+            posX        = 10%, 80%
+            posY        = 200, 30
             text        = COOP_OPT_DEV1
             textAlign   = left centerY
             typeVal     = String
@@ -144,7 +185,7 @@ child = [
             type        = select
             name        = CoopDev2
             posX        = 10%, 80%
-            posY        = 200, 30
+            posY        = 235, 30
             text        = COOP_OPT_DEV2
             textAlign   = left centerY
             typeVal     = String
@@ -185,14 +226,14 @@ child = [
             type        = button
             name        = SwapPads
             posX        = center, 100%
-            posY        = 235, 30
+            posY        = 270, 30
             text        = COOP_BTN_SWAP
          }
          {
             type        = button
             name        = PlayerControl
             posX        = center, 100%
-            posY        = 270, 30
+            posY        = 305, 30
             text        = UI_BTN_KICK_PLAYER
          }
          {
@@ -261,11 +302,16 @@ ssl = <<<
       Element("CoopSplitJoin").AddItem("UI_SOFF", "0")
       Element("CoopSplitJoin").AddItem("UI_SON", "1")
       Element("CoopSplitJoin").SetVal(split)
+      Element("CoopLayout").AddItem("COOP_DEV_AUTO", "a")
+      Element("CoopLayout").AddItem("COOP_LAY_SIDE", "v")
+      Element("CoopLayout").AddItem("COOP_LAY_TOPBOT", "h")
+      Element("CoopLayout").SetVal(LayVal())
 
       // no gamepad: nothing to choose, no second player (only the keyboard and mouse)
       if pads == "0" or pads == ""
          Element("CoopDev1").Show(false)
          Element("CoopDev2").Show(false)
+         Element("CoopLayout").Show(false)
          Element("SwapPads").Show(false)
          Element("Pad1Line").Show(false)
          Element("Pad2Line").Show(false)
@@ -315,6 +361,20 @@ ssl = <<<
       return v
    end
 
+   // the split screen layout (kept in the profile like the input rows; the DLL reads the UI string): a automatic, v side by side,
+   // h top and bottom
+   func LayVal() : string
+      var v : string
+      v := $ui.GetStr("CoopLayout")
+      if v == ""
+         v := $ui.GetUserVar("CoopLayout")
+      end
+      if v != "v" and v != "h"
+         v := "a"
+      end
+      return v
+   end
+
    func ShowPadLines()
       var n1 : string
       var n2 : string
@@ -337,6 +397,10 @@ ssl = <<<
       if Element("CoopSplitJoin").GetVal() != $ui.GetStr("CoopSplitOn")
          $ui.SetStr("CoopSplitReq", Element("CoopSplitJoin").GetVal())
       end
+   end
+
+   override OnSelectSelection("CoopLayout")
+      SaveDev("CoopLayout")
    end
 
    override OnSelectSelection("CoopDev1")

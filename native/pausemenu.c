@@ -16,6 +16,7 @@
  *     CoopPeerN       N = 0..2: the host's joined clients' names ("" = none: the "player control" button needs one)
  *   frame -> DLL (read about twice a second, cleared when handled):
  *     CoopDev1 / CoopDev2   the input devices: a automatic, k keyboard and mouse (player 1 only), 1-4 gamepad number
+ *     CoopLayout            the split screen layout: a automatic, v side by side, h top and bottom (split.c split_set_layout)
  *     CoopSplitReq          "1" / "0": second player on / off
  *
  * Why the DLL does the work: split screen on / off is the existing CoopSplit (single player game) / CoopSplitJoin (network game)
@@ -37,6 +38,7 @@ int gamepad_count(void);
 int split_session_on(void);
 int split_safe_moment(void);
 void split_dropin_request(int on);
+void split_set_layout(char c);
 int ts_profile_value(const char *key, char *out, int size);
 
 #define MAXC 3
@@ -65,11 +67,11 @@ void pausemenu_poll(void)
 
     /* frame -> DLL (one script call; a missing string is "") */
     ts_script_run("return $ui.GetStr(\"CoopDev1\") + \"|\" + $ui.GetStr(\"CoopDev2\") + \"|\" + $ui.GetStr(\"CoopSplitReq\") + \"|\" + "
-                  "\"\"",
+                  "$ui.GetStr(\"CoopLayout\") + \"|\" + \"\"",
                   out, sizeof out);
-    char *f[4] = {"", "", "", ""};
+    char *f[5] = {"", "", "", "", ""};
     int nf = 0;
-    for (char *p = out; nf < 4;) {
+    for (char *p = out; nf < 5;) {
         f[nf++] = p;
         char *bar = strchr(p, '|');
         if (!bar)
@@ -77,8 +79,9 @@ void pausemenu_poll(void)
         *bar = 0;
         p = bar + 1;
     }
-    if (nf == 4) {
+    if (nf == 5) {
         gamepad_set_devices(dev_of(f[0], 0), dev_of(f[1], 1));
+        split_set_layout(f[3][0]);
         int role = coopsession_role();
         if (f[2][0] == '0' || f[2][0] == '1') {
             int on = f[2][0] == '1';
