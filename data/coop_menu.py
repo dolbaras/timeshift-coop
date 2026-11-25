@@ -398,6 +398,57 @@ def build(ctx):
    override OnButtonPressed("ResumeGame")'''),
     ])
 
+    # ---- the REAL pause menu of a network game: the frame InGameMultiTeam (the exe asks for it, FUN_004fbdb0 0x4fbdb0, in every mode but
+    # single player). The game has three members of that name; the PC one is the third (key 6f8c8918e3d9a64f: Resume and Quit in the
+    # bottom bar, a tab select Main / Menu / Control, Spectate / Change team / Ready on the Main tab). The Control tab is the stock host
+    # menu with "Player control" (the stock kick). Found 2026-11-25: the ingamemulti.ui edit above (Regroup, the lower Quit) is not what
+    # Esc shows. Here, in a co-op session only (UI string CoopSession): "Regroup" and "Co-op" below Ready on the Main tab.
+    ctx.edit("CacheBlock/ps/6f8c8918e3d9a64f", [
+        ('''                  name        = Ready
+                  posX        = center, 80%
+                  posY        = 170, 30
+                  text        = UI_BTN_READY
+               }
+''', '''                  name        = Ready
+                  posX        = center, 80%
+                  posY        = 170, 30
+                  text        = UI_BTN_READY
+               }
+               {
+                  type        = button
+                  name        = Regroup
+                  posX        = center, 80%
+                  posY        = 210, 30
+                  text        = COOP_BTN_REGROUP
+               }
+               {
+                  type        = button
+                  name        = CoopSettings
+                  posX        = center, 80%
+                  posY        = 250, 30
+                  text        = COOP_BTN_COOP
+               }
+'''),
+        ('''      $ui.SetStr("SinglePlayer", "No")
+''', '''      $ui.SetStr("SinglePlayer", "No")
+      // co-op mod: Regroup and the Co-op page exist in a co-op session only
+      if $ui.GetStr("CoopSession") == ""
+         Element("Regroup").Show(false)
+         Element("CoopSettings").Show(false)
+      end
+'''),
+        ('''   override OnButtonPressed("ChangeTeam")''', '''   override OnButtonPressed("Regroup")
+      $ui.SetStr("CoopRegroup", "1")
+      $ui.CloseMenu()
+   end
+
+   override OnButtonPressed("CoopSettings")
+      $ui.SwitchFrame("CoopInfo")
+   end
+
+   override OnButtonPressed("ChangeTeam")'''),
+    ])
+
     # ---- the single-player pause frame in a split-screen game: "Co-op" (players, second player, input devices) ----
     # The frame is the stock InGameMenu (Resume 30, Restart 70, Load 110, Save 150, Options 190, Quit 230, Exit game 290). While a
     # split-screen game runs (UI string CoopSplit set by the Co-op menu's Split screen: "1", "0" after the second player was switched
