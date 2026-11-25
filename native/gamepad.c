@@ -744,6 +744,19 @@ void gamepad_lab_key(int code, int ms)
     InterlockedExchange(&lab_key_code, code >= 0 && code < 0x108 ? code : -1);
 }
 
+/* (lab, pause-menu work) mouse movement for player 1 through the game's own input: "!pr mouse <dx> [ms]" holds a mouse X axis value of dx
+ * (per frame, + right, - left; the aisync.c walk uses the same codes 0x12c / 0x12d) for some milliseconds, after the engine's own
+ * keyboard poll, so the look command gets it the way a real mouse gives it. Proves keyboard and mouse aiming of player 1 while the
+ * pad belongs to player 2 (the pad pass writes the joystick codes only). */
+static volatile LONG lab_mouse_dx;
+static volatile DWORD lab_mouse_until;
+
+void gamepad_lab_mouse(int dx, int ms)
+{
+    lab_mouse_until = GetTickCount() + (DWORD)(ms > 0 ? ms : 500);
+    lab_mouse_dx = dx;
+}
+
 static void THISCALL hook_kb_poll(void *raw)
 {
     if (poll_player2) {
@@ -759,6 +772,10 @@ static void THISCALL hook_kb_poll(void *raw)
             ((float *)((BYTE *)raw + 0x10))[lk] = 1.0f;
         else
             InterlockedCompareExchange(&lab_key_code, -1, lk);
+    }
+    if (lab_mouse_dx && (LONG)(GetTickCount() - lab_mouse_until) < 0) {
+        float *mv = (float *)((BYTE *)raw + 0x10);
+        mv[lab_mouse_dx > 0 ? 0x12c : 0x12d] = (float)(lab_mouse_dx > 0 ? lab_mouse_dx : -lab_mouse_dx);
     }
     {   /* (keyboard keys and mouse buttons pressed: player 1 uses keyboard and mouse) */
         float *v = (float *)((BYTE *)raw + 0x10);

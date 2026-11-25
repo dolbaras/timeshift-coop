@@ -95,6 +95,7 @@ void gamepad_install(void);
 int gamepad_slot(int player);   /* XInput pad index of local player 0/1, -1 = none */
 void gamepad_poll_player2(int on);   /* split.c: the next input polls read pad 2 for local player 2 */
 void gamepad_lab_key(int code, int ms);   /* (lab) hold a keyboard code for ms as if the keyboard reported it ("!pr key") */
+void gamepad_lab_mouse(int dx, int ms);   /* (lab) hold a mouse X axis value for ms ("!pr mouse") */
 
 /* split.c: local split screen, player 2 on pad 2 (TS_SPLIT=1, prototype) */
 void split_install(void);

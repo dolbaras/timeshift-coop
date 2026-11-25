@@ -629,6 +629,11 @@ int probes_console(const char *text, char *out, int size)
         gamepad_lab_key(code, a2 > 0 ? a2 : 150);
         return snprintf(out, size, "key 0x%02x held %d ms from the next keyboard poll", code, a2 > 0 ? a2 : 150), 1;
     }
+    if (!strcmp(cmd, "mouse")) {   /* "!pr mouse <dx> [ms]" (lab): player 1's mouse moves sideways (gamepad.c) */
+        int dx = atoi(a1);
+        gamepad_lab_mouse(dx, a2 > 0 ? a2 : 500);
+        return snprintf(out, size, "mouse x %d held %d ms from the next keyboard poll", dx, a2 > 0 ? a2 : 500), 1;
+    }
     if (!strcmp(cmd, "on")) {
         probes_on(atoi(a1));
         return snprintf(out, size, "probes on (report every %d s)", period_ms / 1000), 1;
