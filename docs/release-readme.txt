@@ -15,10 +15,12 @@ What the mod does
   The Internet list and Internet hosting go through OpenSpy (a community replacement for the
   closed GameSpy servers); nothing to set up.
 - Ready step: the first chapter of a co-op game waits until every player is ready. Everybody
-  (the host too) opens the pause menu (Esc) and picks READY (NOT READY takes it back); the
-  screen shows "Select READY in Menu" until you are ready, the game's message feed names each
+  (the host too) opens the pause menu (Esc) and picks READY (NOT READY takes it back); until you
+  are ready the screen says "Press Esc and choose READY to start the game." (and "You are ready.
+  The game starts when every player is ready." after it), the game's message feed names each
   player who gets ready, and the mission starts when all players are. Until then nobody can
-  move. Chapters that follow in the same game start without it, as soon as every player has
+  move or look around (the keyboard and the mouse do not react, that is the ready step, not a
+  fault). A host who plays alone also picks READY. Chapters that follow in the same game start without it, as soon as every player has
   loaded the level (the screen names the players still loading; 60 seconds at most).
 - Cutscenes and films in a co-op game: Skip (Start or Esc) is a vote; the scene ends for everybody
   at the same moment when every player has voted.
@@ -58,17 +60,41 @@ What the mod does
 - Split screen: two players on one PC, player 2 on an XInput gamepad, player 1 on keyboard and mouse
   (one gamepad is enough) or on a first gamepad when two are connected. Main menu -> Co-op -> SPLIT
   SCREEN: pick the chapter and the difficulty, Start (without a gamepad the menu says so and starts
-  nothing); the two "controls" rows choose the device of each player. Going back to the main menu
+  nothing); the two "controls" rows choose the device of each player and the "Split screen layout"
+  row the layout: Automatic, Side by side or Top and bottom. Going back to the main menu
   ends it. Each player has an own view, weapons, HUD and pick-ups; player 2 comes back
   beside player 1 when it dies.
-- Pause menu: in a co-op or split screen game the pause menu has a Co-op button: the mod version, who
-  plays, the second player on / off, the controls of each player, swap gamepads, and for the host the
-  game's Player control (kick). The network pause menu also has Regroup.
+- Pause menu: in a co-op or split screen game the pause menu has a Co-op button (in the game's own
+  look): the mod version, who plays, the second player on / off, the controls of each player, the
+  split screen layout, swap gamepads, and for the host the game's Player Control (kick). The
+  network pause menu also has Regroup. The main menu shows "TimeShift Co-op <version> -
+  github.com/dolbaras/timeshift-coop" at its foot.
 - Split screen in a network game: in the Co-op menu set "Second player on a gamepad" to On, then host or
   join as usual. On a host both halves of its screen play in the session and the other players see
   both bodies. On a client the second player is supported in basic form (experimental).
 
-New in 0.1.7
+New in 0.1.8
+- Ready step you can see (GitHub issue 1): while the ready room holds your player, the screen says
+  "Press Esc and choose READY to start the game." every few seconds (after READY: "You are ready.
+  The game starts when every player is ready."), in the game's font and in the nine languages of the
+  game. Before, only the game's small "Select READY in Menu" line was shown, and a host who played
+  alone took the held character for a dead keyboard and mouse. The ready room still waits for friends
+  to join (a host who is alone just picks READY to begin).
+- Pause menu, Co-op page: the mod version, the players, the second player on / off, the controls
+  of each player, the split screen layout, swap gamepads and, for the host, the game's Player Control
+  (kick a player). The network pause menu has Regroup and Co-op buttons.
+- Split screen with ONE gamepad: player 1 plays on keyboard and mouse and player 2 on the gamepad
+  (before, a single gamepad was always player 1's). The rows "Player 1 controls" / "Player 2
+  controls" (Automatic, Keyboard and mouse, Gamepad 1-4) are in Co-op -> SPLIT SCREEN and on the pause
+  menu's Co-op page; they are kept in your profile. With two gamepads nothing changes.
+- Split screen layout: a row of its own, Automatic (side by side when the window is wider
+  than 3:2, else top and bottom), Side by side or Top and bottom; it can be changed in the
+  pause menu while you play.
+- The main menu foot line and the pause page show the mod version.
+- Fixed: the gamepad did not move the cursor in the pause menu's pages, in the Options and in the
+  join lists (0.1.7 and older treated every sub-page as a text field).
+
+Changes in 0.1.7
 - Level openings: the scripted people of a level's opening scene (for example the kneeling rebels
   at the start of level 2) now play their scene on the clients too; before, they stood idle there.
   This works for a player who joins later and after a team restart.
@@ -101,6 +127,14 @@ Changes in 0.1.6
   walk of player 1 in split screen while player 2 stood still.
 
 Not finished / known limits
+- Not checked in the 0.1.8 tests (it will be listed here until somebody has tried it): two real
+  gamepads with the Swap button (only a program test and one virtual gamepad were used); the Co-op page,
+  the layout row and the ready-room line on a client in a network game; the new texts on the screen
+  in German, French, Italian, Spanish, Polish, Czech and Hungarian (they were checked by a program
+  for the game's font and for length only); split screen on 1080p and on ultrawide windows (only
+  1280x720 and 1024x768 windows were looked at); aiming with a real mouse in split screen (the mouse
+  movement was injected into the game's input); a GOG copy and other builds of the game (the
+  installer accepts them, but none was run here).
 - Ready step: a second player on pad 2 in a network game (split screen on a host or a client) is not
   held while the others wait and is not counted by the ready check.
 - Quads on the quad levels (9 and 12): the enemies' quads follow the host's positions on the clients'
@@ -178,7 +212,8 @@ Requirements
   run the installer again then. The game starts through Steam or through the mod's shortcut.
 - Windows 10 or 11.
 - Every player needs the same version of the mod.
-- A second XInput gamepad for split screen.
+- One XInput gamepad for the second player of split screen (a second one is optional).
+- A licensed copy is recommended; on other versions stable work is not guaranteed.
 
 Install
 1. Run "timeshift-coop-setup-<version>.exe" (one file, nothing to extract: it unpacks itself into a
