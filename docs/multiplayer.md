@@ -1007,9 +1007,13 @@ direct connection); results at the end of this section.
   `TS_COOP_FF=1` keeps the stock friendly fire rule, `TS_COOP_MPRULES=1` the warm-up and ready system on every
   level, `TS_COOP_RADAR=0` the stock radar (`TS_SPLIT_RADAR=0`: no split-screen record; `!cp radar` = the lab's report of the player
   table and the radar's records), `TS_COOP_READY=0` no ready room (lab copies with `TS_CONSOLE`: none unless `TS_COOP_READY=1`),
-  `TS_COOP=0` switches the whole file off. In the ready room each machine holds its own player (DisableMove /
-  DisableInput through the player's vtable `+0x34c` / `+0x348`, re-asserted every second as release + set,
-  released once at the start; `native/readyroom.h`); the game's HUD shows `GAME_MP_DESC_NOT_READY` to a player who
+  `TS_COOP=0` switches the whole file off. In the ready room each machine holds its own player (from 0.1.8 DisableMove only,
+  through the player's vtable `+0x34c`; 0.1.4-0.1.7 also DisableInput `+0x348`, which killed Esc and the pad's Start so the READY
+  button could not be reached, GitHub issue 1, N100 2026-11-26: Esc ignored with both flags, the pause menu opens and READY
+  starts the mission with DisableMove only; `TS_ROOM_HOLD=3` = both flags again; the level barrier still holds both). Re-asserted every
+  second as release + set, released once at the start; `native/readyroom.h`). The mod's own HUD line (`COOP_HINT_READY` /
+  `COOP_HINT_READY_WAIT`, `ShowMsg` on the player every 3 s while the hold lasts, lab: `!cp readyhint [0|1]`) says "Press Esc and
+  choose READY"; the opening scenes of the first chapter (level scripts' own DisableInput, ~3.5 min on level 1) take no Esc; the game's HUD shows `GAME_MP_DESC_NOT_READY` to a player who
   is not ready and `GAME_MP_DESC_WARMUP` to one who is; the host sends message 44 (u8 proto, u8 on) every 2 s so that clients hold and
   offer READY even where the warm-up state does not reach them (UI strings `CoopReadyRoom`, `CoopReadyMe`).
   Live 2026-11-09 (N100 loopback pair, `ts2_city_part02`; runs `n100pair-20261109-012510`, `-012833`, `-025151`): the room on the
