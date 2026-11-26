@@ -7,9 +7,9 @@ Co-op for **TimeShift** (2007, PC; Saber Interactive / Sierra): the whole story 
 
 ## Status
 
-**Version 0.1.7** ([release notes](https://github.com/dolbaras/timeshift-coop/releases/latest)): the scripted people of a level's opening scene (such as the kneeling rebels of level 2) play their scene on the clients too; the soldiers' voices and the melee-hit sound are heard on the clients; the other player's jump and crouch sounds play at its body (not always); a soldier the host's rewind brings back to life stands up on the clients too; in split screen player 2 sets off the story and time-power zones as player 1 does. Before it: no drop while a level loads, a level start that waits for the players still loading and the skip vote (0.1.6), the texts reviewed in all nine languages (0.1.5), the other players on the HUD radar and the Ready step (0.1.4).
+**Version 0.1.8** ([release notes](https://github.com/dolbaras/timeshift-coop/releases/latest)): the ready room no longer blocks Esc (before, the host's game looked frozen: the pause menu with READY could not be opened, GitHub issue 1) and says on the screen what to do; the pause menu has a Co-op page (version, players, second player, controls, split screen layout, kick); split screen on keyboard + mouse with ONE gamepad for player 2; a split screen layout row (Automatic / Side by side / Top and bottom); the mod name and version at the foot of the main menu; the gamepad works in the pause menu's pages again. Before it (0.1.7): the scripted people of a level's opening scene (such as the kneeling rebels of level 2) play their scene on the clients too; the soldiers' voices and the melee-hit sound are heard on the clients; the other player's jump and crouch sounds play at its body (not always); a soldier the host's rewind brings back to life stands up on the clients too; in split screen player 2 sets off the story and time-power zones as player 1 does. Before it: no drop while a level loads, a level start that waits for the players still loading and the skip vote (0.1.6), the texts reviewed in all nine languages (0.1.5), the other players on the HUD radar and the Ready step (0.1.4).
 
-How it is tested: the whole campaign was run host + client by an automatic bot (24 of 24 levels); each version's changes are checked with a host and a client on two test PCs and in split screen on one. Nobody outside the lab has played 0.1.7 yet, and a whole campaign played by people has not been done. Every player needs the same version of the mod.
+How it is tested: the whole campaign was run host + client by an automatic bot (24 of 24 levels); each version's changes are checked with a host and a client on two test PCs and in split screen on one. Nobody outside the lab has played 0.1.8 yet, and a whole campaign played by people has not been done. Every player needs the same version of the mod.
 
 ## What works
 
@@ -23,7 +23,8 @@ How it is tested: the whole campaign was run host + client by an automatic bot (
 | Gamepad (XInput) in game and menus | ✅ |
 | Co-op menu in the main menu: host a campaign chapter (difficulty, 2-4 players, LAN / Internet, password), join by LAN list, Internet list or address; version check | ✅ |
 | Story on the host, replayed on clients: story zones, checkpoints, level exits, team restart; joining a level already in progress | ✅ |
-| Ready step before the first chapter of a co-op game (the game's own READY / NOT READY in the pause menu, nobody moves until all are ready) | ✅ a split-screen player 2 in a network game is not held by it |
+| Ready step before the first chapter of a co-op game (the game's own READY / NOT READY in the pause menu, nobody walks until all are ready; a line on the screen says what to press) | 🟨 host alone checked live (Esc, READY, start); with a client the step was checked up to 0.1.7 with the old hold; a split-screen player 2 in a network game is not held by it |
+| Co-op page in the pause menu, split screen layout row (Automatic / Side by side / Top and bottom), keyboard + mouse with one gamepad in split screen | 🟨 checked on a test PC in Russian, 1280x720 and 1024x768, one virtual gamepad; not on a client, not with two real gamepads |
 | The other players on the HUD radar (blue blips; network and split screen) | ✅ |
 | Time powers in co-op: slow and stop for everyone, one power at a time, each player's own energy | ✅ |
 | Reverse in co-op (the game's own time recorder on the host; puzzle actors, force fields, container trap) | ✅ |
@@ -52,15 +53,16 @@ The setup exe is not code-signed, so Windows SmartScreen may warn ("More info" -
 - Windows 10/11. No Python or other tools: the installer brings what it needs.
 - Network: the host needs UDP port 7777 reachable (allow TimeShift in Windows Firewall; over the Internet forward UDP 7777 or use a virtual LAN).
 - Every player needs the same version of the mod.
-- Split screen: a second XInput gamepad.
+- Split screen: one XInput gamepad (for the second player; a second one is optional).
+- A licensed copy is recommended; on other versions stable work is not guaranteed.
 
 ## How to play
 
 - **Host:** main menu -> Co-op: pick a campaign chapter (any of the 24), the difficulty, the number of players (2-4), LAN or Internet and an optional password. Co-op servers are named `[COOP]<host's name>`.
 - **Join:** the LAN list, the Internet list (through OpenSpy, nothing to set up) or Co-op -> Direct connection by IP address.
-- **Ready step:** the first chapter of a co-op game waits until every player (the host too) has picked READY in the pause menu.
+- **Ready step:** the first chapter of a co-op game waits until every player (the host too) has picked READY in the pause menu (Esc). Until then nobody can walk; the screen says what to press. A host who plays alone picks READY too. The opening scenes of a chapter take no keys: wait until they are over.
 - **Continue:** Co-op -> Continue hosts the last checkpoint of the last co-op session again.
-- **Split screen:** main menu -> Co-op -> SPLIT SCREEN, pick the chapter and the difficulty, Start. In a network game set "Second player on pad 2" to On in the Co-op menu, then host or join as usual.
+- **Split screen:** main menu -> Co-op -> SPLIT SCREEN, pick the chapter and the difficulty, Start. In a network game set "Second player on a gamepad" to On in the Co-op menu, then host or join as usual.
 
 ### Controls
 
@@ -80,6 +82,7 @@ The setup exe is not code-signed, so Windows SmartScreen may warn ("More info" -
 
 ## Known limits / not verified
 
+- **Not checked in 0.1.8:** two real gamepads with the Swap button; the Co-op page, the layout row and the ready-room line on a client; the new texts on the screen in languages other than Russian; 1080p and ultrawide windows; aiming with a real mouse in split screen; a GOG copy and other builds of the game.
 - **Ready step:** a split-screen player 2 in a network game is not held in the ready room and is no player of the ready check; the Tab scoreboard during the ready room was not checked.
 - **Joining a running level:** a joining player appears where the host's player stood at the level's last checkpoint; when the host still stands there (for example in the ready room of level 2), the two bodies overlap until the game pushes them about 1 m apart or one of them walks away (seen since 0.1.4, no harm seen).
 - **ASI loaders:** tested with Ultimate ASI Loader 10.0.2 and a test plugin only; a loader renamed to some other DLL name was not tried.
