@@ -2,7 +2,7 @@
 #define TS_H
 #include <windows.h>
 
-#define TS_VERSION "0.1.7"
+#define TS_VERSION "0.1.8"
 
 /* proxy.c */
 void ts_log(const char *fmt, ...);
@@ -41,6 +41,7 @@ int ts_coop_active(void);         /* 1 = co-op session now (any thread; reads ga
 extern volatile int ts_radar_force;   /* split.c sets it around its own FUN_005F8820 call: RadarType answers ShowAll (radarmate.h) */
 int ts_radar_ready(void);          /* 1 = the RadarType read of FUN_005F8820 is hooked */
 int coopsession_radar_report(char *out, int size);   /* "!cp radar" (lab) */
+int coopsession_readyhint_lab(int me, char *out, int size);   /* "!cp readyhint [0|1]" (lab) */
 int ts_coop_feature(int flag);    /* COOP_F_* of this session: the host's settings (clients get them on join) */
 #define COOP_F_ACTIVE 1
 #define COOP_F_TIMESYNC 2

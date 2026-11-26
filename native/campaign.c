@@ -3096,6 +3096,8 @@ int campaign_console(const char *text, char *out, int size)
         return bhv_stack_report(cmd, a1, out, size), 1;
     if (!strcmp(cmd, "radar"))   /* "!cp radar" (lab): the player table and the players among the radar's records (coopsession.c) */
         return coopsession_radar_report(out, size), 1;
+    if (!strcmp(cmd, "readyhint"))   /* "!cp readyhint [0|1]" (lab): the ready room's HUD line once (coopsession.c) */
+        return coopsession_readyhint_lab(a1[0] == '1', out, size);
     if (!strcmp(cmd, "carry"))   /* "!cp carry" (lab): split screen's player 2 carried with player 1 (split.c) */
         return split_carry_report(out, size), 1;
     if (!strcmp(cmd, "regroup")) {

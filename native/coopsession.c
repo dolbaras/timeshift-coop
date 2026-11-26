@@ -730,7 +730,26 @@ static void gate_tick(DWORD now)
 typedef void (TSCALL *vt_bool_t)(void *self, int on);
 static rr_hold room;                         /* readyroom.h: the room on this machine and the player it holds */
 static int room_on, room_ready_mask = -1, room_ui = -1, room_me_ui = -1, room_off_sends;
-static DWORD room_sent;
+static DWORD room_sent, room_hint_at;
+
+/* The ready room's own HUD line (0.1.8, GitHub issue 1: a player on the host's first level cannot move or look until READY is
+ * chosen in the Esc menu and took the held player for dead keyboard and mouse; the game's own "Select READY in Menu" line
+ * is small and was not seen). Every 3 s while this machine holds its player: "Press Esc and choose READY ..." for a player who
+ * is not ready, "You are ready ..." for one who is. Same line as the level barrier's (show_hint, 6 s on screen). */
+#define ROOM_HINT_MS 3000
+static void room_hint(int me)
+{
+    show_hint(me ? "COOP_HINT_READY_WAIT" : "COOP_HINT_READY");
+}
+
+/* lab: "!cp readyhint [0|1]" shows the line once, as the room would (0 = not ready, 1 = ready), without a ready room (split
+ * layout and font checks) */
+int coopsession_readyhint_lab(int me, char *out, int size)
+{
+    room_hint(me);
+    snprintf(out, size, "ready room hint shown (%s)", me ? "ready" : "not ready");
+    return 1;
+}
 
 /* host: tell the joined clients that the room runs (or, 3 times, that it is over) */
 static void room_send(int on)
@@ -837,10 +856,14 @@ static void room_tick(DWORD now)
                  me ? "READY" : "not ready", warmup_running() ? "here" : "from the host's message");
         }
         room_ui_set(1, me);
+        if (room.held && now - room_hint_at >= ROOM_HINT_MS)
+            room_hint_at = now, room_hint(me);
         if (game_mode() != MODE_CLIENT && now - room_sent >= 2000)
             room_sent = now, room_send(1), room_off_sends = 3;
     } else if (room_ui == 1)
         room_ui_set(0, 0);
+    if (!room.on)
+        room_hint_at = 0;
     if (!room.on && room_off_sends > 0 && game_mode() != MODE_CLIENT && now - room_sent >= 500)
         room_sent = now, room_send(0), room_off_sends--;
     if (ev & RR_EV_LEAVE)
