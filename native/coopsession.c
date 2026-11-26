@@ -34,9 +34,10 @@
  *   in the warm-up), every machine prints "<name> is ready" / "<name> is no longer ready", the scoreboard shows the ready
  *   icons, the server's warm-up check starts the mission when every player is ready (a player who leaves no longer
  *   counts). The pause menu shows the game's READY / NOT READY button there (data: ingamemulti.ui). While the room lasts
- *   each machine holds its own player (DisableMove + DisableInput through the player's vtable, +0x34c / +0x348: not the
- *   script natives, so campaign.c's lock records and watchdog never see it), re-asserted every second as a release+set
- *   pair (right for a flag and for a counter), released once at the end. The game's own HUD shows "Select READY in Menu
+ *   each machine holds its own player (DisableMove through the player's vtable, +0x34c: not the
+ *   script natives, so campaign.c's lock records and watchdog never see it; before 0.1.8 also DisableInput, +0x348, which killed
+ *   the Esc key and the pad's Start so the READY button could not be reached: GitHub issue 1), re-asserted every second as a
+ *   release+set pair (right for a flag and for a counter), released once at the end. The game's own HUD shows "Select READY in Menu
  *   To End Warm-Up" to a player who is not ready and "Warm-Up" to one who is (live 2026-11-09; a ShowMsg copy of the
  *   first line was a duplicate and is gone), the game's message feed "<name> is ready". TS_COOP_READY=0: no ready room (no warm-up,
  *   no ready system, as before); a lab copy (TS_CONSOLE set) has no ready room unless TS_COOP_READY=1, so the lab's pair
@@ -782,10 +783,23 @@ static void hold_call(char *pl, int off, int on)
         ((vt_bool_t)vt[off / 4])(pl, on);
 }
 
+/* What a hold sets on the player: 1 = DisableMove, 2 = DisableInput. The level barrier holds both (a wait of seconds). The READY ROOM
+ * holds DisableMove only (TS_ROOM_HOLD=3: both, as 0.1.4-0.1.7 did): DisableInput also kills the Esc key and the pad's Start, so the
+ * pause menu with its READY button could not be opened and a player who hosted alone sat in front of a frozen game with a dead
+ * keyboard (GitHub issue 1, found 2026-11-26 on the N100: with both flags Esc did nothing, with DisableMove only Esc opened the
+ * pause menu and READY started the mission). The player can look around and use the menu; walking stays blocked. */
+#define HOLD_BARRIER 3
+static int room_hold_mask = 1;
+static void hold_set_m(char *pl, int on, int mask)
+{
+    if (mask & 1)
+        hold_call(pl, VT_DISABLE_MOVE, on);
+    if (mask & 2)
+        hold_call(pl, VT_DISABLE_INPUT, on);
+}
 static void hold_set(char *pl, int on)
 {
-    hold_call(pl, VT_DISABLE_MOVE, on);
-    hold_call(pl, VT_DISABLE_INPUT, on);
+    hold_set_m(pl, on, HOLD_BARRIER);
 }
 
 /* the ready bits of the rules' player records (the scoreboard's icons), for the log */
@@ -836,18 +850,19 @@ static void room_tick(DWORD now)
     rr_step(&room, in_room, pl, now, &act, &ev);
     room_on = room.on;
     if (act == RR_SET)
-        hold_set(pl, 1);
+        hold_set_m(pl, 1, room_hold_mask);
     else if (act == RR_PAIR)   /* re-assert: release + set (a flag ends set, a counter stays balanced) */
-        hold_set(pl, 0), hold_set(pl, 1);
+        hold_set_m(pl, 0, room_hold_mask), hold_set_m(pl, 1, room_hold_mask);
     else if (act == RR_RELEASE)
-        hold_set(pl, 0);
+        hold_set_m(pl, 0, room_hold_mask);
     if (ev & RR_EV_ENTER) {
         room_ready_mask = -1;
         CLOG("coopsession: ready room: this machine waits (%s); the mission starts when every player is ready",
              game_mode() == MODE_CLIENT ? "client" : "host");
     }
     if (ev & RR_EV_HELD)
-        CLOG("coopsession: ready room: own player %p held (no movement, no input) until the start", (void *)pl);
+        CLOG("coopsession: ready room: own player %p held (%s) until the start", (void *)pl,
+             room_hold_mask == 3 ? "no movement, no input" : room_hold_mask == 1 ? "no movement; look, Esc and the menu stay free" : "TS_ROOM_HOLD");
     if (room.on) {
         int m = ready_mask(), me = own_ready();
         if (m != room_ready_mask) {
@@ -1239,6 +1254,8 @@ void coopsession_install(void)
         ready_mode = v[0] != '0';
     else
         ready_mode = !ts_env("TS_CONSOLE", v, sizeof v);   /* (lab copies: the pair scripts expect the level to run at once) */
+    if (ts_env("TS_ROOM_HOLD", v, sizeof v))
+        room_hold_mask = atoi(v) & 3;
     if (ts_env("TS_COOP_BARRIER", v, sizeof v))
         barrier_secs = atoi(v) > 0 ? (atoi(v) > 300 ? 300 : atoi(v)) : 0;
     enabled = 1;
