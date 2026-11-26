@@ -19,8 +19,8 @@ What the mod does
   are ready the screen says "Press Esc and choose READY to start the game." (and "You are ready.
   The game starts when every player is ready." after it), the game's message feed names each
   player who gets ready, and the mission starts when all players are. Until then nobody can
-  move or look around (the keyboard and the mouse do not react, that is the ready step, not a
-  fault). A host who plays alone also picks READY. Chapters that follow in the same game start without it, as soon as every player has
+  walk (you can look around, and Esc opens the pause menu; the opening scenes of the chapter
+  take no keys at all, wait until they are over). A host who plays alone also picks READY. Chapters that follow in the same game start without it, as soon as every player has
   loaded the level (the screen names the players still loading; 60 seconds at most).
 - Cutscenes and films in a co-op game: Skip (Start or Esc) is a vote; the scene ends for everybody
   at the same moment when every player has voted.
@@ -74,12 +74,15 @@ What the mod does
   both bodies. On a client the second player is supported in basic form (experimental).
 
 New in 0.1.8
-- Ready step you can see (GitHub issue 1): while the ready room holds your player, the screen says
-  "Press Esc and choose READY to start the game." every few seconds (after READY: "You are ready.
-  The game starts when every player is ready."), in the game's font and in the nine languages of the
-  game. Before, only the game's small "Select READY in Menu" line was shown, and a host who played
-  alone took the held character for a dead keyboard and mouse. The ready room still waits for friends
-  to join (a host who is alone just picks READY to begin).
+- Ready step you can reach and see (GitHub issue 1): the ready room of 0.1.4-0.1.7 switched off ALL
+  input of the held player, and that included Esc, so the pause menu with READY could not be opened:
+  a host who played alone saw a frozen game and a dead keyboard and mouse. Now the ready room only
+  stops walking: you can look around, and Esc opens the pause menu with READY (found on the test PC
+  with the keyboard; the opening scenes of a chapter still take no keys, as in the single player
+  game). The screen also says "Press Esc and choose READY to start the game" every few seconds
+  (after READY: "You are ready. The game starts when every player is ready."), in the game's font
+  and in the nine languages of the game. The ready room still waits for friends to join (a host who
+  is alone just picks READY to begin).
 - Pause menu, Co-op page: the mod version, the players, the second player on / off, the controls
   of each player, the split screen layout, swap gamepads and, for the host, the game's Player Control
   (kick a player). The network pause menu has Regroup and Co-op buttons.
